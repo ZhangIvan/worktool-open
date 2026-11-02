@@ -2,5 +2,5 @@
 <resources>
     <!-- SR-10：透明命名 —— 明示归属（WorkTool Open）与用途，无任何伪装。 -->
     <string name="accessibility_service_label">WorkTool Open 自动化服务（无障碍）</string>
-    <string name="accessibility_service_description">WorkTool-Open 的自动化执行通道：通过 Android 无障碍接口驱动设备上的企业微信客户端完成您配置的指令。\n\n当前为骨架阶段（T1.2）：不读取任何窗口内容、不监听任何应用、不执行任何操作。\n\n请仅在您拥有或获得授权的设备上启用本服务。</string>
+    <string name="accessibility_service_description">WorkTool-Open 的自动化执行通道：通过 Android 无障碍接口读取屏幕节点树，并代替您在设备上执行点击、长按、滚动、输入与截图操作，以完成您配置的指令（如驱动企业微信客户端收发消息）。\n\n本服务具备：读取窗口内容、注入手势、截图能力；不监听键盘输入、不上传任何数据（零遥测）。\n\n请仅在您拥有或获得授权的设备上启用本服务。</string>
 </resources>

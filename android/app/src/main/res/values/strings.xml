@@ -3,6 +3,25 @@
     <!-- SR-10 / R4：命名不含任何"官方/腾讯"暗示，无上游商标混淆。 -->
     <string name="app_name">WorkTool Open</string>
     <string name="guide_title">WorkTool-Open</string>
-    <string name="guide_stage">壳工程阶段（T1.2 / v%1$s）</string>
+    <string name="guide_stage">无障碍核心阶段（T2.4 / v%1$s）</string>
     <string name="guide_body">引导页占位。\n服务端配置、无障碍服务启用引导与悬浮窗控制在后续版本提供。</string>
+    <string name="guide_open_debug">节点树调试页（无障碍）</string>
+
+    <!-- 节点树调试页（T2.4）：全部文案本地渲染，数据不出设备。 -->
+    <string name="debug_title">节点树调试（无障碍）</string>
+    <string name="debug_refresh">刷新</string>
+    <string name="debug_auto_refresh_on">自动刷新:开</string>
+    <string name="debug_auto_refresh_off">自动刷新:关</string>
+    <string name="debug_trial">试掷选择器</string>
+    <string name="debug_screenshot">截图自检</string>
+    <string name="debug_selector_hint">selector JSON 或 @规则id</string>
+    <string name="debug_service_off">无障碍服务未连接：请到 系统设置 → 无障碍 → WorkTool Open 自动化服务 开启</string>
+    <string name="debug_no_active_window">服务已连接，但当前无活动窗口根节点（切到目标应用后再刷新）</string>
+    <string name="debug_service_on">已连接 · 活动窗口根: %1$s（子节点 %2$d）</string>
+    <string name="debug_selector_invalid">选择器配置错误：%1$s</string>
+    <string name="debug_selector_id_missing">样例配置中不存在规则 id \'%1$s\'（@引用需在 accessibility_rules*.json 中定义）</string>
+    <string name="debug_trial_result">选择器[%1$s] 命中 %2$d 处：</string>
+    <string name="debug_screenshot_ok">截图 OK：%1$d×%2$d（PNG %3$d 字节，仅内存未落盘）</string>
+    <string name="debug_screenshot_unsupported">截图不可用：API&lt;30 或服务未连接（降级路径见 docs/03 T2.4）</string>
+    <string name="debug_screenshot_failed">截图失败：code=%1$d msg=%2$s</string>
 </resources>

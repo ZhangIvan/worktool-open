@@ -24,6 +24,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- T2.4 节点树调试页：仅内部入口（MainActivity 按钮），exported=false（SR-10/G10）。 -->
+        <activity
+            android:name=".NodeTreeDebugActivity"
+            android:exported="false"
+            android:label="@string/debug_title" />
     </application>
 
 </manifest>

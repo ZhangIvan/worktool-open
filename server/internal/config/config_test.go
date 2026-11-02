@@ -121,3 +121,40 @@ func TestLoadPrecedence(t *testing.T) {
 		t.Fatalf("空 env 值应回落默认，实际 Listen = %q", cfg.Listen)
 	}
 }
+
+// TestLoadT23Fields：T2.3 新增配置（DB/回调）装载与校验。
+func TestLoadT23Fields(t *testing.T) {
+	cfg, err := Load(nil, []string{
+		"WT_LISTEN=127.0.0.1:19090",
+		"WT_DB=/tmp/wt-test.db",
+		"WT_CALLBACK_URL=http://127.0.0.1:9990/cb",
+		"WT_CALLBACK_SECRET=s1",
+		"WT_ALLOW_NONLOOPBACK_CALLBACK=1",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DBPath != "/tmp/wt-test.db" || cfg.CallbackURL != "http://127.0.0.1:9990/cb" ||
+		cfg.CallbackSecret != "s1" || !cfg.AllowNonLoopbackCallback {
+		t.Fatalf("T2.3 配置装载错误: %+v", cfg)
+	}
+	// 回调 URL 配置但密钥缺失 → 拒绝
+	if _, err := Load(nil, []string{
+		"WT_LISTEN=127.0.0.1:19090",
+		"WT_CALLBACK_URL=http://127.0.0.1:9990/cb",
+	}); err == nil {
+		t.Fatal("callback-url 无 secret 应启动即拒绝")
+	}
+	// 空 WT_DB 回落默认
+	cfg, err = Load(nil, []string{"WT_LISTEN=127.0.0.1:19090", "WT_DB="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DBPath != "worktool.db" {
+		t.Fatalf("空 WT_DB 应回落默认，实际 %q", cfg.DBPath)
+	}
+	// 非 loopback 回调 + 明文绑定双违规均可被独立识别（SR-09 优先报监听）
+	if _, err := Load(nil, []string{"WT_LISTEN=0.0.0.0:8080"}); err == nil {
+		t.Fatal("SR-09 应拒绝")
+	}
+}

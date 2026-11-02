@@ -1,6 +1,6 @@
 # WorkTool-Open 通讯协议规格 v1.0（T2.1）
 
-- 版本：1.0.0（2026-11-02，任务卡 T2.1 交付；docs/03 T2.1 / docs/02 §5 落地）
+- 版本：1.1.0（2026-11-02，T2.1 交付 1.0.0 后同日修订：AUD-03 C-9 seq 纳入 HMAC 防篡改 + C-10 ACK TTL 离出边；变更明细见 §10 变更记录）
 - 权威声明：本目录（`protocol/`）是协议**唯一权威**（ADR-08）。机器可读权威件：`schema/*.schema.json`（报文）、`state-transitions.csv`（状态机边集）、`state-policy.json`（终态与策略）。本文与机器件冲突时，以机器件为准并登记 AUD 复核。
 - 字段语义来源：v1 兼容面 = 上游开源仓库 v2.8.1 还原（证据 `local-private/audit/02` §A，仅字段名/指令号/枚举值/行为语义入库，涉密值一律不录入）；v2 增量 = `docs/02-ARCHITECTURE.md` §5（2026-11-02 用户审阅意见精确规格）。
 - 消费方：L1 `android core:protocol`（T2.2）、L2 `server internal/gateway|scheduler|api`（T2.3/T3.2/T3.4）。夹具与金标准向量见 `fixtures/`（§7 消费契约）。
@@ -175,16 +175,17 @@ meta = { ver:2, ts, nonce, hmac, seq, eventId, commandId, tokenVersion }
 ```
 （完整约束见 `command-envelope.schema.json#/definitions/frameMeta`；全部字段必含，`additionalProperties:false`。）
 
-#### 5.2.2 HMAC 输入式（冻结，docs/02 §5 原式）
+#### 5.2.2 HMAC 输入式（冻结；2026-11-02 AUD-03 C-9 修订：seq 纳入防篡改）
 ```
 hmac = HMAC-SHA256(key = deviceToken 原始字节,
-                   msg = UTF-8( commandId "|" eventId "|" ts "|" nonce "|" payloadDigest ) )
+                   msg = UTF-8( commandId "|" eventId "|" seq "|" ts "|" nonce "|" payloadDigest ) )
 payloadDigest:
   encryptType=0 → hex(SHA-256( JCS(RFC 8785 规范 JSON) of `list` ))；list 缺失或空数组按空字节串计
   encryptType=2 → hex(SHA-256( UTF-8 bytes of `encryptedList` 字符串原样 ))  ← 先验签后解密
 ```
+- **seq 纳入 HMAC 输入（C-9）**：修复明文帧（encryptType=0）seq 不受任何完整性保护的缺陷（此前仅加密帧经 GCM AAD 覆盖 seq）。篡改 seq → HMAC 失配 → 4401；真实签名的乱序/回退 seq 仍由 §5.4.2 判定（HMAC 通过后 4405+903）。**v1 兼容帧无 HMAC，不受影响。**
 - 非 16 进制输出一律小写 hex（64 字符）。
-- 金标准向量（含 inputString 全文与期望 hmac）= `fixtures/hmac-vector.json`；空载荷 SHA-256 常量：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+- 金标准向量（含 inputString 全文与期望 hmac，正例 + 篡改 seq 必败反例）= `fixtures/hmac-vector.json`；空载荷 SHA-256 常量：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
 
 #### 5.2.3 时钟与 nonce
 - **±30s**：`|ts − 接收方now| > 30s` → 拒帧并关闭会话（关闭码 4403 `clock_skew`）。
@@ -213,7 +214,7 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 ```
 - 每次配对/重协商（§5.5）产生新 X25519 对 → 新 K_session（前向隔离以协商周期为界）。
 - GCM nonce（12 字节，冻结）：`bytes[0:12] of SHA-256(UTF-8(eventId))`（帧唯一、确定性、免传输）。
-- GCM AAD（冻结）：`UTF-8("ver=2|seq=" + seq + "|eventId=" + eventId + "|ts=" + ts)`。
+- GCM AAD（冻结）：`UTF-8("ver=2|seq=" + seq + "|eventId=" + eventId + "|ts=" + ts)`（seq 自 C-9 起已由 §5.2.2 HMAC 覆盖全部帧，AAD 对加密帧保留为纵深防御）。
 - `encryptedList` 编码：`hex( 密文 || 16字节tag )`，承载与 v1 `list` 相同的 JSON 数组明文。
 - 解密失败/验签失败 = 帧整体拒绝（不得部分接受）。
 
@@ -232,6 +233,7 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 - 服务端应答 `hello_ack`：`{type:"hello_ack", serverTime, resumeFromSeq, heartbeatIntervalSeconds, sessionTimeoutSeconds, meta{…}}`（形状在此冻结，schema 随 T3.4 实现）。
 
 #### 5.4.2 seq（每会话每方向严格递增，从 1 起）
+- seq 已纳入 §5.2.2 HMAC 输入（C-9）：篡改 seq 在 HMAC 步失败（4401）。
 - 乱序/回退 → 拒帧 + 关闭 4405 + 发起 903 重新同步（服务端自 `lastReceivedSeq+1` 重放未确认事件）。
 - 重连不重置计数语义：新连接 seq 重新从 1 起，但补发内容以持久确认点为准（journal/outbox）。
 
@@ -272,11 +274,11 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 1. **只凭持久证据对账**（设备 journal / `reconcile_unstarted` 类边），**禁止超时推断成败**；
 2. **非幂等指令永不自动重试**；
 3. **L1/L2 危险指令存在 unknown 待核时，冻结同类新指令**（FR-53 联动）。
-- 进入边：E06/E07/E08；离出边：E12（证据·成功）/E13（unstarted）/E14（证据·失败）/E15（人工裁决，审计留痕）。
+- 进入边：E06/E07/E08（服务端重启/会话丢失/失联）+ E17/E18（300s ACK TTL 到期且无持久传输证据，AUD-03 C-10）；离出边：E12（证据·成功）/E13（unstarted）/E14（证据·失败）/E15（人工裁决，审计留痕）。
 
 ## 6. 执行状态机
 
-- **唯一权威边集 = `state-transitions.csv`**（种子 16 条，表驱动；docs/02 §5.1：计划文档禁止复述边表防漂移，本文不复述）。终态判定与策略参数 = `state-policy.json`。
+- **唯一权威边集 = `state-transitions.csv`**（种子 18 条 = T2.1 16 条 + E17/E18 ACK TTL 到期对账边【AUD-03 C-10】，表驱动；docs/02 §5.1：计划文档禁止复述边表防漂移，本文不复述）。终态判定与策略参数 = `state-policy.json`。
 - 状态集：`created → queued → dispatched → acked → running → succeeded | failed | cancelled`，加 `execution_unknown`（非终态，必须被对账离出）。
 - 终态：`succeeded / failed / cancelled`（无出边；再执行须新 commandId）。
 - 非法迁移 = `409 ILLEGAL_TRANSITION`，迁移与 command_events/审计同事务（docs/06 借鉴①）。
@@ -285,7 +287,7 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 ## 7. 夹具与测试向量（消费契约）
 
 - 目录：`fixtures/`（正例，逐 schema ≥1）与 `fixtures/negative/`（**必须被拒绝**的反例）。清单与用途见 `fixtures/README.md`。
-- **金标准向量**：`fixtures/hmac-vector.json`（TEST-ONLY 伪造 token；L1 Kotlin / L2 Go 实现须逐字节复算通过——含 inputString 原文与期望 hmac/digest）。
+- **金标准向量**：`fixtures/hmac-vector.json`（TEST-ONLY 伪造 token；L1 Kotlin / L2 Go 实现须逐字节复算通过——含 inputString 原文与期望 hmac/digest；`negative[]` 为必败反例，篡改 seq 必须 HMAC 失配）。
 - 消费契约：夹具文件名与字段**冻结**为测试数据接口；变更须提 AUD 并同步 L1/L2 单测。候选字段（§4.4 待冻结项）在 README 中显式标注，冻结前不得作为互通依据。
 - 路径稳定：`protocol/schema/*.schema.json`、`protocol/state-transitions.csv`、`protocol/state-policy.json`、`protocol/fixtures/**`（单测以相对仓库根路径引用）。
 
@@ -310,11 +312,32 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 | Q3 | hello_ack / 901~904 控制帧 schema 化 | v2 实现期校验 | T3.4 |
 | Q4 | 231/232 我方语义（自动拒接 FR-51 vs 禁用） | FR-51 落位 | T3.1 |
 
+## 10. 变更记录（下游车道消费点，字段级）
+
+### 1.1.0（2026-11-02，AUD-03 C-9/C-10 裁决修订）
+
+**C-9 seq 纳入 HMAC 防篡改（破坏性字段级变更，v2 帧全线生效）**
+- §5.2.2 HMAC 输入式由 `commandId|eventId|ts|nonce|payloadDigest` 改为 **`commandId|eventId|seq|ts|nonce|payloadDigest`**（seq 插在 eventId 之后）；docs/02 §5 原式同步改写。**v1 兼容帧无 HMAC，不受影响。**
+- `schema/command-envelope.schema.json` `frameMeta.hmac` description 同步（仅描述文字，schema 形状不变：seq 本就必含，**无字段增删**，$id 版本不变）。
+- `fixtures/hmac-vector.json` **全量再生成**：`hmacInputFormat` 更新；每向量新增 `seq` 字段、`inputString`/`hmac` 重算；新增 `negative[]`（`tamper_seq` 必败反例：篡改 seq → 重算 HMAC ≠ declaredHmac → 4401）。
+- 正例夹具 `meta.hmac` 值全部更新（新输入式重算，帧字段不变）：`command-envelope.plain.json`、`command-envelope.encrypted.json`、`command-envelope.heartbeat.json`、`command-envelope.exec-result.json`、`session-hello.valid.json`。
+- 行为语义：篡改 seq → 4401（HMAC 失配）；真实签名乱序/回退 seq → 4405+903（§5.4.2）；§5.2.4 校验顺序不变。
+- **L1/L2 消费点**：逐帧 HMAC 计算与校验、hmac-vector 复算单测必须按新输入式实现/更新。
+
+**C-10 ACK TTL 离出边（状态机增量，无破坏性）**
+- `state-transitions.csv` 新增 **E17**（dispatched→execution_unknown，`ack_ttl_expired`：300s TTL 到期且无 transport_ack 持久证据）与 **E18**（acked→execution_unknown，`ack_ttl_expired`：TTL 后无 exec_start 持久证据）；均为**对账路径**——只登记 UNKNOWN 对账任务，**禁止以超时定性成败**（三原则①不变）。
+- `state-policy.json`：`states.dispatched/acked` 增加 `on_ack_ttl_expired` 说明；`dispatch` 段新增 `ack_ttl_expiry` 策略块；version → 1.1.0。
+- **L2 消费点**：scheduler TTL 扫描按 E17/E18 迁移并留痕，不得迁 succeeded/failed。
+
+### 1.0.0（2026-11-02，T2.1 首版）
+- docs/03 T2.1 / docs/02 §5 全量落地：v1 兼容信封 + v2 安全增量（配对/逐帧鉴权/加密/投递语义/状态机/夹具与金标准向量）。
+
 ## 附录 A：HMAC 工作示例（节选，全量见 fixtures/hmac-vector.json）
 
 ```
 deviceToken(TEST) = <见 fixtures/hmac-vector.json，伪造值>
 frame: fixtures/command-envelope.plain.json
-  inputString = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f|7d6e5f4a-3b2c-4d5e-8f9a-0b1c2d3e4f5a|<ts>|5c1f9a7b3e2d4c6f8a0b2d4e6f8a0c2e|<payloadDigest>"
+  inputString = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f|7d6e5f4a-3b2c-4d5e-8f9a-0b1c2d3e4f5a|413|1793613605000|5c1f9a7b3e2d4c6f8a0b2d4e6f8a0c2e|<payloadDigest>"
   hmac         = HMAC-SHA256(deviceToken, UTF-8(inputString))   ← 与夹具 meta.hmac 逐字节一致
+（第 3 段 = seq，C-9 起纳入输入式）
 ```

@@ -1,17 +1,28 @@
-# 服务端车道 CI（任务卡 T1.3；车道文件所有权见 docs/03-EXECUTION-PLAN.md §1：
-# server/** 与本文件归 L2 独占）。DoD：CI 绿（go vet + go test ./...，
-# docs/03 T1.3；质量门见 docs/04 §3）。G12/G13 由 ci.yml 全仓门禁覆盖，此处不重复。
+# 服务端车道 CI（任务卡 T1.3 骨架 → T2.3 服务端核心；车道文件所有权见
+# docs/03-EXECUTION-PLAN.md §1：server/** 与本文件归 L2 独占）。
+# DoD：CI 绿（go vet + go test ./...，docs/03 T1.3/T2.3；质量门见 docs/04 §3）。
+# G12/G13 由 ci.yml 全仓门禁覆盖，此处不重复。
+#
+# T2.3（AUD-03 C-8 关闭）：paths 增补 protocol/**——服务端单测消费
+# protocol/ 权威件（hmac-vector 金标准复算、state-transitions.csv 表驱动
+# 状态机、夹具正反例、嵌入副本同步测试），权威件变更必须触发本车道 CI；
+# 分支过滤与 android.yml 统一（push 与 pull_request 均限 main/zcode/main + workflow_dispatch；AUD-M2-02 补 PR 过滤）。
 name: server
 
 on:
   push:
+    branches: [main, zcode/main]
     paths:
       - 'server/**'
+      - 'protocol/**'
       - '.github/workflows/server.yml'
   pull_request:
+    branches: [main, zcode/main]
     paths:
       - 'server/**'
+      - 'protocol/**'
       - '.github/workflows/server.yml'
+  workflow_dispatch:
 
 jobs:
   vet-test:
@@ -25,10 +36,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23' # 与 server/go.mod 的 go 指令一致
-          cache: false # 零第三方依赖（无 go.sum），无依赖缓存需求
+          cache: true # T2.3 起引入钉死依赖（go.sum），启用模块缓存
+          cache-dependency-path: server/go.sum
+
+      - name: go mod verify（依赖钉死校验）
+        run: go mod verify
 
       - name: go vet
         run: go vet ./...
 
-      - name: go test
+      - name: go test（含 loopback WS 集成与金标准向量复算）
         run: go test ./...

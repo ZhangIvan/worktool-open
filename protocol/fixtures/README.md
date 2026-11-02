@@ -17,7 +17,7 @@
 | `command-envelope.heartbeat.json` | 同上 | v2 心跳（空载荷：payloadDigest=SHA-256(空)） |
 | `command-envelope.exec-result.json` | 同上 | v2 指令结果回执（socketType=3，回填 commandId） |
 | `exec-callback.success.json` | `../schema/exec-callback.schema.json` | ExecCallbackBean 单体（errorCode=0） |
-| `hmac-vector.json` | —（数据文件） | **金标准向量**：deviceTokenTest（伪造）+ 每帧 inputString/payloadDigest/期望 hmac。L1/L2 实现须逐字节复算一致 |
+| `hmac-vector.json` | —（数据文件） | **金标准向量**：deviceTokenTest（伪造）+ 每帧 seq/inputString/payloadDigest/期望 hmac（输入式 `commandId\|eventId\|seq\|ts\|nonce\|payloadDigest`，AUD-03 C-9）；`negative[]` 为篡改 seq 必败反例。L1/L2 实现须逐字节复算一致 |
 
 ## 反例清单（必须被拒绝）
 
@@ -27,7 +27,7 @@
 | `negative/command-envelope.missing-hmac.json` | command-envelope schema 拒绝（meta 缺 hmac → G8 鉴权失败路径） |
 | `negative/command-envelope.encrypt-mismatch.json` | command-envelope schema 拒绝（encryptType=2 却携带明文 list 且缺 encryptedList） |
 
-语义级反例（schema 无法表达，单测必须覆盖，G8）：错 HMAC（4401）、nonce 重放（4402）、ts 超差 ±30s（4403）、tokenVersion 落后（4404）、eventId 同 ID 异内容（4405）、seq 回退（4405+903 重同步）。
+语义级反例（schema 无法表达，单测必须覆盖，G8）：错 HMAC（4401）、**篡改 seq**（HMAC 失配 4401，金标准反例见 hmac-vector.json `negative[tamper_seq]`，AUD-03 C-9）、nonce 重放（4402）、ts 超差 ±30s（4403）、tokenVersion 落后（4404）、eventId 同 ID 异内容（4405）、seq 回退（真实签名乱序→4405+903 重同步）。
 
 ## 冻结状态标注
 

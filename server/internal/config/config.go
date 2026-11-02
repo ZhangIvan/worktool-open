@@ -23,6 +23,12 @@ const (
 	EnvListen  = "WT_LISTEN"
 	EnvTLSCert = "WT_TLS_CERT"
 	EnvTLSKey  = "WT_TLS_KEY"
+
+	// T2.3 新增（持久化与回调分发）。
+	EnvDBPath             = "WT_DB"                         // SQLite 库文件（默认 worktool.db）
+	EnvCallbackURL        = "WT_CALLBACK_URL"               // 回调接收器（默认空=禁用；仅 loopback）
+	EnvCallbackSecret     = "WT_CALLBACK_SECRET"            // 回调 HMAC 密钥
+	EnvAllowNonLoopbackCb = "WT_ALLOW_NONLOOPBACK_CALLBACK" // 显式放行非 loopback 回调（默认 false）
 )
 
 // Config 为服务端启动配置。
@@ -32,11 +38,19 @@ type Config struct {
 	// TLSCertFile / TLSKeyFile 同时非空时视为启用 TLS。
 	TLSCertFile string
 	TLSKeyFile  string
+	// DBPath 为 SQLite 库文件路径（嵌入式迁移，T2.3）。
+	DBPath string
+	// CallbackURL 为结果回调接收器（空 = 禁投递；默认仅允许 loopback）。
+	CallbackURL string
+	// CallbackSecret 为回调 HMAC-SHA256 密钥。
+	CallbackSecret string
+	// AllowNonLoopbackCallback 显式放行非 loopback 回调接收器（默认 false，禁外网）。
+	AllowNonLoopbackCallback bool
 }
 
 // Default 返回默认配置：loopback + 明文（本地原型例外，见 SR-09）。
 func Default() Config {
-	return Config{Listen: DefaultListen}
+	return Config{Listen: DefaultListen, DBPath: "worktool.db"}
 }
 
 // TLSEnabled 报告是否启用 TLS（证书与私钥须同时提供）。
@@ -60,6 +74,14 @@ func Load(argv []string, environ []string) (Config, error) {
 			cfg.TLSCertFile = v
 		case EnvTLSKey:
 			cfg.TLSKeyFile = v
+		case EnvDBPath:
+			cfg.DBPath = v
+		case EnvCallbackURL:
+			cfg.CallbackURL = v
+		case EnvCallbackSecret:
+			cfg.CallbackSecret = v
+		case EnvAllowNonLoopbackCb:
+			cfg.AllowNonLoopbackCallback = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 		}
 	}
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
@@ -67,8 +89,15 @@ func Load(argv []string, environ []string) (Config, error) {
 	fs.StringVar(&cfg.Listen, "listen", cfg.Listen, "host:port 监听地址（默认 "+DefaultListen+"）")
 	fs.StringVar(&cfg.TLSCertFile, "tls-cert", cfg.TLSCertFile, "TLS 证书 PEM 路径；与 -tls-key 同时设置即启用 TLS")
 	fs.StringVar(&cfg.TLSKeyFile, "tls-key", cfg.TLSKeyFile, "TLS 私钥 PEM 路径；与 -tls-cert 同时设置即启用 TLS")
+	fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "SQLite 库文件路径（默认 worktool.db，嵌入式迁移）")
+	fs.StringVar(&cfg.CallbackURL, "callback-url", cfg.CallbackURL, "结果回调接收器 URL（默认空=禁投递；仅允许 loopback，禁外网）")
+	fs.StringVar(&cfg.CallbackSecret, "callback-secret", cfg.CallbackSecret, "回调 HMAC-SHA256 签名密钥")
+	fs.BoolVar(&cfg.AllowNonLoopbackCallback, "allow-nonloopback-callback", cfg.AllowNonLoopbackCallback, "显式放行非 loopback 回调接收器（默认 false；外网回调部署侧须 TLS）")
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, fmt.Errorf("config: 解析命令行参数失败: %w", err)
+	}
+	if cfg.DBPath == "" {
+		cfg.DBPath = "worktool.db" // 空 env/flag 回落默认
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -77,10 +106,15 @@ func Load(argv []string, environ []string) (Config, error) {
 }
 
 // Validate 校验配置，包含 SR-09 断言：非 loopback 绑定且未启用 TLS → 拒绝。
+// DBPath 为空在 Load 阶段兜底为默认值（Default 非空，env/flag 空值回落），
+// 故此处不重复判空。
 func (c Config) Validate() error {
 	certEmpty, keyEmpty := c.TLSCertFile == "", c.TLSKeyFile == ""
 	if certEmpty != keyEmpty {
 		return fmt.Errorf("config: -tls-cert 与 -tls-key 必须同时设置")
+	}
+	if c.CallbackURL != "" && c.CallbackSecret == "" {
+		return fmt.Errorf("config: 配置 callback-url 须同时配置 callback-secret（HMAC 签名密钥）")
 	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {

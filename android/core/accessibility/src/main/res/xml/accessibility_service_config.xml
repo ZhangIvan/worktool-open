@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  无障碍服务配置（T1.2 骨架，默认最弱权限）：
-  - canRetrieveWindowContent=false：不读取任何窗口内容（节点树/文本均不可见）
-  - canPerformGestures=false：不注入手势
-  - 未声明 packageNames 与 accessibilityEventTypes：不监听任何应用、不接收任何事件
-  T2.4 落地原子操作时按最小必要原则逐项放开（docs/04 §4 G10 审查项）。
+  无障碍服务配置（T2.4：能力最小化放开，SR-10 / G10 manifest+config diff 审查项）。
+  放开项逐条依据（docs/02 §3 core:accessibility 职责 = 5 原子操作 + 规则引擎）：
+  - canRetrieveWindowContent=true：节点树读取（规则引擎选择器 / 调试页 dump 前提）
+  - canPerformGestures=true：click/longClick 的手势回退（节点 ACTION 不可用时的第二通道）
+  - canTakeScreenshot=true：screenshot 原子操作（属性 API 31+ 生效；低版本运行时降级）
+  - accessibilityFlags=flagReportViewIds：resourceId 选择器前提（无此 flag 框架不填充资源名）
+  - accessibilityEventTypes 仅 typeWindowStateChanged|typeWindowContentChanged：事件骨架最小集
+  - 不设 packageNames：调试页需 dump 任意前台应用校准规则（docs/03 T2.4 D1 定位用）；
+    生产订阅面收敛在 T3.1 按指令落地时复评
+  未放开：flagRequestFilterKeyEvents / flagRetrieveInteractiveWindows / canRequestTouchExplorationMode
+  等本阶段不需要的能力。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/accessibility_service_description"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:canRetrieveWindowContent="false"
-    android:canPerformGestures="false" />
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFlags="flagReportViewIds" />

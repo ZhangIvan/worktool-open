@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,15 +33,16 @@ func TestRunRefusesNonLoopbackPlaintextFromEnv(t *testing.T) {
 
 // TestRunServesHealthz（SR-09 正例 + 可启动验证）：
 // loopback 明文（本地原型例外）正常启动，/healthz 返回 200，
-// 优雅关停后 run 干净返回。
+// 优雅关停后 run 干净返回。T2.3 起附带 /readyz（store 就绪探针）。
 func TestRunServesHealthz(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	dbPath := filepath.Join(t.TempDir(), "wt.db")
 	readyCh := make(chan net.Addr, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(ctx, []string{"-listen", "127.0.0.1:0"}, nil, io.Discard, io.Discard, func(a net.Addr) {
+		errCh <- run(ctx, []string{"-listen", "127.0.0.1:0"}, []string{"WT_DB=" + dbPath}, io.Discard, io.Discard, func(a net.Addr) {
 			readyCh <- a
 		})
 	}()
@@ -67,6 +69,15 @@ func TestRunServesHealthz(t *testing.T) {
 	}
 	if strings.TrimSpace(string(body)) != `{"status":"ok"}` {
 		t.Fatalf("/healthz 响应体 = %q, want {\"status\":\"ok\"}", body)
+	}
+
+	readyResp, err := client.Get("http://" + addr.String() + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz 失败: %v", err)
+	}
+	readyResp.Body.Close()
+	if readyResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /readyz 状态码 = %d, want 200", readyResp.StatusCode)
 	}
 
 	cancel()

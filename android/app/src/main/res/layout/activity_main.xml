@@ -33,4 +33,11 @@
         android:text="@string/guide_body"
         android:textSize="13sp" />
 
+    <Button
+        android:id="@+id/guide_open_debug"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/guide_open_debug" />
+
 </LinearLayout>

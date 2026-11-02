@@ -1,17 +1,24 @@
 name: android
 
-# T1.2（L1 车道）：android 壳工程构建与 JVM 单测。
-# DoD（docs/03 §2 T1.2）：CI 出 debug APK。
+# T1.2+T2.2（L1 车道）：android 构建与 JVM 单测（协议单测必跑）。
+# DoD：T1.2 CI 出 debug APK；T2.2 协议单测（夹具正反例 + hmac-vector 金标准 +
+# 分支覆盖率 ≥80%，docs/03 §2）随本流水线执行。
+# T2.2 修订（关闭 AUD-03 C-8）：paths 增加 protocol/**（协议权威件变更触发端侧
+# 单测复核——夹具即冻结测试接口，spec §7）；push/pull_request 统一分支过滤
+# main/zcode/main（此前 pull_request 无分支过滤，与 push 不一致）。
 
 on:
   push:
     branches: [main, zcode/main]
     paths:
       - 'android/**'
+      - 'protocol/**'
       - '.github/workflows/android.yml'
   pull_request:
+    branches: [main, zcode/main]
     paths:
       - 'android/**'
+      - 'protocol/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -47,6 +54,28 @@ jobs:
 
       - name: 构建 debug APK + JVM 单测
         run: gradle --no-daemon assembleDebug test
+
+      - name: 协议分支覆盖率（T2.2 DoD ≥80% 硬门禁；BRANCH 计数器）
+        run: |
+          gradle --no-daemon :core:protocol:jacocoTestReport
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('core/protocol/build/reports/jacoco/test/jacocoTestReport.xml').getroot()
+          for c in root.findall('counter'):
+              m, cv = int(c.get('missed')), int(c.get('covered'))
+              print(f"{c.get('type')}: covered={cv} missed={m} = {100*cv/(cv+m):.1f}%")
+          b = [c for c in root.findall('counter') if c.get('type') == 'BRANCH'][0]
+          m, cv = int(b.get('missed')), int(b.get('covered'))
+          pct = 100 * cv / (cv + m)
+          assert pct >= 80, f"分支覆盖率 {pct:.1f}% < 80%（docs/03 T2.2 DoD：协议单测 ≥80% 分支）"
+          print(f"BRANCH {pct:.1f}% >= 80% 达标")
+          EOF
+
+      - name: 上传协议覆盖率报告（T2.2 证据产物）
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-jacoco-report
+          path: android/core/protocol/build/reports/jacoco/test/
 
       - name: Release 构建（签名 env 齐备时；缺失则跳过）
         if: >-

@@ -1,0 +1,66 @@
+{
+  "_comment": "WorkTool-Open 节点定位规则样例（T2.4）。resourceId 值为占位示例：真实资源名需在 D1 真机用 app 内「节点树调试页」dump 校准后替换。worktool.* 三条针对本 App 自身，安装后无需企微即可试掷。",
+  "version": 1,
+  "selectors": [
+    {
+      "id": "worktool.debug.title",
+      "_comment": "WorkTool 自身引导页标题（textContains 演示）",
+      "match": { "className": "android.widget.TextView", "textContains": "WorkTool-Open" },
+      "chain": []
+    },
+    {
+      "id": "worktool.debug.stage",
+      "_comment": "锚点=标题，链=sibling +1（版本行紧随标题）",
+      "match": { "className": "android.widget.TextView", "textContains": "WorkTool-Open" },
+      "chain": [
+        { "rel": "sibling", "offset": 1 }
+      ]
+    },
+    {
+      "id": "worktool.debug.body.first_child",
+      "_comment": "锚点=根 FrameLayout/ContentFrame，链=child 0 → child 0（child 链演示）",
+      "match": { "className": "android.view.ViewGroup" },
+      "chain": [
+        { "rel": "child", "index": 0 }
+      ]
+    },
+    {
+      "id": "wework.nav.message_tab",
+      "_comment": "企微主界面底部「消息」Tab（text 精确匹配演示；占位，待真机校准）",
+      "match": { "text": "消息", "className": "android.widget.TextView" },
+      "chain": []
+    },
+    {
+      "id": "wework.chat.input",
+      "_comment": "聊天页输入框（resourceId 演示；占位，待真机校准）",
+      "match": { "resourceId": "com.tencent.wework:id/chat_input_edit" },
+      "chain": []
+    },
+    {
+      "id": "wework.chat.send",
+      "_comment": "聊天页发送按钮（resourceId+className 组合；占位，待真机校准）",
+      "match": {
+        "resourceId": "com.tencent.wework:id/chat_send_btn",
+        "className": "android.widget.TextView"
+      },
+      "chain": []
+    },
+    {
+      "id": "wework.conversation.item.first_text",
+      "_comment": "会话列表项 → 第一个文本子节点（child-by-match 演示；占位，待真机校准）",
+      "match": { "resourceId": "com.tencent.wework:id/conversation_item" },
+      "chain": [
+        { "rel": "child", "match": { "className": "android.widget.TextView", "textContains": ":" } }
+      ]
+    },
+    {
+      "id": "wework.contact.item.name",
+      "_comment": "联系人项 → child 0 → sibling +1（多级链演示；占位，待真机校准）",
+      "match": { "resourceId": "com.tencent.wework:id/contact_item" },
+      "chain": [
+        { "rel": "child", "index": 0 },
+        { "rel": "sibling", "offset": 1 }
+      ]
+    }
+  ]
+}

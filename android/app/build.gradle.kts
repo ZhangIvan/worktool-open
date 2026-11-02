@@ -60,8 +60,9 @@ android {
 dependencies {
     // 无障碍服务骨架（T1.2 声明透明服务；T2.4 落地原子操作）
     implementation(project(":core:accessibility"))
-    // 协议层占位（T2.2 落地 WS/信封/心跳/离线暂存）
+    // 协议层（T2.2：纯 JVM 协议语义 + Android 落地适配）
     implementation(project(":core:protocol"))
+    implementation(project(":core:protocol-android"))
 
     testImplementation(libs.junit)
 }

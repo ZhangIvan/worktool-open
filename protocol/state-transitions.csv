@@ -15,3 +15,5 @@ E13,execution_unknown,failed,reconcile_unstarted,"设备 journal 证明从未启
 E14,execution_unknown,failed,reconcile_evidence,"设备 journal 以持久证据证明已失败或部分执行无完成记录","落失败+审计；解除同类冻结；必要时死信转人工"
 E15,execution_unknown,failed,manual_resolve,"运维人工裁决（仅当持久证据穷尽后；裁决记录入审计）","落终态+审计（裁决人/依据）；解除同类冻结"
 E16,running,cancelled,user_takeover_stop,"用户接管（FR-52）在设备安全断点停止（设备空闲边界）","写审计+墓碑；端侧停在新指令入口"
+E17,dispatched,execution_unknown,ack_ttl_expired,"300s ACK TTL 到期且无持久传输证据（transport_ack 未持久留痕，区别于 E06 的服务端重启/会话丢失触发）；只登记对账，禁止以超时定性成败（docs/02 §5.1 三原则①，AUD-03 C-10）","登记 UNKNOWN 对账任务（周期扫描+重连触发）；冻结同类 L1/L2 风险级新指令（FR-53 联动）——同 E06"
+E18,acked,execution_unknown,ack_ttl_expired,"300s ACK TTL 后仍无持久传输证据（设备 journal 无 exec_start 启动记录；transport_ack 已有但≠执行证据，区别于 E07 的服务端重启触发）；只登记对账，禁止以超时定性成败（AUD-03 C-10）","同 E17"

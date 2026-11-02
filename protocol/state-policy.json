@@ -1,6 +1,6 @@
 {
   "$comment": "执行状态机终态与策略表（WorkTool-Open T2.1）。状态机唯一权威边集 = protocol/state-transitions.csv（docs/02 §5.1：禁止在计划文档复述边表防漂移；本文件只承载终态判定与策略参数）。非法状态迁移（不在边集内）= 409 ILLEGAL_TRANSITION，与 command_events/审计同事务留痕。",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "authority": {
     "edges": "protocol/state-transitions.csv",
     "architecture": "docs/02-ARCHITECTURE.md §5.1",
@@ -20,12 +20,14 @@
     "dispatched": {
       "terminal": false,
       "owner": "server.gateway",
-      "on_entry": "分配 seq/eventId/epoch 并发送；启动 300s ACK TTL"
+      "on_entry": "分配 seq/eventId/epoch 并发送；启动 300s ACK TTL",
+      "on_ack_ttl_expired": "TTL 到期且无 transport_ack 持久证据 → E17 迁 execution_unknown（对账路径，禁止超时定性成败；AUD-03 C-10）"
     },
     "acked": {
       "terminal": false,
       "owner": "server.gateway",
-      "on_entry": "记录传输确认；transport ack ≠ 执行许可"
+      "on_entry": "记录传输确认；transport ack ≠ 执行许可",
+      "on_ack_ttl_expired": "TTL 后仍无 exec_start 持久证据（journal 无启动记录）→ E18 迁 execution_unknown（对账路径，禁止超时定性成败；AUD-03 C-10）"
     },
     "running": {
       "terminal": false,
@@ -77,7 +79,14 @@
     "cleanup_guard": "清理前确认该 commandId 无 pending 的 execution_unknown"
   },
   "dispatch": {
-    "ack_ttl_seconds": 300
+    "ack_ttl_seconds": 300,
+    "ack_ttl_expiry": {
+      "guard": "TTL 到期且无持久传输证据（dispatched 看 transport_ack 留痕；acked 看设备 journal exec_start 记录）",
+      "edges": ["E17", "E18"],
+      "from_states": ["dispatched", "acked"],
+      "to_state": "execution_unknown",
+      "policy": "只登记 UNKNOWN 对账任务（周期扫描+重连触发），禁止以超时定性成功/失败；execution_unknown 三原则（docs/02 §5.1）完全适用（AUD-03 C-10）"
+    }
   },
   "security_constants": {
     "clock_skew_tolerance_seconds": 30,

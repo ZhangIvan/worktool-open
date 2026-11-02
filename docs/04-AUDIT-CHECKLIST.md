@@ -62,6 +62,7 @@
 | AUD-01 | 2026-11-02 | docs/00~04 v2.0→v2.1（起草：主会话） | 独立复核 Agent（复核者≠起草者） | **通过**（关闭确认 2026-11-02；首轮有条件通过 A×2/B×11/C×9 → 修复后复审通过，无阻断） | 全部处置：A1 骨架真实落地（git 首提交为证）并更正 T1.1 状态；A2 本台账即闭合记录；B1~B11 已修（01 §1.8 与 §3、00 §2/§4/§6/§7、02 §3、03 §2/§3/§5、04 §4/§5/§7、audit/03 回填 23 条端点用例）；C1~C9 已修入文。关闭复审提出 C4 尾巴（00 残留 4 处悬空 Q 引用）与新引入 R1~R5（T1.4 状态矛盾、FR-49/50/51 未入矩阵、G11 缺失、audit/03 §4 过期时态、版本号不齐）均已当场修复，见后续 git 提交 |
 | AUD-02 | 2026-11-02 | v2.2 全量（00~07/README/.gitignore/CI/SIGNING） | 独立复核 Agent（复核者≠起草者） | **有条件通过**（无 A 级；B×6、C×8；用户 12 项要求 9 项完全落实、3 项落实有残留） | B1（ADR-01 合规暗示）/B2（依赖审计 Node 视角残留→govulncheck+Gradle+npm 三线）/B3（FR-33=509 语义更正为"上传"）/B4（05 无源编号 236/238/305/306 标待确认）/B5（指纹文件移 docs/ops 入库）/B6（版本行统一 v2.2）与 C1（Release Gate 调整为 §5.1）/C2（§9.6 自指笔误）/C3（README 结构行）/C4（06 交叉引用已落实进 03/04）/C5（幂等键口径 operation+key）/C6（X25519 公钥来源补定）/C7（06 补 28 计数未核对标注）/C8（G13+CI 补 *.p8）**全部当场修复**；**关闭确认（CLOSED 2026-11-02）**：复核员逐项验证 B×6/C×8 全部有效，zcode/main orphan 提交/敏感路径零命中/台账三项事实验证通过；残留 R-1（SIGNING §2 死引用）/R-2（06/07 两处 §8→§5.1 节号）已当场修复 |
 | AUD-03 | 2026-11-02 | M1 四车道产物（android/server/protocol/infra + 车道 CI）——workflow dwfrun-fff00499 内独立审计 | 独立审计 Agent（审计员≠四位车道工程师） | **通过**（无 A/B 级；C×13 登记） | C-1/C-2（车道 DoD"CI 出包/CI 绿"）已由 CI 首跑全绿关闭（ci/android/server 三工作流 success@c5febc1，主会话核实与报告互证）；C-3/C-6/C-11/C-12 当场修复（docs/03 T1.3、Dockerfile:20 注释、docs/02 §5 路径、docs/00 CI 行 + ci.yml 注释）；C-4/C-5/C-7/C-8/C-9/C-10/C-13 归 M1 尾/M2 落实（明细见 §8） |
+| AUD-04 | 2026-11-02 | M2 三车道业务代码 + 规格修订 C-9/C-10（workflow dwfrun-3143262e；含 1 轮 B 级修复复审=真修） | 独立审计 Agent（审计员≠实现工程师） | **通过**（无 A/B 级；C×4：1 项为修复确认记录，3 项开放） | 3 项开放 C 当场处置：AUD-M2-02（server.yml PR 分支过滤）✅；AUD-M2-03（android/README 模块表过期）✅；AUD-M2-04（crypto/pair RNG 静默兜底→响亮失败，go vet+test 复跑全绿）✅。另：工作流本地门禁 bug（go test 需于 server/ 模块目录执行）由主会话定位修复并人工补推送。AUD-03 §8 同步关闭 C-4/C-8/C-9/C-10 |
 
 ## 7. 覆盖矩阵（种子版，M2 起随实现滚动更新）
 | 需求组 | 端侧模块 | 服务端模块 | 测试 | 状态 |
@@ -97,13 +98,13 @@
 | C-1 | docs/03 T1.2 / android.yml | DoD"CI 出 debug APK"未闭合（车道禁 push） | ✅ 已关闭：CI 首跑 android success@c5febc1 | — |
 | C-2 | docs/03 T1.3 / server.yml | DoD"CI 绿"未闭合 | ✅ 已关闭：server success@c5febc1（本地 go1.25 与 CI 钉 1.23 的版本差已登记） | — |
 | C-3 | docs/03 T1.3 | "+compose"与车道表矛盾（compose 归 infra/M4） | ✅ 已修（文字更正） | — |
-| C-4 | docs/03 T2.1 DoD | "夹具被 L1/L2 单测引用"需后续任务认领 | 出卡时写入 T2.2/T2.3 DoD：单测逐字节复算 hmac-vector.json + 正反例夹具校验 | M2 |
+| C-4 | docs/03 T2.1 DoD | "夹具被 L1/L2 单测引用"需后续任务认领 | ✅ 已关闭（M2）：android `HmacVectorTest` + server 金标准复算双侧落地 | — |
 | C-5 | infra/builder/Dockerfile | docker build 从未实跑；cmdline-tools zip sha256 未独立复核；S1 磁盘 31G | S1 首跑前 `docker system prune`；首跑即验证 zip 校验和与 DoD | T1.4 冒烟（M1 尾） |
 | C-6 | Dockerfile:20 | 注释写 minSdk 24（实际 26） | ✅ 已修 | — |
 | C-7 | android build.gradle.kts:34 + android.yml:51-57 + SIGNING.md | Release 签名路径缺陷：rootProject.file() 相对 android/ 解析 → android/secrets/（不存在）；CI 无 keystore 落盘步骤 | 签名启用前改绝对路径约定或 base64 secret 落盘，或走 S1 本地签名；修后补真实签名构建 | M4 前 |
-| C-8 | android.yml / server.yml paths | protocol/** 变更不触发任何 CI；两 yml 分支过滤口径不一 | T2.2/T2.3 单测引用夹具后把 protocol/** 加入 paths；统一分支过滤 | M2 |
-| C-9 | protocol/spec.md §5.2 vs §5.3 | 明文帧 seq 不受 HMAC 覆盖（AAD 只护加密帧）；根因在 docs/02 §5 输入式 | T3.4 实现前 AUD 定夺是否把 seq/整个 meta 纳入 HMAC 输入（规格级修订宜早不宜迟） | M2（T3.4 前） |
-| C-10 | protocol/state-transitions.csv E06/E07 + state-policy | ACK TTL 300s 到期后 dispatched/acked 无离出边 | T2.3 前补 TTL 到期→execution_unknown 对账边（guard 涵盖"TTL 到期且无持久传输证据"） | M2（T2.3 前） |
+| C-8 | android.yml / server.yml paths | protocol/** 变更不触发任何 CI；两 yml 分支过滤口径不一 | ✅ 已关闭（M2）：双 yml paths 含 protocol/**，push+PR 分支过滤统一（AUD-M2-02 补齐 PR 侧） | — |
+| C-9 | protocol/spec.md §5.2 vs §5.3 | 明文帧 seq 不受 HMAC 覆盖（AAD 只护加密帧）；根因在 docs/02 §5 输入式 | ✅ 已裁决并落地（M2，2026-11-02 主会话裁决）：HMAC 输入式纳入 seq，spec v1.1.0 + 双侧实现 + 金标准向量全量再生（含篡改 seq 必败反例） | — |
+| C-10 | protocol/state-transitions.csv E06/E07 + state-policy | ACK TTL 300s 到期后 dispatched/acked 无离出边 | ✅ 已落地（M2）：E17/E18 对账离出边 + 服务端表驱动实现与测试 | — |
 | C-11 | docs/02 §5 vs protocol/spec.md | 配对端点 /pair 与 /api/v2/pair 不一致 | ✅ 已修（docs/02 回写 + 注明以 spec 为准） | — |
 | C-12 | ci.yml 注释 vs server.yml | 注释宣称 golangci-lint+镜像，实际仅 vet/test | ✅ 已修（注释口径更正） | — |
 | C-13 | android/（无 gradlew） | 未提交 Gradle wrapper，新机器无法 ./gradlew | T1.4 S1 首跑时用镜像内 Gradle 8.7 生成 wrapper 并提交，或 README 明示不提供 | M1 尾 |

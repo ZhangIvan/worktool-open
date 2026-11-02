@@ -49,7 +49,7 @@
         "ver": {"const": 2},
         "ts": {"type": "integer", "minimum": 0, "description": "Unix 毫秒；接收方校验 |ts - now| ≤ 30s（超差拒绝，关闭码 4403）"},
         "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "128-bit 随机数 hex；双向各自维护 5 分钟去重窗口（重放拒绝，关闭码 4402）"},
-        "hmac": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "HMAC-SHA256(deviceToken, commandId|eventId|ts|nonce|payloadDigest)，输入式冻结见 spec.md §5.2 与 fixtures/hmac-vector.json"},
+        "hmac": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "HMAC-SHA256(deviceToken, commandId|eventId|seq|ts|nonce|payloadDigest)，输入式冻结见 spec.md §5.2 与 fixtures/hmac-vector.json（seq 纳入输入式 = AUD-03 C-9）"},
         "seq": {"type": "integer", "minimum": 1, "description": "每会话每方向严格递增，从 1 起；乱序拒绝并触发重新同步（9xx 控制帧）"},
         "eventId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "帧唯一 ID（UUID v4）；重复 eventId：同 payloadDigest 幂等回执原确认，异内容冲突关闭（4405）"},
         "commandId": {"type": "string", "pattern": "^(|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", "description": "指令 ID（服务端创建时分配）；非指令帧（心跳/上报/结果回执以外的控制帧）为空串。结果回执帧回填所响应的 commandId"},
