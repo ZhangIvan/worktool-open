@@ -1,0 +1,8 @@
+{
+  "status": "BLOCKED",
+  "checks": [],
+  "scope": "Chromium visual/interactive checks",
+  "reason": "Cloud sandbox denied Chromium ProcessSingleton local socket; one tool-level approved-scope retry failed before browser launch due read-only sandbox bootstrap. No browser screenshot was generated.",
+  "attempts": 2,
+  "android": "NOT_RUN"
+}
