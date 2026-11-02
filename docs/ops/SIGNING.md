@@ -26,7 +26,7 @@
   export WORKTOOL_KEY_PASSWORD=$(cat secrets/keystore-pass.txt)
   ```
 - CI 发布签名（后续）：口令放 GitHub Actions Secrets（仅 `zcode/*` 触发的 release 工作流），密钥文件按需上传为加密 secret 或仅在 S1 构建机本地签名后上传产物。
-- 验签：`keytool -printcert -jarfile app.apk` 应与 `secrets/CERT-FINGERPRINT.txt` 一致；v2/v3 签名方案由 AGP 默认启用。
+- 验签：`keytool -printcert -jarfile app.apk` 应与 `docs/ops/CERT-FINGERPRINT.txt` 一致；v2/v3 签名方案由 AGP 默认启用。
 
 ## 3. 备份与保管
 

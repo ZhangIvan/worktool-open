@@ -56,7 +56,7 @@
 | WTO-006（P1） | AccessibilityService 宿主、权限引导、生命周期、事件过滤未实现（首 APK 无 service/receiver 注册） | T2.4（core:accessibility + 5 原子操作 + 节点树调试页）+ SR-13/G12 | 独立实现（真机无障碍为我方主线）；借鉴⑧变体隔离承载 lab 工具 |
 | WTO-007（P1） | 授权的真机→自有后端连通与队列/ACK/撤销实测缺失 | T2.2/T2.3（协议+网关联调：真机 D1 收发指令）+ T2.5（RIG 通道） | 独立实现（S1/D1 链路为我方独有资产，06 §4④） |
 | WTO-008（P1 before production callbacks） | 生产密钥 provider、HTTPS 目的地策略、保留期、运维监控未做（当前回调仅合成） | FR-35（回调分发）+ T3.2 | 独立实现（设计⑤已吸收，生产四项补齐列入 T3.2 验收） |
-| WTO-009（Evidence maintenance） | 99 项历史 PRD NOT_RUN 保持原样+追加断言级当前证据；247 条交叉引用≠247 个特性 | docs/05 规则 + 04 §8 Release Gate | 已吸收（⑥：我方矩阵图例/证据规则与其同源；测试计数按当前源码重跑） |
+| WTO-009（Evidence maintenance） | 99 项历史 PRD NOT_RUN 保持原样+追加断言级当前证据；247 条交叉引用≠247 个特性 | docs/05 规则 + 04 §5.1 Release Gate | 已吸收（⑥：我方矩阵图例/证据规则与其同源；测试计数按当前源码重跑） |
 
 ## 4. 维护规则
 
