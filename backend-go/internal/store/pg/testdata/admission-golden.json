@@ -1,0 +1,966 @@
+{
+  "oracle": "independent synthetic Node canonicalize5.1.0 observations; Go must verify independently",
+  "contractSHA256": "cd0d7573bb62e21c85aab733a27b507957caab50c496d60ee3df94049e04f4d1",
+  "vectors": [
+    {
+      "id": "ascii",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "9c0cda40df4a94eb92f0579ceade6359b830e91dc9198e3610368a3f99e7aa7f"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "quotes_backslash",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "\"quoted\" \\ slash /",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"\\\"quoted\\\" \\\\ slash /\",\"type\":203}",
+        "sha256": "cfd4f038251d1fdb1080bc4f493a04cade6c18b26826bc9f3141a055d9aeff5b"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"\\\"quoted\\\" \\\\ slash /\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "61562400c45cd6101f2b5c8a4a0486f8d8fa5356af4036637e02b5567c901111"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "controls",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\",\"type\":203}",
+        "sha256": "891b3a86c69a3baf2d90fa9606bdfdd11b651a3e69dcecb06c2f05b653fbbb34"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "159a78891d9282188421ed8cdcce30a2f3a64dd3f47915b24ae63028b287bbc6"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "html",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "<script>& ' / >",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"<script>& ' / >\",\"type\":203}",
+        "sha256": "b2b80ef18222d702d1131614ee58f1f031ac50219bad7f51d26e55eef144c76c"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"<script>& ' / >\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "a176577731c5d5ac9a4de084dfffdd22a540efdbfe4f1d72d55a977fbeb654bc"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "line_separators",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "A B C",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"A B C\",\"type\":203}",
+        "sha256": "d0036ac99460c912690704224fcb2d56ce545fd7b213f67fe5da4d1fa3390410"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"A B C\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "184b231be76734f9e93023f0d721de4ad9065d0be5ec480526dd32a3780a6a82"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "non_bmp",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "😀𝄞",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"😀𝄞\",\"type\":203}",
+        "sha256": "8fdfb1e9606d6fbead4a2aaf8711b020fcaa9ee323ad799f3067f19d9870372d"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"😀𝄞\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "77915e7fdff2c8acd742678424807414d9d206988050ecf39cee7c0d7343836e"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "whitespace_single",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": " a ",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\" a \",\"type\":203}",
+        "sha256": "346002709ac03d82e0f225dc46addd5620dd2ef5dfacf8a21e36d68a94d680db"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\" a \"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "b7b4b2017d4f4e08d915e9476aa677829ffd8813a48b07bb44302f900f1da597"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "whitespace_double",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "  a ",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"  a \",\"type\":203}",
+        "sha256": "49def0c690413ad0a91701e53b4eef9748b24975f4c6622c4a21ba5e22eafd30"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"  a \"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "fecc58c90815e35f0282c10c9ab0b54be4a05f82378c62cfb65f36034b95cc39"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "composed",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "é",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"é\",\"type\":203}",
+        "sha256": "0c52c1e97780d483336c39e660e45e7eeaf736dd27a9334fff32894f5b23ba0d"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"é\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "41b53d6b02d8e2bba260da24a7c25ffd736d065806300b75c9f4510de25bc321"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "decomposed",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "é",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"é\",\"type\":203}",
+        "sha256": "7359a457841d5bf80766bee32b9fcfd10ae9b83fe225921759844702850bc6b6"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"é\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "5c4d86f65f029196c2f0a104f1e82d5ab0731e178bf279455c9e02a124d2107a"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "utf16_exact_4096",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\",\"type\":203}",
+        "sha256": "2db1aa918da76a55a43fa1ab25641a1226f980bbe2313bcb0b3f5953736de8f6"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "4925e40bf30191ce536144b3d8b5867fed432a84362cde6e8049eee7343e75d0"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "utf16_over_4096",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "text_empty",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "ttl_max",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 300
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000300123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:18:20Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":300,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "5b521a53d13b1c74d2d1af6aed769ecd85f116a261342f176c8fd1e55b51e978"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:18:20Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "399f27e174168511eb1e368624c836c2f601e49c09c0222840f21cac6fae92de"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "ttl_below",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 29
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "ttl_above",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 301
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "created_ms_000",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000000",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000000",
+        "expiresMS": "1700000030000",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "9c0cda40df4a94eb92f0579ceade6359b830e91dc9198e3610368a3f99e7aa7f"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "created_ms_999",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000999",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000999",
+        "expiresMS": "1700000030999",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "9c0cda40df4a94eb92f0579ceade6359b830e91dc9198e3610368a3f99e7aa7f"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "utc_day_boundary",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700006399999",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700006399999",
+        "expiresMS": "1700006429999",
+        "acceptedAt": "2023-11-14T23:59:59Z",
+        "expiresAt": "2023-11-15T00:00:29Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-15T00:00:29Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "7dd0372420306176d4c846ddee1fcb5f4f2429b91e3d1b62afeb935ee2dfe047"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "max_four_digit_year",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "253402300769999",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "253402300769999",
+        "expiresMS": "253402300799999",
+        "acceptedAt": "9999-12-31T23:59:29Z",
+        "expiresAt": "9999-12-31T23:59:59Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"9999-12-31T23:59:59Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "90d0aaef0adfeb6626109011c5a5bc414e70e1258d540ba01ddb330735cc6d3b"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "expires_year_overflow",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "253402300799999",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "TIME_FOUR_DIGIT_YEAR"
+    },
+    {
+      "id": "unsafe_integer_created",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "9007199254740992",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "TIME_SAFE_INTEGER"
+    },
+    {
+      "id": "negative_created",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "-1",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "TIME_SAFE_INTEGER"
+    },
+    {
+      "id": "snapshot_one",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": [
+          {
+            "app": "app_demo",
+            "subscriptionId": "subscription_001",
+            "subscriptionVersion": 1,
+            "destinationId": "destination_001",
+            "destinationPolicyVersion": 1,
+            "keyVersion": 1,
+            "maxAttempts": 4,
+            "eventType": "command.result",
+            "eventSchemaVersion": "bounded-result-v1",
+            "maxEventsPerChild": 1,
+            "maxBodyBytes": 65536
+          }
+        ]
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "9c0cda40df4a94eb92f0579ceade6359b830e91dc9198e3610368a3f99e7aa7f"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[{\"app\":\"app_demo\",\"destinationId\":\"destination_001\",\"destinationPolicyVersion\":1,\"eventSchemaVersion\":\"bounded-result-v1\",\"eventType\":\"command.result\",\"keyVersion\":1,\"maxAttempts\":4,\"maxBodyBytes\":65536,\"maxEventsPerChild\":1,\"subscriptionId\":\"subscription_001\",\"subscriptionVersion\":1}],\"tenant\":\"tenant_demo\"}",
+        "sha256": "f5549a6467a8300f3e24a0d57f07c95d2161a6b38fb3aa1c87f5a7ddda3ef180"
+      }
+    },
+    {
+      "id": "snapshot_four_unsorted",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": [
+          {
+            "app": "app_demo",
+            "subscriptionId": "subscription_004",
+            "subscriptionVersion": 1,
+            "destinationId": "destination_004",
+            "destinationPolicyVersion": 1,
+            "keyVersion": 1,
+            "maxAttempts": 4,
+            "eventType": "command.result",
+            "eventSchemaVersion": "bounded-result-v1",
+            "maxEventsPerChild": 1,
+            "maxBodyBytes": 65536
+          },
+          {
+            "app": "app_demo",
+            "subscriptionId": "subscription_002",
+            "subscriptionVersion": 1,
+            "destinationId": "destination_002",
+            "destinationPolicyVersion": 1,
+            "keyVersion": 1,
+            "maxAttempts": 4,
+            "eventType": "command.result",
+            "eventSchemaVersion": "bounded-result-v1",
+            "maxEventsPerChild": 1,
+            "maxBodyBytes": 65536
+          },
+          {
+            "app": "app_demo",
+            "subscriptionId": "subscription_003",
+            "subscriptionVersion": 1,
+            "destinationId": "destination_003",
+            "destinationPolicyVersion": 1,
+            "keyVersion": 1,
+            "maxAttempts": 4,
+            "eventType": "command.result",
+            "eventSchemaVersion": "bounded-result-v1",
+            "maxEventsPerChild": 1,
+            "maxBodyBytes": 65536
+          },
+          {
+            "app": "app_demo",
+            "subscriptionId": "subscription_001",
+            "subscriptionVersion": 1,
+            "destinationId": "destination_001",
+            "destinationPolicyVersion": 1,
+            "keyVersion": 1,
+            "maxAttempts": 4,
+            "eventType": "command.result",
+            "eventSchemaVersion": "bounded-result-v1",
+            "maxEventsPerChild": 1,
+            "maxBodyBytes": 65536
+          }
+        ]
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+        "sha256": "9c0cda40df4a94eb92f0579ceade6359b830e91dc9198e3610368a3f99e7aa7f"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[{\"app\":\"app_demo\",\"destinationId\":\"destination_001\",\"destinationPolicyVersion\":1,\"eventSchemaVersion\":\"bounded-result-v1\",\"eventType\":\"command.result\",\"keyVersion\":1,\"maxAttempts\":4,\"maxBodyBytes\":65536,\"maxEventsPerChild\":1,\"subscriptionId\":\"subscription_001\",\"subscriptionVersion\":1},{\"app\":\"app_demo\",\"destinationId\":\"destination_002\",\"destinationPolicyVersion\":1,\"eventSchemaVersion\":\"bounded-result-v1\",\"eventType\":\"command.result\",\"keyVersion\":1,\"maxAttempts\":4,\"maxBodyBytes\":65536,\"maxEventsPerChild\":1,\"subscriptionId\":\"subscription_002\",\"subscriptionVersion\":1},{\"app\":\"app_demo\",\"destinationId\":\"destination_003\",\"destinationPolicyVersion\":1,\"eventSchemaVersion\":\"bounded-result-v1\",\"eventType\":\"command.result\",\"keyVersion\":1,\"maxAttempts\":4,\"maxBodyBytes\":65536,\"maxEventsPerChild\":1,\"subscriptionId\":\"subscription_003\",\"subscriptionVersion\":1},{\"app\":\"app_demo\",\"destinationId\":\"destination_004\",\"destinationPolicyVersion\":1,\"eventSchemaVersion\":\"bounded-result-v1\",\"eventType\":\"command.result\",\"keyVersion\":1,\"maxAttempts\":4,\"maxBodyBytes\":65536,\"maxEventsPerChild\":1,\"subscriptionId\":\"subscription_004\",\"subscriptionVersion\":1}],\"tenant\":\"tenant_demo\"}",
+        "sha256": "73082b6938f7e3c7f696227fa1671c42b06d150ea4ef67130b6ef60060bd1bdd"
+      }
+    },
+    {
+      "id": "policy_safe_max",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 9007199254740991,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": true,
+      "rejection": null,
+      "timing": {
+        "createdMS": "1700000000123",
+        "expiresMS": "1700000030123",
+        "acceptedAt": "2023-11-14T22:13:20Z",
+        "expiresAt": "2023-11-14T22:13:50Z"
+      },
+      "requestHash": {
+        "canonicalText": "{\"deviceId\":\"device_demo\",\"expiresInSeconds\":30,\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\",\"type\":203}",
+        "sha256": "10b8e6d415a4a35b14c5a1cd5397d02687c1a53ae1c45b4625bc2f3787f5fabe"
+      },
+      "commandDigest": {
+        "canonicalText": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_demo\",\"expiresAt\":\"2023-11-14T22:13:50Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"Synthetic hello\"},\"policyVersion\":9007199254740991,\"requiresLocalConfirmation\":false}",
+        "sha256": "a0b67c6780de7a735d9ec9ae288f1603712db1cdb662abfe7ced36dcd0b83799"
+      },
+      "snapshotDigest": {
+        "canonicalText": "{\"admissionVersion\":\"bounded-result-v1\",\"appId\":\"app_demo\",\"subscriptions\":[],\"tenant\":\"tenant_demo\"}",
+        "sha256": "a36519dfa818e2dddd97d0a69ae3f43bc70c10313bd12483b5641e03a8fd7a0b"
+      }
+    },
+    {
+      "id": "device_id_hardening",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device.demo",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "device_id_newline",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo\n",
+          "targetId": "synthetic_target_001",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    },
+    {
+      "id": "target_id_newline",
+      "input": {
+        "request": {
+          "type": 203,
+          "deviceId": "device_demo",
+          "targetId": "synthetic_target_001\n",
+          "text": "Synthetic hello",
+          "expiresInSeconds": 30
+        },
+        "createdMS": "1700000000123",
+        "policyVersion": 1,
+        "tenant": "tenant_demo",
+        "appId": "app_demo",
+        "subscriptions": []
+      },
+      "contractAccepted": false,
+      "rejection": "INVALID_INPUT"
+    }
+  ]
+}

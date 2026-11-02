@@ -8,6 +8,8 @@ on:
       - 'backend-go/migrations/**'
       - 'backend-go/internal/store/pg/integration_test.go'
       - 'backend-go/internal/store/pg/integration_static_test.go'
+      - 'backend-go/internal/store/pg/admission*.go'
+      - 'backend-go/internal/store/pg/testdata/admission-golden.json'
 permissions:
   contents: read
 concurrency:
