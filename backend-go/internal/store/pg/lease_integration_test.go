@@ -411,10 +411,21 @@ func TestPGLeaseLF06(t *testing.T) {
 		}
 	}
 	t.Run("unsupported_user", func(t *testing.T) {
-		mustExec(t, f.f.owner, f.f.ctx, `UPDATE commands SET actor_type='user',app_id=NULL,app_epoch=NULL WHERE id='commandA'`)
-		v, e := f.ls.ClaimReadyCommand(f.f.ctx, f.ga, h, ClaimCommandRequest{"commandA", 0})
+		// commandA is already referenced by eventA/eventA2 through the exact
+		// same-app FK. Do not rewrite that immutable fixture identity merely to
+		// exercise unsupported user actors; construct a separate valid user row.
+		mustExec(t, f.f.owner, f.f.ctx, `INSERT INTO commands(tenant,id,device,actor,capability,digest,policy,confirm,status,created,expires,actor_type,subscription_snapshot,subscription_snapshot_digest,admission_version)
+ VALUES('T1','synthetic_user_command','A','operator','message.send_text','synthetic_unused_digest',1,false,'queued',1,9000000000000,'user','[]',repeat('0',64),'bounded-result-v1')`)
+		v, e := f.ls.ClaimReadyCommand(f.f.ctx, f.ga, h, ClaimCommandRequest{"synthetic_user_command", 0})
 		if e != nil || v.Reason != "UNSUPPORTED_COMMAND" {
 			t.Fatal("user actor not unsupported")
+		}
+		if v.Intent != nil {
+			t.Fatal("unsupported user actor produced intent")
+		}
+		assertCommand(t, f, "synthetic_user_command", "queued", "", 0, 0)
+		if n := countInt(t, f, `SELECT count(*) FROM developer_callbacks cb JOIN commands c ON c.tenant=cb.tenant AND c.app_id=cb.app AND c.id=cb.command WHERE c.tenant='T1' AND c.id='commandA' AND c.actor_type='app' AND c.app_id='X' AND cb.event IN ('eventA','eventA2')`); n != 2 {
+			t.Fatal("original same-app callback fixture was changed")
 		}
 	})
 	t.Run("unsupported_export", func(t *testing.T) {

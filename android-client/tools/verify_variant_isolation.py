@@ -66,10 +66,13 @@ def parse_resources(text):
     return entries
 
 
+# Official format source: Android tools/base commit
+# 6a81855c2fa102ae4532ad9a645e40177770a26a ResourceIdResolver.NO_RESOLUTION
+# emits @ref/0x%x. Still require the exact ID in this APK's aapt2 table.
 def normalize_references(root,resources):
     for element in root.iter():
         for attr,value in list(element.attrib.items()):
-            m=re.fullmatch(r'@(?:0x)?([0-9a-fA-F]{8})',value)
+            m=re.fullmatch(r'@(?:ref/0x|0x)?([0-9a-fA-F]{8})',value)
             if m:
                 key='0x'+m.group(1).lower();assert key in resources,'unresolved compiled resource'
                 element.set(attr,'@'+resources[key]['name'])
@@ -109,7 +112,69 @@ def resource_selftest():
         try:resource_string(parse_resources(bad),'string/ui_accessibility_package_filter')
         except AssertionError:pass
         else:raise AssertionError('ambiguous/reference package filter accepted')
+    # Official no-resolver format must resolve only through an exact table ID.
+    for raw in ['@ref/0x7f020001','@ref/0x7F020001','@0x7f020001','@7f020001']:
+        x=ET.Element('meta-data',{A+'resource':raw})
+        normalize_references(x,resources)
+        assert x.get(A+'resource')=='@xml/ui_fixture_accessibility_service'
+    for raw in ['@ref/0x7f020099','@0x7f020099']:
+        try:normalize_references(ET.Element('x',{A+'resource':raw}),resources)
+        except AssertionError:pass
+        else:raise AssertionError('unknown resource ID accepted')
+    for raw in ['@dref/0x7f020001','@ref/0x7f020001suffix','@ref/0x7f020001\n','@ref/2130837505','@wrong/0x7f020001']:
+        x=ET.Element('x',{A+'resource':raw});normalize_references(x,resources)
+        assert x.get(A+'resource')!='@xml/ui_fixture_accessibility_service'
+    x=ET.Element('x',{A+'resource':'@ref/0x7f010001'});normalize_references(x,resources)
+    assert x.get(A+'resource')=='@string/ui_accessibility_package_filter' # wrong type is NOT aliased to xml
+    for raw,accepted in [('@ref/0x7f020001',True),('@ref/0x7f010001',False),('@dref/0x7f020001',False)]:
+        manifest=ET.parse(ROOT/'app/src/main/AndroidManifest.xml').getroot()
+        manifest.set('package','io.worktool.open.prototype')
+        manifest.find('application/service/meta-data').set(A+'resource',raw)
+        normalize_references(manifest,resources)
+        try:check_manifest(manifest,'debug')
+        except AssertionError:assert not accepted
+        else:assert accepted
+    diag=diagnostic_reference('@ref/0x7f020001',resources)
+    assert diag['metadata_resource_repr']==repr('@ref/0x7f020001')
+    assert all(set(r)=={'id','type','name'} for r in diag['resource_identity_candidates'])
+    assert diagnostic_reference('secret payload with spaces',resources)['metadata_resource_repr']=='ABSENT_OR_REDACTED'
     return {'compiled_resource_parser_fixtures':'PASS','actual_apk_decode':'NOT_RUN'}
+
+
+def metadata_reference(root):
+    services=root.findall('application/service')
+    values=[m.get(A+'resource','') for service in services
+            for m in service.findall('meta-data')
+            if m.get(A+'name')=='android.accessibilityservice']
+    return values[0] if len(values)==1 else None
+
+
+def diagnostic_reference(value,resources):
+    # Exact resource syntax only: never dump arbitrary XML text/resource values.
+    safe=isinstance(value,str) and len(value)<=160 and re.fullmatch(r'@[A-Za-z0-9_./:]+',value)
+    raw=repr(value) if safe else 'ABSENT_OR_REDACTED'
+    match=re.fullmatch(r'@(?:ref/0x|0x)?([0-9a-fA-F]{8})',value or '')
+    key='0x'+match.group(1).lower() if match else None
+    records=[]
+    for rid,record in resources.items():
+        if rid==key or record['name']=='xml/ui_fixture_accessibility_service':
+            name=record['name']
+            if re.fullmatch(r'[A-Za-z0-9_]+/[A-Za-z0-9_]+',name):
+                kind,entry=name.split('/',1)
+                records.append({'id':rid,'type':kind,'name':entry})
+    return {'metadata_resource_repr':raw,'resource_identity_candidates':records[:4]}
+
+
+def tool_version(tool, arguments):
+    # Failure-only bounded public version probe; no environment or SDK paths.
+    try:
+        p=subprocess.run([str(tool),*arguments],capture_output=True,text=True,timeout=10)
+        value=p.stdout.strip()
+        if p.returncode==0 and 0<len(value)<=160 and re.fullmatch(r'[A-Za-z0-9 ._()+:/\-\n]+',value):
+            return value
+    except (OSError,subprocess.TimeoutExpired):
+        pass
+    return 'UNAVAILABLE'
 
 
 def verify_apk(variant,apk,apkanalyzer,aapt2):
@@ -121,8 +186,17 @@ def verify_apk(variant,apk,apkanalyzer,aapt2):
     manifest=ET.fromstring(raw);app=manifest.find('application')
     resource_dump=subprocess.check_output([str(Path(aapt2).resolve()),'dump','resources',str(apk)],text=True)
     resources=parse_resources(resource_dump)
-    normalize_references(manifest,resources)
-    check_manifest(manifest,variant)
+    original_metadata=metadata_reference(manifest)
+    try:
+        normalize_references(manifest,resources)
+        check_manifest(manifest,variant)
+    except AssertionError:
+        diagnostic=diagnostic_reference(original_metadata,resources)
+        diagnostic.update(variant=variant,stage='MANIFEST_REFERENCE_GATE',
+                          apkanalyzer_version=tool_version(tool,['--version']),
+                          aapt2_version=tool_version(Path(aapt2).resolve(),['version']))
+        print(json.dumps(diagnostic),file=sys.stderr)
+        raise
     if variant!='lab':
         service_raw=subprocess.check_output([str(tool),'resources','xml','--file','res/xml/ui_fixture_accessibility_service.xml',str(apk)],text=True)
         service_xml=ET.fromstring(service_raw)
@@ -141,7 +215,7 @@ def verify_apk(variant,apk,apkanalyzer,aapt2):
         markers=[b'LabEndpointPolicy',b'LabFixtureCommandPolicy',b'LabClientBudget',b'MonotonicLeaseTimer',b'LAB CLEARTEXT',b'LAB FIXTURE NONCE']
         if variant=='lab':assert all(m in dex for m in markers)
         else:assert not any(m in dex for m in markers), 'lab bytecode or fixture marker leaked'
-    return {'variant':variant,'apk_isolation':'PASS','compiled_manifest':'PASS','compiled_service_filter':'PASS' if variant!='lab' else 'NOT_REGISTERED','shared_accessibility_dex':'NOT_A_REACHABILITY_PROOF'}
+    return {'variant':variant,'apk_isolation':'PASS','compiled_manifest':'PASS','compiled_service_filter':'PASS' if variant!='lab' else 'NOT_REGISTERED','shared_accessibility_dex':'NOT_A_REACHABILITY_PROOF','metadata_reference':diagnostic_reference(original_metadata,resources) if variant!='lab' else 'NOT_REGISTERED'}
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--apk',action='append',default=[],help='variant=/absolute/path.apk');p.add_argument('--apkanalyzer');p.add_argument('--aapt2');p.add_argument('--selftest',action='store_true')
