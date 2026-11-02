@@ -33,12 +33,15 @@ class SqliteJournalStore(context: Context, dbName: String = "worktool_protocol_j
         )
     }
 
-    override fun update(eventId: String, state: JournalState, attempts: Int) = synchronized(helper) {
-        val values = ContentValues().apply {
-            put("state", state.name)
-            put("attempts", attempts)
+    override fun update(eventId: String, state: JournalState, attempts: Int) {
+        // 块体：避免表达式体把 SQLiteDatabase.update 的 Int 返回值推导为函数返回类型（≠接口 Unit，CI 编译失败根因）
+        synchronized(helper) {
+            val values = ContentValues().apply {
+                put("state", state.name)
+                put("attempts", attempts)
+            }
+            helper.writableDatabase.update("outbound", values, "event_id = ?", arrayOf(eventId))
         }
-        helper.writableDatabase.update("outbound", values, "event_id = ?", arrayOf(eventId))
     }
 
     override fun entries(): List<JournalEntry> = synchronized(helper) {
