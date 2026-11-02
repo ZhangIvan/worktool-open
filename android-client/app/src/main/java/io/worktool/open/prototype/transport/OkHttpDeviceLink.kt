@@ -1,8 +1,10 @@
 package io.worktool.open.prototype.transport
 
 import io.worktool.open.prototype.core.*
+import io.worktool.open.prototype.policy.EndpointPolicy
+import io.worktool.open.prototype.policy.HttpsEndpointPolicy
 import okhttp3.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import io.worktool.open.prototype.policy.AuthorizedRoutes
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString
@@ -16,8 +18,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
-/** Platform trust roots + hostname verification, HTTPS only, no redirect, no logging. */
-class OkHttpDeviceLink : DeviceLink {
+/** Variant-injected origin boundary; platform TLS verification where applicable, no redirects/logging. */
+class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpointPolicy()) : DeviceLink {
     private val client=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
     private val timer=Executors.newSingleThreadScheduledExecutor { r -> Thread(r,"device-heartbeat").apply { isDaemon=true } }
@@ -31,13 +33,9 @@ class OkHttpDeviceLink : DeviceLink {
     private var seq=0L
     private var received=0L
     private var offset=0L
-    private fun base(endpoint:String): HttpUrl {
-        val u=endpoint.toHttpUrl()
-        require(u.scheme=="https" && u.username.isEmpty() && u.password.isEmpty() && u.query==null && u.fragment==null && u.encodedPath=="/") { "HTTPS_ORIGIN_REQUIRED" }
-        return u
-    }
+    private val routes=AuthorizedRoutes(endpointPolicy)
     private fun request(endpoint:String,path:String,body:JSONObject,bearer:String?=null): Request {
-        val b=Request.Builder().url(base(endpoint).newBuilder().encodedPath(path).build())
+        val b=Request.Builder().url(routes.url(endpoint,path))
             .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         if(bearer!=null) b.header("Authorization","Bearer $bearer")
         return b.build()
@@ -60,21 +58,25 @@ class OkHttpDeviceLink : DeviceLink {
             }
         }); return c
     }
-    override fun enroll(endpoint:String,enrollmentId:String,enrollmentToken:String,callback:(Result<Identity>)->Unit) {
+    @Synchronized override fun enroll(endpoint:String,enrollmentId:String,enrollmentToken:String,callback:(Result<Identity>)->Unit) {
         val request=try { request(endpoint,"/api/v1/devices/enroll",JSONObject().put("enrollmentId",enrollmentId).put("enrollmentToken",enrollmentToken).put("deviceLabel","Android foreground prototype").put("localConfirmed",true)) }
-        catch (_:Exception) { callback(Result.failure(IllegalArgumentException("HTTPS_ORIGIN_REQUIRED"))); return }
-        post(request) { r -> callback(r.mapCatching { Identity(base(endpoint).toString(),it.getString("deviceId"),it.getString("keyId"),it.getString("deviceSecret")) }) }
+        catch (_:Exception) { callback(Result.failure(IllegalArgumentException("ORIGIN_NOT_AUTHORIZED"))); return }
+        val current=generation
+        call=post(request) { r -> synchronized(this) {
+            if(current!=generation) callback(Result.failure(IllegalStateException("PAIRING_CANCELLED")))
+            else callback(r.mapCatching { Identity(endpointPolicy.authorize(endpoint),it.getString("deviceId"),it.getString("keyId"),it.getString("deviceSecret")) })
+        } }
     }
     @Synchronized override fun connect(identity:Identity,listener:LinkListener) {
         disconnect(); this.listener=listener; val current=generation
         val request=try { request(identity.endpoint,"/api/v1/device-sessions",JSONObject().put("deviceId",identity.deviceId).put("keyId",identity.keyId),identity.secret) }
-        catch (_:Exception) { listener.closed("HTTPS_ORIGIN_REQUIRED"); return }
+        catch (_:Exception) { listener.closed("ORIGIN_NOT_AUTHORIZED"); return }
         call=post(request) { r -> synchronized(this) {
             if(current!=generation) return@synchronized
             if(r.isFailure) { listener.closed("SESSION_FAILED"); return@synchronized }
             try {
                 val session=r.getOrThrow(); val sessionId=session.getString("sessionId")
-                val wsRequest=Request.Builder().url(base(identity.endpoint).newBuilder().encodedPath("/api/v1/device-sessions").build())
+                val wsRequest=Request.Builder().url(routes.webSocketHandshake(identity.endpoint))
                     .header("Authorization","Bearer ${session.getString("accessToken")}").build()
                 socket=client.newWebSocket(wsRequest,object:WebSocketListener() {
                     override fun onOpen(ws:WebSocket,response:Response) { synchronized(this@OkHttpDeviceLink) {

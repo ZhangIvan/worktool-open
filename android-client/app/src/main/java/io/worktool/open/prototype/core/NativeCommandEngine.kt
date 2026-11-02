@@ -2,6 +2,8 @@ package io.worktool.open.prototype.core
 
 import org.json.JSONArray
 import org.json.JSONObject
+import io.worktool.open.prototype.policy.CommandPolicy
+import io.worktool.open.prototype.policy.StandardCommandPolicy
 
 /** Actual Android client orchestration; remote effects remain app-local synthetic fixtures.
  * IMPLEMENTED_NOT_BUILT / NOT_DEVICE_TESTED. All entry points serialize on this monitor.
@@ -11,6 +13,7 @@ class NativeCommandEngine(
     private val journal: Journal,
     private val link: DeviceLink,
     private val events: EngineEvents,
+    private val commandPolicy: CommandPolicy = StandardCommandPolicy,
     private val clock: () -> Long = System::currentTimeMillis
 ) : LinkListener {
     private var binding: Binding? = null
@@ -91,6 +94,8 @@ class NativeCommandEngine(
     }
 
     private fun accept(body: JSONObject) {
+        // Reject variant-forbidden content before persisting the command payload.
+        if(!commandPolicy.permits(body)) { fail("VARIANT_FIXTURE_POLICY_DENIED"); return }
         val bind=binding ?: error("NO_SESSION")
         require(WireValidation.payloadDigest(body,bind.deviceId)==body.getString("payloadDigest")) { "DIGEST_MISMATCH" }
         val id=body.getString("commandId")
@@ -129,7 +134,7 @@ class NativeCommandEngine(
             if(reason!=null) { finish(body,"rejected","not_started",reason); return }
             if(body.getString("capability")=="file.export") {
                 val bind=binding ?: error("NO_SESSION")
-                if(referenceIds.isEmpty() || referenceIds.size>16 || referenceIds.distinct().size!=referenceIds.size ||
+                if(!commandPolicy.permitsReferences(referenceIds) || referenceIds.isEmpty() || referenceIds.size>16 || referenceIds.distinct().size!=referenceIds.size ||
                     referenceIds.any { it !in fixtureContent } ||
                     WireValidation.scopeDigest(bind.deviceId,referenceIds)!=body.getJSONObject("payload").getString("scopeDigest")) {
                     finish(body,"rejected","not_started","EXPORT_SCOPE_MISMATCH"); return
@@ -142,6 +147,7 @@ class NativeCommandEngine(
     }
 
     private fun guard(body: JSONObject): String? {
+        if(!commandPolicy.permits(body)) return "VARIANT_FIXTURE_POLICY_DENIED"
         val bind=binding ?: return "OFFLINE"
         val now=clock()
         if(now<lastClock-30000) return "CLOCK_ROLLBACK"

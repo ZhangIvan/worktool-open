@@ -1,4 +1,4 @@
-name: Android native client checks
+name: Android native and isolated lab checks
 on:
   pull_request:
     branches: [main]
@@ -28,6 +28,7 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-36/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/aapt"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -38,84 +39,52 @@ jobs:
           cache-disabled: true
           dependency-graph: disabled
       - name: Compile native app, JVM contracts, lint (no device/emulator execution)
-        run: gradle --no-daemon -p android-client :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
-      - name: Static APK identity and permission evidence
+        run: gradle --no-daemon -p android-client :app:testDebugUnitTest :app:testReleaseUnitTest :app:testLabUnitTest :app:lintDebug :app:lintRelease :app:lintLab :app:assembleDebug :app:assembleRelease :app:assembleLab :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
+      - name: Static three-variant identity and isolation evidence (no APK execution)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p android-client/ci-artifact
-          APK=android-client/app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" > android-client/ci-artifact/signature.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > android-client/ci-artifact/badging.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK" > android-client/ci-artifact/permissions.txt
-          python3 - <<'PY'
+          for variant in debug release lab; do
+            suffix=""; test "$variant" != release || suffix="-unsigned"
+            APK="android-client/app/build/outputs/apk/$variant/app-$variant$suffix.apk"
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > "android-client/ci-artifact/badging-$variant.txt"
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK" > "android-client/ci-artifact/permissions-$variant.txt"
+            if test "$variant" != release; then
+              "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" > "android-client/ci-artifact/signature-$variant.txt"
+            fi
+            cp "$APK" "android-client/ci-artifact/worktool-open-native-$variant$suffix.apk"
+          done
+          python3 - <<'PYPERM'
           from pathlib import Path
           import re
-          text=Path('android-client/ci-artifact/permissions.txt').read_text()
-          permissions=re.findall(r"uses-permission: name='([^']+)'",text)
-          assert set(permissions)=={'android.permission.INTERNET'}, permissions
-          PY
-          cp "$APK" android-client/ci-artifact/worktool-open-native-debug.apk
+          for variant in ('debug','release','lab'):
+              text=Path(f'android-client/ci-artifact/permissions-{variant}.txt').read_text()
+              assert set(re.findall(r"uses-permission: name='([^']+)'",text))=={'android.permission.INTERNET'}
+          PYPERM
+          python3 android-client/tools/verify_variant_isolation.py --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" --apk debug=android-client/ci-artifact/worktool-open-native-debug.apk --apk release=android-client/ci-artifact/worktool-open-native-release-unsigned.apk --apk lab=android-client/ci-artifact/worktool-open-native-lab.apk > android-client/ci-artifact/variant-isolation.json
           cd android-client/ci-artifact
-          sha256sum worktool-open-native-debug.apk > SHA256SUMS
-          printf '%s\n' 'Build artifact only. No device tests executed. Remote effects remain SIMULATED. Accessibility service is not registered. No WeCom integration.' > STATUS.txt
-      - name: Preserve bounded redacted JVM XML and lint summary
-        shell: bash
-        run: |
-          python3 - <<'PYREPORT'
-          from pathlib import Path
-          import json, re, xml.etree.ElementTree as ET
-          root=Path('android-client/app/build')
-          out=Path('android-client/ci-artifact')
-          reports=sorted((root/'test-results/testDebugUnitTest').glob('TEST-*.xml'))
-          assert 1 <= len(reports) <= 20, 'JVM XML missing or report count exceeds limit'
-          dest=out/'jvm-test-results'; dest.mkdir(parents=True,exist_ok=True)
-          summary={'source':'actual Gradle JUnit XML','redaction':'properties, stdout/stderr, failure messages/stacks and paths omitted','suites':0,'tests':0,'failures':0,'errors':0,'skipped':0}
-          safe=re.compile(r'[A-Za-z0-9_.$() -]{1,160}\Z')
-          for index,path in enumerate(reports):
-              assert path.stat().st_size <= 1048576, 'JVM XML exceeds 1 MiB'
-              original=ET.parse(path).getroot()
-              assert original.tag=='testsuite', 'Unexpected JUnit root'
-              clean=ET.Element('testsuite')
-              for key in ['tests','failures','errors','skipped','time']:
-                  value=original.get(key,'0')
-                  assert re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',value), 'Invalid JUnit count'
-                  clean.set(key,value)
-                  if key!='time': summary[key]+=int(value)
-              name=original.get('name','suite')
-              clean.set('name',name if safe.fullmatch(name) else 'redacted_suite')
-              for case in original.findall('testcase'):
-                  attrs={}
-                  for key in ['name','classname']:
-                      value=case.get(key,'unknown')
-                      attrs[key]=value if safe.fullmatch(value) else 'redacted'
-                  duration=case.get('time','0')
-                  attrs['time']=duration if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',duration) else '0'
-                  item=ET.SubElement(clean,'testcase',attrs)
-                  for tag in ['failure','error','skipped']:
-                      if case.find(tag) is not None: ET.SubElement(item,tag)
-              ET.ElementTree(clean).write(dest/f'TEST-{index:02d}.xml',encoding='utf-8',xml_declaration=True)
-              summary['suites']+=1
-          assert summary['tests']>0, 'No executed JVM cases'
-          (out/'jvm-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
-          lint=root/'reports/lint-results-debug.xml'
-          assert lint.is_file() and lint.stat().st_size<=2097152, 'Lint XML missing or exceeds 2 MiB'
-          counts={}
-          for issue in ET.parse(lint).getroot().findall('issue'):
-              issue_id=issue.get('id','unknown'); severity=issue.get('severity','unknown')
-              assert safe.fullmatch(issue_id) and safe.fullmatch(severity)
-              key=issue_id+':'+severity; counts[key]=counts.get(key,0)+1
-          (out/'lint-summary.json').write_text(json.dumps({'source':'actual lintDebug XML','redaction':'only rule ID, severity and counts; no source excerpts or paths','issues':counts},indent=2)+'\n')
-          PYREPORT
+          sha256sum worktool-open-native-debug.apk worktool-open-native-release-unsigned.apk worktool-open-native-lab.apk > SHA256SUMS
+          printf '%s\n' 'CI build/static artifacts only; no device tests. Release APK is unsigned and not install-ready. Lab is cleartext, separate package, no default address. Deployment blocked pending hard session/queue budgets and separately authorized ingress. No service registered or WeCom integration.' > STATUS.txt
+      - name: Preserve bounded redacted three-variant JVM XML and lint summaries
+        run: python3 android-client/tools/collect_ci_reports.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: worktool-native-debug-${{ github.sha }}
+          name: worktool-native-variants-${{ github.sha }}
           path: |
             android-client/ci-artifact/worktool-open-native-debug.apk
+            android-client/ci-artifact/worktool-open-native-release-unsigned.apk
+            android-client/ci-artifact/worktool-open-native-lab.apk
             android-client/ci-artifact/SHA256SUMS
-            android-client/ci-artifact/signature.txt
-            android-client/ci-artifact/badging.txt
-            android-client/ci-artifact/permissions.txt
+            android-client/ci-artifact/signature-debug.txt
+            android-client/ci-artifact/signature-lab.txt
+            android-client/ci-artifact/badging-debug.txt
+            android-client/ci-artifact/badging-release.txt
+            android-client/ci-artifact/badging-lab.txt
+            android-client/ci-artifact/permissions-debug.txt
+            android-client/ci-artifact/permissions-release.txt
+            android-client/ci-artifact/permissions-lab.txt
+            android-client/ci-artifact/variant-isolation.json
             android-client/ci-artifact/STATUS.txt
             android-client/ci-artifact/jvm-test-results/TEST-*.xml
             android-client/ci-artifact/jvm-summary.json

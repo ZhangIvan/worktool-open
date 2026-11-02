@@ -15,7 +15,7 @@ interface ClientUiBridge {
     /** Runtime-only user input. Never log or retain the enrollment token in a UI snapshot. */
     fun enroll(endpoint: String, enrollmentId: String, enrollmentToken: String)
     /** Explicit user action only. Never replay an interrupted effect just because the Activity resumes. */
-    fun resumeAndConnect()
+    fun resumeAndConnect(endpoint: String? = null)
     fun pauseAndDisconnect()
     /** The implementation must recheck command/digest/scope and foreground state before approving. */
     fun decideExport(commandId: String, scopeDigest: String, referenceId: String?, approved: Boolean)

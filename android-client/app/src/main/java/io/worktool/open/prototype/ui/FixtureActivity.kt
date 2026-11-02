@@ -10,6 +10,8 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.TextView
 import io.worktool.open.prototype.R
+import io.worktool.open.prototype.policy.VariantFactory
+import org.json.JSONObject
 
 /** Real native widgets, exclusively inside this app. Not exported; no accessibility service registration. */
 class FixtureActivity : Activity(), ClientUiListener {
@@ -26,7 +28,7 @@ class FixtureActivity : Activity(), ClientUiListener {
         bridge = (application as? ClientUiBridgeProvider)?.clientUiBridge
         val body = UiViews.screen(this, R.id.ui_fixture_root)
         UiViews.text(this, body, "本 App 原生控件 fixture", size = 23f)
-        UiViews.text(this, body, "SYNTHETIC ONLY · 不向外部应用发送", R.id.ui_fixture_banner, 16f)
+        UiViews.text(this, body, VariantFactory.presentation.banner, R.id.ui_fixture_banner, 16f)
         UiViews.text(this, body, "此页是实际 EditText、Button、TextView。手动按钮只更新本页合成文本，不创建远端命令或持久账本结果；不证明企微已实现。无服务注册、无启用无障碍引导。")
         UiViews.text(this, body, "synthetic_target_001", R.id.ui_fixture_target).apply {
             contentDescription = "合成目标 synthetic_target_001"
@@ -38,6 +40,7 @@ class FixtureActivity : Activity(), ClientUiListener {
             imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             filters = arrayOf(InputFilter.LengthFilter(500))
             minLines = 3
+            hint = VariantFactory.presentation.fixtureExample ?: "仅输入合成测试文本"
             isSaveEnabled = false
             setSaveFromParentEnabled(false)
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
@@ -47,6 +50,9 @@ class FixtureActivity : Activity(), ClientUiListener {
             if (!foreground) return@button
             val value = input.text.toString()
             if (value.isBlank()) { status.text = "EMPTY_INPUT：没有写入任何内容。"; return@button }
+            val allowed=VariantFactory.commandPolicy().permits(JSONObject().put("capability","message.send_text")
+                .put("payload",JSONObject().put("targetId","synthetic_target_001").put("text",value)))
+            if(!allowed) { input.text.clear();status.text="FIXTURE_POLICY_DENIED：未写入任何条目。";return@button }
             localCount += 1
             output.text = "本页合成条目 $localCount\n目标：synthetic_target_001\n$value"
             input.text.clear()

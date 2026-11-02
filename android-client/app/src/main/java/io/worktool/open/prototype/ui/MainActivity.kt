@@ -14,11 +14,14 @@ import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.RadioButton
 import io.worktool.open.prototype.R
-import java.net.URI
+import io.worktool.open.prototype.policy.VariantFactory
 
 /** Foreground-only manual session. Lifecycle callbacks never reconnect or submit a command. */
 class MainActivity : Activity(), ClientUiListener {
     private var bridge: ClientUiBridge? = null
+    private val presentation = VariantFactory.presentation
+    private val endpointRules = VariantFactory.endpointPolicy()
+    private var originDialog: AlertDialog? = null
     private var foreground = false
     private var current = ClientUiSnapshot()
     private var pendingAction: String? = null
@@ -43,7 +46,7 @@ class MainActivity : Activity(), ClientUiListener {
         bridge = (application as? ClientUiBridgeProvider)?.clientUiBridge
         val body = UiViews.screen(this, R.id.ui_main_root)
         UiViews.text(this, body, "WorkTool 原生合成客户端", size = 23f)
-        UiViews.text(this, body, "SYNTHETIC ONLY · 无真实企微执行", R.id.ui_main_banner, 16f)
+        UiViews.text(this, body, presentation.banner, R.id.ui_main_banner, 16f)
         UiViews.text(this, body, "只执行 message.send_text 与 file.export 的本地合成效果。67 项仅是参考能力追踪目录，其他参考能力未实现（unsupported）。原生网络、账本或界面模块存在，不等于企微或 Android 兼容性已验收。")
         status = UiViews.text(this, body, "尚未连接状态桥接", R.id.ui_main_status)
         identity = UiViews.text(this, body, "身份：未读取", R.id.ui_main_identity)
@@ -51,8 +54,8 @@ class MainActivity : Activity(), ClientUiListener {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         UiViews.text(this, body, "手动安全配对", size = 19f)
-        UiViews.text(this, body, "输入自有控制面的 HTTPS origin 和一次性配对材料。没有默认地址，不支持 HTTP/WS 降级；材料只用于本次配对，不保存为表单。配对后仍需手动恢复连接。")
-        endpoint = UiViews.input(this, body, "HTTPS endpoint（仅 origin，无路径、查询或凭据）", R.id.ui_main_endpoint)
+        UiViews.text(this, body, presentation.description)
+        endpoint = UiViews.input(this, body, presentation.endpointHint, R.id.ui_main_endpoint)
         enrollmentId = UiViews.input(this, body, "Enrollment ID", R.id.ui_main_enrollment_id, maxLength = 64)
         enrollmentToken = UiViews.input(this, body, "Enrollment token（一次性，不显示到状态页）", R.id.ui_main_enrollment_token, secret = true, maxLength = 4096)
         pairButton = UiViews.button(this, body, "配对，不自动执行", R.id.ui_main_pair) { pair() }
@@ -79,6 +82,7 @@ class MainActivity : Activity(), ClientUiListener {
 
     override fun onStop() {
         foreground = false
+        originDialog?.dismiss(); originDialog=null
         clearPairingInputs()
         rejectVisibleConfirmation()
         bridge?.pauseAndDisconnect()
@@ -123,7 +127,7 @@ class MainActivity : Activity(), ClientUiListener {
         } ?: "尚无已确认的配对身份。"
         if (snapshot.errorCode != null) error.text = "错误代码：${UiViews.code(snapshot.errorCode)}。不会显示原异常、帧内容或秘密。"
         pairButton.isEnabled = ready && !busy && !snapshot.paired
-        endpoint.isEnabled = pairButton.isEnabled
+        endpoint.isEnabled = pairButton.isEnabled || (endpointRules.requiresExplicitConnectionOrigin && ready && !busy && snapshot.paired && snapshot.paused)
         enrollmentId.isEnabled = pairButton.isEnabled
         enrollmentToken.isEnabled = pairButton.isEnabled
         resumeButton.isEnabled = ready && snapshot.paired && !busy && (snapshot.paused || snapshot.wsState != UiWsState.CONNECTED)
@@ -141,25 +145,55 @@ class MainActivity : Activity(), ClientUiListener {
     private fun pair() {
         val target = bridge ?: return
         if (!foreground || !pairButton.isEnabled || pendingAction != null) return
-        val origin = validatedOrigin(endpoint.text.toString().trim())
+        val rawOrigin = endpoint.text.toString()
+        val origin = validatedOrigin(rawOrigin)
         val id = enrollmentId.text.toString().trim()
         val token = enrollmentToken.text.toString().trim()
-        if (origin == null) { error.text = "INVALID_HTTPS_ORIGIN：请手输有效 HTTPS origin，不含用户信息、路径、查询或片段。"; return }
+        if (origin == null) { error.text = "INVALID_ORIGIN：请按当前构建提示手输精确 origin，不含额外URL内容。"; return }
         if (!id.matches(Regex("[a-z][a-z0-9_-]{2,63}"))) { error.text = "INVALID_ENROLLMENT_ID：请检查配对 ID。"; return }
         if (token.isEmpty() || token.length > 4096 || token.any { it.isWhitespace() }) { error.text = "INVALID_ENROLLMENT_TOKEN：请检查一次性材料。"; return }
-        pendingAction = "PAIR"
-        error.text = "配对已提交；尚未确认配对成功，也不会自动执行。"
-        clearPairingInputs()
-        render(current)
-        try { target.enroll(origin, id, token) } catch (_: Exception) { failLocalAction() }
+        requestOriginConsent(origin) {
+            if (!foreground || pendingAction != null) return@requestOriginConsent
+            pendingAction = "PAIR"
+            error.text = "配对已提交；尚未确认配对成功，也不会自动执行。"
+            clearPairingInputs()
+            render(current)
+            try { target.enroll(it, id, token) } catch (_: Exception) { failLocalAction() }
+        }
+    }
+
+    private fun requestOriginConsent(raw: String, action: (String)->Unit) {
+        val origin=validatedOrigin(raw)
+        if(origin==null) { error.text="INVALID_ORIGIN"; return }
+        val warning=presentation.confirmationWarning
+        if(warning==null) { action(origin); return }
+        originDialog?.dismiss()
+        originDialog=AlertDialog.Builder(this).setTitle(presentation.banner)
+            .setMessage(warning+"\n\n"+origin)
+            .setNegativeButton("取消，不连接") { _,_ -> endpoint.text?.clear(); originDialog=null }
+            .setPositiveButton("仅确认此实验 origin") { _,_ ->
+                originDialog=null
+                if(foreground && !isFinishing && !isDestroyed) action(origin)
+            }.create().also { dialog ->
+                dialog.setCanceledOnTouchOutside(false)
+                dialog.setOnCancelListener { endpoint.text?.clear(); originDialog=null }
+                dialog.show(); dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
     }
 
     private fun resumeManually() {
         if (!foreground || !resumeButton.isEnabled || pendingAction != null) return
-        pendingAction = "CONNECT"
-        error.text = "已请求恢复，等待真实连接状态；不会因重连重复执行旧动作。"
-        render(current)
-        try { bridge?.resumeAndConnect() } catch (_: Exception) { failLocalAction() }
+        val connect: (String?)->Unit = { confirmed ->
+            if(foreground && pendingAction==null) {
+                pendingAction="CONNECT"
+                endpoint.text?.clear()
+                error.text="已请求恢复，等待真实连接状态；不会因重连重复执行旧动作。"
+                render(current)
+                try { bridge?.resumeAndConnect(confirmed) } catch (_:Exception) { failLocalAction() }
+            }
+        }
+        if(endpointRules.requiresExplicitConnectionOrigin) requestOriginConsent(endpoint.text.toString()) { connect(it) }
+        else connect(null)
     }
 
     private fun pauseManually() {
@@ -270,10 +304,7 @@ class MainActivity : Activity(), ClientUiListener {
     companion object {
         /** Validation only; no DNS, requests, default host, or plaintext fallback. */
         internal fun validatedOrigin(value: String): String? = try {
-            val uri = URI(value)
-            if (uri.scheme != "https" || uri.host.isNullOrBlank() || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
-                uri.rawPath !in listOf("", "/") || uri.port !in -1..65535 || uri.port == 0) null
-            else "https://${uri.rawAuthority}"
+            VariantFactory.endpointPolicy().parse(value)
         } catch (_: Exception) { null }
     }
 }
