@@ -21,7 +21,7 @@ def verify_sources():
         manifest=src/variant/'AndroidManifest.xml'
         if manifest.exists():
             assert not ET.parse(manifest).getroot().findall('.//service'), 'no service registrations permitted'
-    forbidden=['class LabEndpointPolicy','class LabFixtureCommandPolicy','LAB CLEARTEXT','LAB FIXTURE PING','LAB FIXTURE NONCE']
+    forbidden=['class LabEndpointPolicy','class LabFixtureCommandPolicy','class LabClientBudget','class MonotonicLeaseTimer','LAB CLEARTEXT','LAB FIXTURE PING','LAB FIXTURE NONCE']
     for variant in ['main','debug','release']:
         for f in (src/variant).rglob('*.kt'):
             text=f.read_text()
@@ -40,6 +40,10 @@ def verify_sources():
     engine=(src/'main/java/io/worktool/open/prototype/core/NativeCommandEngine.kt').read_text()
     accept=engine[engine.index('private fun accept('):]
     assert accept.index('commandPolicy.permits(body)') < accept.index('journal.accept(body)')
+    assert accept.index('workBudget.command(permitEpoch,id)') < accept.index('journal.accept(body)')
+    assert 'finally {slot.close()}' in graph
+    assert 'budget.callback(epoch)' in graph
+    assert link.index('budget.inboundFrame(epoch,decodedBytes)') < link.index('val j=JSONObject(text)')
     coretests=src/'test/java/io/worktool/open/prototype/core/NativeCommandEngineTest.kt'
     assert coretests.read_text().count('@Test')==19, 'retain the original 19 core tests'
     return {'source_isolation':'PASS','core_tests_preserved':19,'jvm_tests':'NOT_RUN','android_build':'NOT_RUN','apk_isolation':'NOT_RUN'}
@@ -60,7 +64,7 @@ def verify_apk(variant,apk,apkanalyzer):
         assert app.get(A+'usesCleartextTraffic')=='false'
     with zipfile.ZipFile(apk) as z:
         dex=b''.join(z.read(n) for n in z.namelist() if re.fullmatch(r'classes\d*\.dex',n))
-        markers=[b'LabEndpointPolicy',b'LabFixtureCommandPolicy',b'LAB CLEARTEXT',b'LAB FIXTURE NONCE']
+        markers=[b'LabEndpointPolicy',b'LabFixtureCommandPolicy',b'LabClientBudget',b'MonotonicLeaseTimer',b'LAB CLEARTEXT',b'LAB FIXTURE NONCE']
         if variant=='lab':assert all(m in dex for m in markers)
         else:assert not any(m in dex for m in markers), 'lab bytecode or fixture marker leaked'
     return {'variant':variant,'apk_isolation':'PASS'}

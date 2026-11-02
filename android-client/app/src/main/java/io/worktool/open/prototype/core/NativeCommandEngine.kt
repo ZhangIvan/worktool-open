@@ -2,6 +2,8 @@ package io.worktool.open.prototype.core
 
 import org.json.JSONArray
 import org.json.JSONObject
+import io.worktool.open.prototype.policy.ClientBudget
+import io.worktool.open.prototype.policy.UnrestrictedClientBudget
 import io.worktool.open.prototype.policy.CommandPolicy
 import io.worktool.open.prototype.policy.StandardCommandPolicy
 
@@ -14,6 +16,8 @@ class NativeCommandEngine(
     private val link: DeviceLink,
     private val events: EngineEvents,
     private val commandPolicy: CommandPolicy = StandardCommandPolicy,
+    private val workBudget: ClientBudget = UnrestrictedClientBudget,
+    private val permitEpoch: Long = workBudget.epoch(),
     private val clock: () -> Long = System::currentTimeMillis
 ) : LinkListener {
     private var binding: Binding? = null
@@ -99,6 +103,7 @@ class NativeCommandEngine(
         val bind=binding ?: error("NO_SESSION")
         require(WireValidation.payloadDigest(body,bind.deviceId)==body.getString("payloadDigest")) { "DIGEST_MISMATCH" }
         val id=body.getString("commandId")
+        if(!workBudget.command(permitEpoch,id)){fail("CLIENT_COMMAND_BUDGET_DENIED");return}
         val old=journal.command(id)
         if(old!=null) {
             require(old.digest==body.getString("payloadDigest") && old.attemptId==body.getString("attemptId")) { "COMMAND_CONFLICT" }
@@ -147,6 +152,7 @@ class NativeCommandEngine(
     }
 
     private fun guard(body: JSONObject): String? {
+        if(!workBudget.valid(permitEpoch)) return "CLIENT_PERMIT_EXPIRED"
         if(!commandPolicy.permits(body)) return "VARIANT_FIXTURE_POLICY_DENIED"
         val bind=binding ?: return "OFFLINE"
         val now=clock()
@@ -173,6 +179,8 @@ class NativeCommandEngine(
         }
         // This is not an execution permit from the server: started/stop are asynchronous.
         // Only app-local SQLite effect/result commit is atomic; no claim of instant revoke.
+        // Linearize admission before the existing local transaction, not a long lock around disk I/O.
+        if(!workBudget.runIfValid(permitEpoch){}) {finish(body,"failed","not_applied","CLIENT_PERMIT_EXPIRED");return}
         val p=body.getJSONObject("payload")
         val effect=when(body.getString("capability")) {
             "message.send_text" -> LocalEffect("synthetic_inbox",p.getString("targetId"),p.getString("text"))
@@ -207,6 +215,6 @@ class NativeCommandEngine(
     @Synchronized fun isPaused(): Boolean = paused
     @Synchronized fun pause() { paused=true; rejectPending("LOCAL_PAUSED"); events.changed() }
     @Synchronized fun resume() { if(binding!=null && link.connected() && !revoked) paused=false; events.changed() }
-    @Synchronized override fun closed(reasonCode: String) { binding=null; paused=true; confirmations.clear(); sentResults.clear(); events.changed() }
+    @Synchronized override fun closed(reasonCode: String) { binding=null; paused=true; confirmations.clear(); sentResults.clear(); try {journal.recoverInterrupted();events.changed()} catch (_:Exception) {events.protocolError("CLOSED_JOURNAL_RECOVERY_FAILED");link.disconnect()} }
     private fun fail(code: String) { binding=null;paused=true;confirmations.clear();events.protocolError(code);link.disconnect() }
 }

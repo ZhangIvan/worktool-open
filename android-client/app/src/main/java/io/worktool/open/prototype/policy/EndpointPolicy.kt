@@ -4,6 +4,7 @@ import java.net.URI
 
 /** Variant-selected boundary. No cleartext-specific implementation is present in main. */
 interface EndpointPolicy {
+    val budget: ClientBudget get() = UnrestrictedClientBudget
     val requiresExplicitConnectionOrigin: Boolean
     fun parse(raw: String): String
     fun confirm(raw: String): String
