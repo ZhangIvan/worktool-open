@@ -1,0 +1,30 @@
+package pg
+
+import (
+	"github.com/ZhangIvan/worktool-open/backend-go/migrations"
+	"strings"
+	"testing"
+)
+
+// Text inventory checks only. This does NOT parse or execute PostgreSQL SQL.
+func TestCandidateMigrationStaticInventory(t *testing.T) {
+	all := ""
+	for _, n := range migrations.Order {
+		b, e := migrations.Files.ReadFile(n)
+		if e != nil {
+			t.Fatal(e)
+		}
+		all += string(b)
+	}
+	if got := strings.Count(all, "CREATE TABLE "); got != 28 {
+		t.Fatalf("candidate table count=%d, expected28", got)
+	}
+	for _, required := range []string{"delivery_reserved_identity", "reservation_exact_delivery", "DEFERRABLE INITIALLY DEFERRED", "UNIQUE(tenant,reservation_id)", "FOREIGN KEY(tenant,device,session)", "FOREIGN KEY(tenant,device,command)", "role IN ('owner','admin','operator','approver','auditor')"} {
+		if !strings.Contains(all, required) {
+			t.Errorf("missing static marker %s", required)
+		}
+	}
+	if strings.Contains(strings.ToUpper(all), "CREATE ROLE ") || strings.Contains(strings.ToUpper(all), "CREATE USER ") {
+		t.Fatal("migrations must not create identities")
+	}
+}
