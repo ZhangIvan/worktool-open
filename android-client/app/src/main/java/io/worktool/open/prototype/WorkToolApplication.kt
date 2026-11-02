@@ -3,6 +3,12 @@ package io.worktool.open.prototype
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import io.worktool.open.prototype.accessibility.FixtureServiceRegistry
+import io.worktool.open.prototype.policy.ConnectionMode
+import io.worktool.open.prototype.policy.ConnectionProfile
+import io.worktool.open.prototype.policy.VariantFeatures
+import java.util.concurrent.atomic.AtomicReference
 import io.worktool.open.prototype.core.*
 import io.worktool.open.prototype.transport.*
 import io.worktool.open.prototype.ui.*
@@ -31,6 +37,9 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
     private var journal: SqliteJournal? = null
     private var engine: NativeCommandEngine? = null
     private val prompts = linkedMapOf<String, ExportConfirmationUi>()
+    private val fixturePrompts = linkedMapOf<String, FixtureConfirmationUi>()
+    private val fixturePermit = AtomicReference<FixtureSessionPermit?>()
+    private fun invalidateFixturePermit() { fixturePermit.get()?.invalidate() }
     private val stopCoordinator = ClientStopCoordinator()
     private var generation = 0L
     @Volatile private var active = false
@@ -42,6 +51,7 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
     init {
         budget.onInvalidated { epoch,_ ->
             if(budget.epoch()==epoch) {
+                invalidateFixturePermit()
                 connectionIntent.invalidate();pairingGate.invalidate();wantsResume=false
             }
             // Always close the old permit's I/O, even if a newer explicit confirmation already exists.
@@ -64,7 +74,7 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
     }
     override fun detach(listener: ClientUiListener) {
         check(Looper.myLooper()==Looper.getMainLooper()); listeners.remove(listener)
-        if(listeners.isEmpty()) { active=false; connectionIntent.invalidate(); pairingGate.invalidate(); wantsResume=false; endpointPolicy.clearConsent(); serial.execute { stop() } }
+        if(listeners.isEmpty()) { invalidateFixturePermit(); active=false; connectionIntent.invalidate(); pairingGate.invalidate(); wantsResume=false; endpointPolicy.clearConsent(); serial.execute { stop() } }
     }
     private fun confirmIntent(endpoint:String):Long? {
         if(!active)return null
@@ -100,7 +110,12 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
             } }
         }
     }
-    override fun resumeAndConnect(endpoint: String?) {
+    override fun resumeAndConnect(endpoint: String?, mode: ConnectionMode) {
+        // Revocation is synchronous at the UI boundary, not delayed behind ledger/main queues.
+        invalidateFixturePermit()
+        if(!mode.allowed(VariantFeatures.ownFixtureAccessibility)) {
+            serial.execute { stop(); state=state.copy(errorCode="VARIANT_MODE_DENIED");publish() };return
+        }
         if(endpointPolicy.requiresExplicitConnectionOrigin && endpoint==null)return
         val selected=endpoint ?: identity?.endpoint ?: return
         val epoch=confirmIntent(selected) ?: return
@@ -115,31 +130,40 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
             require(confirmed==endpointPolicy.parse(id.endpoint)) { "PAIRED_ORIGIN_MISMATCH" }
         } catch (_: Exception) { endpointPolicy.clearConsent(); state=state.copy(errorCode="ORIGIN_CONFIRMATION_REQUIRED"); publish(); return@execute }
         if(!budget.valid(epoch) || !connectionIntent.current(intent) || !active) { endpointPolicy.clearConsent(); return@execute }
+        val target=if(mode==ConnectionMode.OWN_FIXTURE_1_1) FixtureServiceRegistry.target(context) else null
+        val profile=ConnectionProfile(mode,target)
         wantsResume=true; val current=++generation
-        state=state.copy(busy=true,wsState=UiWsState.CONNECTING,statusCode="CONNECTING",errorCode=null); publish()
+        state=state.copy(busy=true,wsState=UiWsState.CONNECTING,statusCode="CONNECTING",errorCode=null,connectionMode=mode,negotiatedVersion=null); publish()
+        val sessionFixturePermit=AtomicReference<FixtureSessionPermit?>()
         link.connect(id,object:LinkListener {
             override fun ready(binding:Binding) { inbound(epoch) {
                 if(current!=generation || !active || !wantsResume) return@inbound
                 try {
-                    check(binding.deviceId==id.deviceId)
+                    check(binding.deviceId==id.deviceId && binding.protocolVersion==mode.wireVersion)
                     journal?.close(); journal=SqliteJournal(context,binding.tenantId,binding.deviceId)
-                    engine=NativeCommandEngine(journal!!,link,this@AppGraph,commandPolicy=VariantFactory.commandPolicy(),workBudget=budget,permitEpoch=epoch)
-                    state=state.copy(busy=false,wsState=UiWsState.CONNECTED,paused=false,statusCode="CONNECTED_SYNTHETIC_ONLY")
+                    engine=null
+                    if(!ConnectionProfile.canRecover(binding.protocolVersion,journal!!)) { protocolError("PENDING_FIXTURE_REQUIRES_1_1");return@inbound }
+                    val permit=if(mode==ConnectionMode.OWN_FIXTURE_1_1) FixtureSessionPermit().also { fixturePermit.set(it);sessionFixturePermit.set(it) } else null
+                    val driver=if(permit!=null) FixtureServiceRegistry.driver(permit) else null
+                    engine=NativeCommandEngine(journal!!,link,this@AppGraph,commandPolicy=VariantFactory.commandPolicy(),workBudget=budget,permitEpoch=epoch,
+                        fixtureDriver=driver,fixtureTarget=target,dispatchToSerial=if(permit==null)null else { work -> inbound(epoch){if(current==generation)work()} },elapsedClock=SystemClock::elapsedRealtime)
+                    state=state.copy(busy=false,wsState=UiWsState.CONNECTED,paused=true,negotiatedVersion=binding.protocolVersion,statusCode=if(mode==ConnectionMode.OWN_FIXTURE_1_1)"CONNECTED_OWN_FIXTURE_CANDIDATE" else "CONNECTED_SYNTHETIC_ONLY")
                     engine!!.ready(binding); engine!!.resume(); changed()
                 } catch (_: Exception) { protocolError("LOCAL_SESSION_INITIALIZATION_FAILED") }
             } }
             override fun frame(value:JSONObject) { inbound(epoch) { if(current==generation && active && wantsResume) engine?.frame(value) } }
-            override fun closed(reasonCode:String) { inbound(epoch) {
+            override fun closed(reasonCode:String) { sessionFixturePermit.get()?.invalidate(); inbound(epoch) {
                 if(current!=generation) return@inbound
-                wantsResume=false; endpointPolicy.clearConsent(); prompts.clear(); engine?.closed(reasonCode)
-                state=state.copy(busy=false,paused=true,wsState=UiWsState.DISCONNECTED,confirmation=null,statusCode="DISCONNECTED_MANUAL_RESUME_REQUIRED")
+                wantsResume=false; endpointPolicy.clearConsent(); prompts.clear();fixturePrompts.clear(); engine?.closed(reasonCode)
+                state=state.copy(busy=false,paused=true,wsState=UiWsState.DISCONNECTED,confirmation=null,fixtureConfirmation=null,fixtureProbe=null,negotiatedVersion=null,errorCode=if(mode==ConnectionMode.OWN_FIXTURE_1_1)"FIXTURE_SESSION_UNAVAILABLE_OR_UNAUTHORIZED" else state.errorCode,statusCode="DISCONNECTED_MANUAL_RESUME_REQUIRED")
                 publish()
             } }
-        })
+        },profile)
     } }
-    override fun pauseAndDisconnect() { connectionIntent.invalidate(); pairingGate.invalidate(); wantsResume=false; endpointPolicy.clearConsent(); serial.execute { stop() } }
+    override fun pauseAndDisconnect() { invalidateFixturePermit(); connectionIntent.invalidate(); pairingGate.invalidate(); wantsResume=false; endpointPolicy.clearConsent(); serial.execute { stop() } }
     private fun stop(preserveConsent:Boolean=false):Boolean {
-        generation++; pairingGate.invalidate(); wantsResume=false; prompts.clear()
+        invalidateFixturePermit()
+        generation++; pairingGate.invalidate(); wantsResume=false; prompts.clear();fixturePrompts.clear()
         return stopCoordinator.stop(
             preserveConsent=preserveConsent,
             pause={engine?.pause()},
@@ -147,9 +171,9 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
             clearConsent={endpointPolicy.clearConsent()},
             closed={engine?.closed("LOCAL_PAUSE")},
             finishSnapshot={result ->
-                pairingInFlight=false; wantsResume=false; prompts.clear()
+                pairingInFlight=false; wantsResume=false; prompts.clear();fixturePrompts.clear()
                 if(!result.succeeded) connectionIntent.invalidate()
-                state=result.snapshot(state)
+                state=result.snapshot(state).copy(fixtureConfirmation=null,fixtureProbe=null,negotiatedVersion=null)
                 publish()
             }
         ).succeeded
@@ -162,14 +186,38 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
         engine?.confirmExport(commandId,approved,if(approved && referenceId!=null) listOf(referenceId) else emptyList())
         changed()
     } }
+    override fun inspectFixture() { serial.execute {
+        if(!active || !VariantFeatures.ownFixtureAccessibility) return@execute
+        val current=generation
+        FixtureServiceRegistry.inspect(FixtureServiceRegistry.target(context),SystemClock.elapsedRealtime()+5000) { inspected -> serial.execute {
+            if(!active || current!=generation) return@execute
+            state=state.copy(fixtureProbe=FixtureProbeUi(inspected.supported,inspected.reasonCode,
+                inspected.target.targetPackage,inspected.target.targetActivity,inspected.windowId.takeIf { it>=0 },SystemClock.elapsedRealtime()))
+            publish()
+        } }
+    } }
+    override fun decideFixture(commandId:String,attemptId:String,payloadDigest:String,approved:Boolean) { serial.execute {
+        val prompt=state.fixtureConfirmation ?: return@execute
+        if(!VariantFeatures.ownFixtureAccessibility || state.connectionMode!=ConnectionMode.OWN_FIXTURE_1_1 || fixturePermit.get()?.isValid()!=true || !active || state.paused || !link.connected() || prompt.commandId!=commandId ||
+            prompt.attemptId!=attemptId || prompt.payloadDigest!=payloadDigest) return@execute
+        fixturePrompts.remove(commandId);state=state.copy(fixtureConfirmation=null)
+        engine?.confirmFixture(commandId,attemptId,payloadDigest,approved)
+        changed()
+    } }
+    override fun fixtureConfirmationRequired(request:FixtureApprovalRequest) {
+        fixturePrompts[request.commandId]=FixtureConfirmationUi(request.commandId,request.attemptId,request.payloadDigest,
+            request.target.targetPackage,request.target.targetActivity,request.text)
+        state=state.copy(fixtureConfirmation=fixturePrompts.values.firstOrNull());publish()
+    }
     override fun changed() {
         try {
             val rows=journal?.recent().orEmpty()
             val pendingIds=journal?.pendingCommands().orEmpty().map { it.id }.toSet()
             prompts.keys.retainAll(pendingIds)
+            fixturePrompts.keys.retainAll(pendingIds)
             state=state.copy(paused=engine?.isPaused() ?: true,ledger=rows.map { LedgerUiRow(it.id,it.stage,it.result!=null,it.acked) },
                 inbox=journal?.effectRows().orEmpty().mapNotNull { raw -> val j=JSONObject(raw); if(j.getString("kind")=="synthetic_inbox") SyntheticInboxUiRow(j.getString("referenceId"),j.getString("value")) else null },
-                confirmation=prompts.values.firstOrNull())
+                confirmation=prompts.values.firstOrNull(),fixtureConfirmation=fixturePrompts.values.firstOrNull())
         } catch (_: Exception) { stopCoordinator.reportFailure(); state=state.copy(errorCode="LOCAL_LEDGER_READ_FAILED") }
         publish()
     }
@@ -177,12 +225,13 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
         val id=identity?.deviceId ?: return
         val references=SyntheticUiReferences.allowed.filter { WireValidation.scopeDigest(id,listOf(it))==scopeDigest }
         prompts[commandId]=ExportConfirmationUi(commandId,exportId,scopeDigest,references)
-        state=state.copy(confirmation=prompts.values.firstOrNull()); publish()
+        state=state.copy(confirmation=prompts.values.firstOrNull(),fixtureConfirmation=fixturePrompts.values.firstOrNull()); publish()
     }
     override fun protocolError(code:String) {
+        invalidateFixturePermit()
         if(stopCoordinator.reportFailure()) return // stop owns all remaining cleanup and its fixed failure snapshot
-        generation++; pairingGate.invalidate(); wantsResume=false; prompts.clear(); link.disconnect(); endpointPolicy.clearConsent()
-        state=state.copy(busy=false,paused=true,wsState=UiWsState.ERROR,confirmation=null,errorCode="PROTOCOL_OR_LOCAL_STORAGE_REJECTED",statusCode="MANUAL_REVIEW_REQUIRED"); publish()
+        generation++; pairingGate.invalidate(); wantsResume=false; prompts.clear();fixturePrompts.clear(); link.disconnect(); endpointPolicy.clearConsent()
+        state=state.copy(busy=false,paused=true,wsState=UiWsState.ERROR,confirmation=null,fixtureConfirmation=null,fixtureProbe=null,negotiatedVersion=null,errorCode=if(code=="PENDING_FIXTURE_REQUIRES_1_1")code else "PROTOCOL_OR_LOCAL_STORAGE_REJECTED",statusCode="MANUAL_REVIEW_REQUIRED"); publish()
     }
     private fun publish() { val copy=state; main.post { listeners.toList().forEach { it.onSnapshot(copy) } } }
 }

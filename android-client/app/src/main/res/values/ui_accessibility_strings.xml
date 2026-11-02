@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_accessibility_service_label">WorkTool 本包 Fixture 候选服务</string>
+    <string name="ui_accessibility_service_description">仅操作本安装包 Fixture 页的合成输入和按钮。需要手动开启本地动作并逐任务确认，不连接真实企微，不读取其他应用内容。关闭本地开关或离开本页停止后续动作。此为待设备验收候选。</string>
+</resources>

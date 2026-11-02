@@ -1,5 +1,7 @@
 package io.worktool.open.prototype.ui
 
+import io.worktool.open.prototype.policy.ConnectionMode
+
 /** Implement on the Application. Activities never receive CredentialVault or raw credentials. */
 interface ClientUiBridgeProvider {
     val clientUiBridge: ClientUiBridge
@@ -15,10 +17,14 @@ interface ClientUiBridge {
     /** Runtime-only user input. Never log or retain the enrollment token in a UI snapshot. */
     fun enroll(endpoint: String, enrollmentId: String, enrollmentToken: String)
     /** Explicit user action only. Never replay an interrupted effect just because the Activity resumes. */
-    fun resumeAndConnect(endpoint: String? = null)
+    fun resumeAndConnect(endpoint: String? = null, mode: ConnectionMode = ConnectionMode.SYNTHETIC_1_0)
     fun pauseAndDisconnect()
     /** The implementation must recheck command/digest/scope and foreground state before approving. */
     fun decideExport(commandId: String, scopeDigest: String, referenceId: String?, approved: Boolean)
+    /** Read-only probe of the current own-app Fixture window. Never grants or executes an action. */
+    fun inspectFixture()
+    /** Local per-command consent only; implementation creates/consumes the protected driver ticket. */
+    fun decideFixture(commandId: String, attemptId: String, payloadDigest: String, approved: Boolean)
 }
 
 fun interface ClientUiListener {
@@ -42,6 +48,23 @@ data class ExportConfirmationUi(
     /** Intersect effective command scope with the two fixture references. Empty means approval disabled. */
     val allowedReferenceIds: List<String>
 )
+data class FixtureProbeUi(
+    val ready: Boolean,
+    val reasonCode: String,
+    val packageName: String? = null,
+    val activityClass: String? = null,
+    val windowId: Int? = null,
+    val checkedAtElapsedMs: Long = 0L
+)
+data class FixtureConfirmationUi(
+    val commandId: String,
+    val attemptId: String,
+    val payloadDigest: String,
+    val targetPackage: String,
+    val targetActivity: String,
+    /** Exact bounded synthetic text, not a truncated preview or secret-bearing diagnostic frame. */
+    val text: String
+)
 data class ClientUiSnapshot(
     val initialized: Boolean = false,
     val paired: Boolean = false,
@@ -54,7 +77,11 @@ data class ClientUiSnapshot(
     val errorCode: String? = null,
     val ledger: List<LedgerUiRow> = emptyList(),
     val inbox: List<SyntheticInboxUiRow> = emptyList(),
-    val confirmation: ExportConfirmationUi? = null
+    val confirmation: ExportConfirmationUi? = null,
+    val connectionMode: ConnectionMode = ConnectionMode.SYNTHETIC_1_0,
+    val negotiatedVersion: String? = null,
+    val fixtureProbe: FixtureProbeUi? = null,
+    val fixtureConfirmation: FixtureConfirmationUi? = null
 )
 
 /** Exact local fixture names. No filesystem paths, chooser, URI input, or file permission. */

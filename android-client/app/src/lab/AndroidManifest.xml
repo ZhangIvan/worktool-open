@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application android:label="WorkTool LAB CLEARTEXT · synthetic only" android:usesCleartextTraffic="true"
-        tools:replace="android:label,android:usesCleartextTraffic" />
+        tools:replace="android:label,android:usesCleartextTraffic">
+        <service android:name="io.worktool.open.prototype.accessibility.OwnFixtureAccessibilityService" tools:node="remove" />
+        <activity android:name="io.worktool.open.prototype.ui.FixtureActivity" tools:node="remove" />
+    </application>
 </manifest>

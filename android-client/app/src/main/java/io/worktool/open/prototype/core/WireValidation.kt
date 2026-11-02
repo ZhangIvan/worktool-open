@@ -40,12 +40,12 @@ internal object WireValidation {
     fun frame(o: JSONObject): String {
         require(o.toString().toByteArray(Charsets.UTF_8).size <= 65536) { "FRAME_TOO_LARGE" }
         exact(o,setOf("version","kind","eventId","tenantId","deviceId","sessionId","seq","sentAt","mode","body"))
-        require(text(o,"version")=="1.0" && text(o,"mode")=="synthetic") { "UNSUPPORTED_MODE_OR_VERSION" }
+        require(text(o,"version") in setOf("1.0","1.1") && text(o,"mode")=="synthetic") { "UNSUPPORTED_MODE_OR_VERSION" }
         listOf("eventId","tenantId","deviceId","sessionId").forEach { id(o,it) }
         integer(o,"seq"); time(o,"sentAt")
         val kind=text(o,"kind"); val b=o.getJSONObject("body")
         when(kind) {
-            "command" -> command(b)
+            "command" -> command(b, text(o,"version"))
             "stop_request" -> {
                 exact(b,setOf("commandId","attemptId","reason","policyVersion"))
                 id(b,"commandId"); id(b,"attemptId"); integer(b,"policyVersion")
@@ -58,7 +58,7 @@ internal object WireValidation {
         }
         return kind
     }
-    fun command(b: JSONObject) {
+    fun command(b: JSONObject, version: String = "1.0") {
         exact(b,setOf("commandId","attemptId","capability","payloadDigest","expiresAt","policyVersion","requiresLocalConfirmation","payload"))
         id(b,"commandId"); id(b,"attemptId"); digest(b,"payloadDigest"); time(b,"expiresAt")
         integer(b,"policyVersion"); val confirmation=bool(b,"requiresLocalConfirmation"); val p=b.getJSONObject("payload")
@@ -67,6 +67,13 @@ internal object WireValidation {
                 exact(p,setOf("targetId","text")); id(p,"targetId")
                 val text=text(p,"text"); require(text.codePointCount(0,text.length) in 1..4096) { "SCHEMA_INVALID" }
             }
+            "fixture.ui.submit_text" -> {
+                require(version=="1.1" && confirmation) { "FIXTURE_REQUIRES_1_1_AND_CONFIRMATION" }
+                exact(p,setOf("targetPackage","targetActivity","text"))
+                val packageName=text(p,"targetPackage"); val activity=text(p,"targetActivity")
+                require(packageName=="io.worktool.open.prototype" && activity=="io.worktool.open.prototype.ui.FixtureActivity") { "SCHEMA_INVALID" }
+                val value=text(p,"text");require(validUnicode(value) && value.codePointCount(0,value.length) in 1..500) { "SCHEMA_INVALID" }
+            }
             "file.export" -> {
                 exact(p,setOf("exportId","approvalId","scopeDigest"))
                 id(p,"exportId"); id(p,"approvalId"); digest(p,"scopeDigest")
@@ -74,6 +81,11 @@ internal object WireValidation {
             }
             else -> error("CAPABILITY_UNAVAILABLE")
         }
+    }
+    private fun validUnicode(value:String):Boolean {
+        var i=0
+        while(i<value.length){val c=value[i];if(Character.isHighSurrogate(c)){if(i+1>=value.length||!Character.isLowSurrogate(value[i+1]))return false;i+=2}else{if(Character.isLowSurrogate(c))return false;i++}}
+        return true
     }
     fun scopeDigest(deviceId: String, references: List<String>): String = canonicalDigest(JSONObject()
         .put("deviceId",deviceId).put("referenceIds",JSONArray(references)))

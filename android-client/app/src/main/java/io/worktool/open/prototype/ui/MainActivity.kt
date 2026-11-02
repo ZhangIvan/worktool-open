@@ -15,6 +15,7 @@ import android.widget.RadioGroup
 import android.widget.RadioButton
 import io.worktool.open.prototype.R
 import io.worktool.open.prototype.policy.VariantFactory
+import io.worktool.open.prototype.policy.VariantFeatures
 
 /** Foreground-only manual session. Lifecycle callbacks never reconnect or submit a command. */
 class MainActivity : Activity(), ClientUiListener {
@@ -62,8 +63,11 @@ class MainActivity : Activity(), ClientUiListener {
         resumeButton = UiViews.button(this, body, "手动恢复并连接", R.id.ui_main_resume) { resumeManually() }
         pauseButton = UiViews.button(this, body, "暂停新动作并断开", R.id.ui_main_pause) { pauseManually() }
         UiViews.text(this, body, "退到后台、离开本页或旋转都会暂停并断线；回来后不会自动恢复或重放。暂停不能撤回已经发生的效果。")
-        UiViews.button(this, body, "打开本 App 合成控件页（会暂停连接）", R.id.ui_main_open_fixture) {
-            startActivity(Intent(this, FixtureActivity::class.java))
+        if(VariantFeatures.ownFixtureAccessibility) {
+            UiViews.text(this, body, "默认连接为1.0合成模式。独立 own-fixture 1.1 仅在下一页手动选择，须服务器设备cap与精确driver授权；不是企微，当前Go尚无该网关。")
+            UiViews.button(this, body, "打开本 App Fixture 候选（暂停连接）", R.id.ui_main_open_fixture) {
+                if(VariantFeatures.ownFixtureAccessibility) startActivity(Intent(this, FixtureActivity::class.java))
+            }
         }
         UiViews.text(this, body, "持久账本与结果确认", size = 19f)
         ledger = UiViews.text(this, body, "尚未读取账本。", R.id.ui_main_ledger)
@@ -106,7 +110,7 @@ class MainActivity : Activity(), ClientUiListener {
         when (pendingAction) {
             "PAIR" -> if (snapshot.paired || snapshot.errorCode != null) pendingAction = null
             "CONNECT" -> if (snapshot.wsState == UiWsState.CONNECTED || snapshot.wsState == UiWsState.ERROR || snapshot.errorCode != null || snapshot.statusCode == "DISCONNECTED_MANUAL_RESUME_REQUIRED") pendingAction = null
-            "PAUSE" -> if (snapshot.paused && snapshot.wsState == UiWsState.DISCONNECTED) pendingAction = null
+            "PAUSE" -> if (snapshot.paused && snapshot.wsState in setOf(UiWsState.DISCONNECTED,UiWsState.ERROR)) pendingAction = null
         }
         render(snapshot)
         val request = snapshot.confirmation
@@ -121,7 +125,7 @@ class MainActivity : Activity(), ClientUiListener {
         val ready = bridge != null && snapshot.initialized
         val busy = snapshot.busy || pendingAction != null
         status.text = if (!snapshot.initialized) "正在等待已发布的状态快照；未把未知状态当成完成。" else
-            "WS：${snapshot.wsState.name}\n本地暂停：${if (snapshot.paused) "是" else "否"}\n状态代码：${UiViews.code(snapshot.statusCode)}\n操作处理中：${if (busy) "是" else "否"}"
+            "连接模式：${snapshot.connectionMode.name} · 协商版本：${snapshot.negotiatedVersion ?: "无"}\nWS：${snapshot.wsState.name}\n本地暂停：${if (snapshot.paused) "是" else "否"}\n状态代码：${UiViews.code(snapshot.statusCode)}\n操作处理中：${if (busy) "是" else "否"}"
         identity.text = snapshot.identity?.let {
             "身份已受保护保存：${if (snapshot.paired) "是" else "未确认"}\nDevice ID 尾部：…${UiViews.suffix(it.deviceIdSuffix)}\nKey ID 尾部：…${UiViews.suffix(it.keyIdSuffix)}\n不显示 secret、token 或完整凭据。"
         } ?: "尚无已确认的配对身份。"

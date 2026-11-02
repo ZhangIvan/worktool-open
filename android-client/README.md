@@ -1,40 +1,44 @@
-# WorkTool Open native Android client
+# WorkTool Open native Android candidate
 
-New MIT source, not a repackaged APK. **Native client implementation; real-device verification remains pending.** Build/JVM/lint status is commit-specific in GitHub Actions; it is not a device or WeCom execution result. The first native build succeeded at commit `12cb1a384cdb093bf1edda1c35da5f84ec64cad9` ([CI run](https://github.com/ZhangIvan/worktool-open/actions/runs/41397454945)). Subsequent changes require their own CI/artifact checks.
+New MIT source, not a repackaged APK. **This combined source is NOT_BUILT / NOT_DEVICE_TESTED until its own official CI and device evidence exists.** Earlier native/Node test results do not validate this combination. No WeCom driver, account, conversation target, install or service enablement is included.
 
-## Actual modules
-- `core/NativeCommandEngine`: authenticated v1 frame validation, persistent command dispatch, pause/reconnect, event/command deduplication, local approval, result-event ACK binding. Interrupted running work becomes `execution_unknown`, never automatic replay.
-- `transport/OkHttpDeviceLink`: foreground HTTPS pairing/session and WSS protocol; platform trust/hostname checks, no redirects/trust-all.
-- `transport/KeystoreCredentialVault`: device secret encrypted with Android Keystore AES-GCM, no backups/logs.
-- `transport/SqliteJournal`: tenant/device-separated no-backup SQLite; local synthetic effect and result commit atomically, durable ACK and stop tombstones.
-- `ui/MainActivity`: explicit pairing and manual connection, status, durable result/ACK, local export consent. Backgrounding pauses/disconnects; no foreground/background service.
-- `ui/FixtureActivity` and `accessibility/FixtureAccessibilityAdapter`: actual app-owned fixture Views and narrow ACTION_SET_TEXT/ACTION_CLICK source. **Accessibility service is not registered or enabled.** Adapter actions are not currently remotely exposed and have not been device-tested.
+## Three variants and two explicit connection modes
 
-`message.send_text` writes an **app-local synthetic inbox**, not WeCom. `file.export` produces only a hash of an explicitly approved bundled synthetic note, not real files. The remaining capabilities are **planned_unavailable**; the 67 reference entries are not 67 implemented commands. Public Apifox compatibility is a separate backend module/version.
+| Variant | Default connection | Optional explicit connection | Components |
+|---|---|---|---|
+| debug / release | HTTPS/WSS, wire1.0, two synthetic capabilities | Fixture page's explicit own-fixture1.1 button; no fallback | One BIND_ACCESSIBILITY_SERVICE-protected service; non-exported own FixtureActivity |
+| lab | Explicit single-origin cleartext lab consent, wire1.0 only | None | No service or FixtureActivity manifest entry; no settings/driver UI entry |
 
-## Build and trust boundary
-Pinned AGP 8.13.2 / Kotlin 2.2.21 / Gradle 8.13 / JDK 17 / compile+target API 36 / min API 26 / Build Tools 35.0.0. Official Google Maven + Maven Central only. Android API 31 is in the supported API range, not proof of successful device execution.
+`message.send_text`/external203 remains an **app-local synthetic inbox**. `file.export` hashes an explicitly approved bundled note, not files. The independent `fixture.ui.submit_text` candidate uses actual Accessibility ACTION_SET_TEXT/ACTION_CLICK on this app's fixed fixture widgets only. Service class presence, a true performAction return, or an HTTP accepted response is not successful UI execution. The67 reference entries are not67 implemented commands.
 
-On an environment already provisioned with the licensed official SDK and Gradle 8.13:
+Secure variants default to `SYNTHETIC_1_0`; only a user action on Fixture selects `OWN_FIXTURE_1_1`. The selected mode is in memory, captured per connection, never inferred from service state or a server frame. Switching first invalidates the old execution permit and completes stop; failure blocks connect. An unsupported1.1 server causes a visible failure, never a203 send or automatic1.0 downgrade. UI selection cannot modify paired credentials, grant device capabilities or replace an admin-approved exact driver scope.
+
+The current Go foundation does **not** provide the required WS/session/1.1 gateway. Default1.0 retains compatibility with an independently supported1.0 backend; it does not make Go operational. No old Node server, new endpoint, tunnel or proxy is bundled as a replacement.
+
+## Actual modules and safety gates
+
+- `core/NativeCommandEngine`: exact negotiated version, command/event deduplication, local approval, durable result-event ACK binding, no effect replay. Existing synthetic command policy and lab budget run before command acceptance.
+- `policy/ConnectionProfile`: exact1.0 or1.1 hello; full journal preflight before ready/recovery. If1.0 finds any fixture command without result or with an unacknowledged result, including unknown, it closes with `PENDING_FIXTURE_REQUIRES_1_1`. No recent100 shortcut, deletion or wrong-version ACK. Acknowledged immutable terminals are retained without replay.
+- `transport/OkHttpDeviceLink`: shared endpoint policy for pairing/session/WS, platform trust and hostname checks for HTTPS/WSS, redirects disabled, generation-gated callbacks; no trust-all/default host.
+- `transport/KeystoreCredentialVault` and `SqliteJournal`: unchanged protected credentials and tenant/device SQLite. Android SQLite remains formal persistent storage; server PostgreSQL does not replace it.
+- `ui/MainActivity`: default synthetic pairing/manual connection, bounded secret-free snapshots, local export approval. Main.onStop still pauses/disconnects. The Fixture page requires its own explicit connection and local enable; settings merely opens the OS page by user click, never grants permission.
+- `accessibility/`: real protected host, exact runtime package filter, two window events and view IDs, `isAccessibilityTool=false`. Root package is checked before traversing fixed unique nodes. No arbitrary selectors, scripts, coordinates, gestures, screenshots or other-app targets.
+- `FixtureSessionPermit`: synchronous atomic session/operation invalidation before queued cancellation. Each final main-thread SET_TEXT/CLICK gate rechecks the captured permit, window, target, epochs and deadline. Actions already past the final gate/system-submitted may still complete; stop is not rollback or proof of not_applied.
+- `FixtureReceiptStore`: ticket consumption and steps persist; effect+receipt share one local transaction. This is **not** a transaction across the existing command journal. Success additionally requires matching on-screen output. Interrupted/ambiguous work stays unknown; a late receipt does not overwrite an immutable terminal or restore permission.
+- `ClientStopCoordinator`: existing independent cleanup attempts and fixed failure state retained. New fixture prompts/probe are cleared; failed cleanup cannot silently resume.
+
+Only INTERNET appears under uses-permission. Secure variants nevertheless add a real BIND-protected service and thus change the permission surface relative to the earlier no-service APK. Lab may contain shared class bytes, but its manifest, feature, UI, constructor and wire gates disable the path.
+
+## Build evidence and deployment limits
+
+Pinned existing official inputs: AGP8.13.2, Kotlin2.2.21, Gradle8.13, JDK17, compile/target36, min26, Build Tools35.0.0. On an already licensed/provisioned official environment:
 
 ```sh
-gradle --no-daemon -p android-client :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
+gradle --no-daemon -p android-client :app:testDebugUnitTest :app:testReleaseUnitTest :app:testLabUnitTest :app:lintDebug :app:lintRelease :app:lintLab :app:assembleDebug :app:assembleRelease :app:assembleLab :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
 ```
 
-`.github/workflows/android.yml` uses official SHA-pinned actions and an ordinary GitHub-hosted runner. It checks installed SDK/license files first, disables automatic SDK installation, and does **not** run `sdkmanager --licenses`, an emulator, or connected-device tests. Missing prerequisites fail explicitly. It uploads only the debug APK and static identity/permission/checksum evidence; no keystore, credentials, logs, or user data. Runner/dependency network downloads are build-time only. This job uses ordinary repository Actions limits; it adds no paid service, deploy, secrets or self-hosted runner. GitHub billing/availability remains repository-controlled.
+The existing official CI does not accept new SDK licenses, install an SDK, run an emulator, enable a service or execute instrumentation. Three-variant static artifact checks must decode actual service metadata/resource values, manifest protection, permissions, package and lab DEX isolation. Release remains unsigned, not production/install readiness. Test counts/failures/skips must come from that exact commit's reports, not source counts. Disposable debug signing keys can differ; never automatically uninstall/erase an existing installation.
 
-Each clean CI runner generates a disposable debug signing key. A later debug artifact may not update an earlier install with a different key. Do not automatically uninstall or erase data; stable development signing and authorized migration are separate decisions.
+LAB retains source-enforced300-second monotonic consent,32 unique commands,256 frames/1MiB decoded ingress and32 queued callbacks. These are not a transport allocation cap or protection against cleartext interception. Deployment remains blocked without separately authorized identity-scoped ingress/proxy path/frame/concurrency/session controls and verification. See `LAB_CANDIDATE.md` and `../docs/lab-budget-client.md`.
 
-## Connection prerequisites
-Package `io.worktool.open.prototype`; permission INTERNET only; backups and cleartext disabled. No default endpoint. Pair only with an explicitly chosen self-owned **HTTPS origin** and a one-use enrollment token. Credentials never enter URLs or snapshots. No production endpoint is supplied.
-
-The current Node prototype binds loopback: **a phone cannot reach it merely by typing localhost**. A reviewed, authorized TLS ingress or equivalent isolated test transport is still required. No implicit tunnel, insecure TLS, private-host hardcode or cloud service is added. There is no debug cleartext exception in this slice.
-
-Pairing creates a new device identity; it does not enable execution. Connect/Resume is explicit, foreground-only, and local pause disconnects. Server revocation/stop is asynchronous; effects already committed cannot be undone. This is not a per-effect server execution-permit protocol. Android process death can lose unacknowledged network state, but durable results are resent after re-authentication rather than re-running effects. Local storage integrity failure stops execution for review.
-
-## Validation status
-JVM and Android instrumentation test **source exists**. The original GitHub build ran JVM tests/lint and assembled the app and instrumentation APK; instrumentation/device tests were not executed. Local compilation remains unavailable in the authoring workspace (no Gradle/SDK). CI compile/JVM/lint, APK static inspection, actual installation, foreground reconnect, process-death recovery, and accessibility fixture action tests are separate stages. Do not convert a build PASS into a real WeCom/Android E2E PASS.
-
-Official dependency sources: https://developer.android.com/build/releases/agp-8-13-0-release-notes ; https://github.com/JetBrains/kotlin ; https://github.com/square/okhttp ; https://github.com/erdtman/java-json-canonicalization ; https://developer.android.com/jetpack/androidx/releases/test . New code inherits the repository MIT license; Kotlin/OkHttp/JCS/AndroidX/JUnit/JSON-java retain their own upstream licenses. No original sample, decompiled source, PRIVATE evidence, lamda or vendor service is embedded.
-
-The displayed local pause state comes from the execution engine, including server revocation; an established WebSocket is not execution authorization.
+No source review or CI build is device acceptance. Actual foreground/window events, permission/lifecycle changes, SQLite/Keystore behavior, controls and process-death/result-ACK recovery require later explicit device authorization. Platform distribution and safety boundaries are in `../docs/platform-safety.md`. Third-party dependencies retain their own upstream licenses; no sample APK, decompiled source or private evidence is included.

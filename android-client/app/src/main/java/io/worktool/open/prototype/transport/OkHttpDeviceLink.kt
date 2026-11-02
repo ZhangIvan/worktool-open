@@ -1,6 +1,8 @@
 package io.worktool.open.prototype.transport
 
 import io.worktool.open.prototype.core.*
+import io.worktool.open.prototype.policy.ConnectionProfile
+import io.worktool.open.prototype.policy.VariantFeatures
 import io.worktool.open.prototype.policy.EndpointPolicy
 import io.worktool.open.prototype.policy.HttpsEndpointPolicy
 import okhttp3.*
@@ -73,7 +75,9 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
             else callback(r.mapCatching { Identity(endpointPolicy.authorize(endpoint),it.getString("deviceId"),it.getString("keyId"),it.getString("deviceSecret")) })
         } }
     }
-    @Synchronized override fun connect(identity:Identity,listener:LinkListener) {
+    override fun connect(identity:Identity,listener:LinkListener) = connect(identity,listener,ConnectionProfile.SYNTHETIC)
+    @Synchronized fun connect(identity:Identity,listener:LinkListener,profile:ConnectionProfile) {
+        if(!profile.mode.allowed(VariantFeatures.ownFixtureAccessibility)) { listener.closed("VARIANT_MODE_DENIED"); return }
         disconnect(); this.listener=listener; val current=generation; permitEpoch=endpointPolicy.budget.epoch(); val epoch=permitEpoch
         val request=try { request(identity.endpoint,"/api/v1/device-sessions",JSONObject().put("deviceId",identity.deviceId).put("keyId",identity.keyId),identity.secret) }
         catch (_:Exception) { listener.closed("ORIGIN_NOT_AUTHORIZED"); return }
@@ -89,8 +93,7 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
                         if(current!=generation || !endpointPolicy.budget.valid(epoch)) { ws.close(1000,"superseded"); return }
                         helloTimeout=timer.schedule({ synchronized(this@OkHttpDeviceLink) { if(current==generation && binding==null) { disconnect(); listener.closed("HELLO_TIMEOUT") } } },5,TimeUnit.SECONDS)
                         var helloSent=false
-                        endpointPolicy.budget.runIfValid(epoch){helloSent=ws.send(JSONObject().put("kind","hello").put("supportedVersions",JSONArray().put("1.0")).put("mode","synthetic")
-                            .put("capabilities",JSONArray().put("message.send_text").put("file.export")).toString())}
+                        endpointPolicy.budget.runIfValid(epoch){helloSent=ws.send(profile.hello().toString())}
                         if(!helloSent){disconnect();listener.closed("CLIENT_PERMIT_EXPIRED")}
                     } }
                     override fun onMessage(ws:WebSocket,text:String) { synchronized(this@OkHttpDeviceLink) {
@@ -101,15 +104,18 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
                             require(decodedBytes<=65536)
                             val j=JSONObject(text)
                             if(binding==null) {
-                                require(j.getString("kind")=="hello_ack" && j.getString("version")=="1.0" && j.getString("mode")=="synthetic")
+                                WireValidation.exact(j,setOf("kind","version","tenantId","deviceId","sessionId","policyVersion","serverTime","heartbeatIntervalSec","maxFrameBytes","mode"))
+                                require(j.getString("kind")=="hello_ack" && j.getString("version")==profile.mode.wireVersion && j.getString("mode")=="synthetic")
+                                WireValidation.id(j,"tenantId");WireValidation.id(j,"deviceId");WireValidation.id(j,"sessionId");WireValidation.integer(j,"policyVersion");WireValidation.time(j,"serverTime")
                                 require(j.getString("deviceId")==identity.deviceId && j.getString("sessionId")==sessionId)
                                 require(j.getInt("heartbeatIntervalSec")==15 && j.getInt("maxFrameBytes")==65536)
-                                val b=Binding(j.getString("tenantId"),identity.deviceId,sessionId,j.getLong("policyVersion"),Instant.parse(j.getString("serverTime")).toEpochMilli())
+                                val b=Binding(j.getString("tenantId"),identity.deviceId,sessionId,j.getLong("policyVersion"),Instant.parse(j.getString("serverTime")).toEpochMilli(),profile.mode.wireVersion)
                                 require(b.policyVersion>0); helloTimeout?.cancel(false); helloTimeout=null; offset=b.serverTimeMs-System.currentTimeMillis(); binding=b
                                 listener.ready(b)
                                 heartbeat=timer.scheduleAtFixedRate({ synchronized(this@OkHttpDeviceLink) { if(current==generation) send("heartbeat",JSONObject().put("policyVersion",b.policyVersion).put("lastReceivedSeq",received)) } },15,15,TimeUnit.SECONDS)
                             } else {
                                 val b=binding!!
+                                require(j.getString("version")==b.protocolVersion)
                                 require(j.getString("tenantId")==b.tenantId && j.getString("deviceId")==b.deviceId && j.getString("sessionId")==b.sessionId)
                                 received=maxOf(received,j.getLong("seq")); listener.frame(j)
                             }
@@ -130,7 +136,7 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
         if(!endpointPolicy.budget.valid(permitEpoch)){disconnect();return null}
         require(kind in setOf("accepted","started","execution_result","heartbeat","device_event","transport_ack"))
         val eventId="evt_"+UUID.randomUUID().toString().replace("-","")
-        val frame=JSONObject().put("version","1.0").put("kind",kind).put("eventId",eventId)
+        val frame=JSONObject().put("version",b.protocolVersion).put("kind",kind).put("eventId",eventId)
             .put("tenantId",b.tenantId).put("deviceId",b.deviceId).put("sessionId",b.sessionId).put("seq",++seq)
             .put("sentAt",Instant.ofEpochMilli(System.currentTimeMillis()+offset).truncatedTo(ChronoUnit.SECONDS).toString()).put("mode","synthetic").put("body",body)
         var enqueued=false

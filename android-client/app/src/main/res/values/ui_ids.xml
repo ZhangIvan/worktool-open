@@ -24,4 +24,16 @@
     <item name="ui_fixture_status" type="id" />
     <item name="ui_fixture_output" type="id" />
     <item name="ui_fixture_back" type="id" />
+    <item name="ui_main_service_status" type="id" />
+    <item name="ui_main_open_accessibility_settings" type="id" />
+    <item name="ui_main_disable_service" type="id" />
+    <item name="ui_fixture_service_status" type="id" />
+    <item name="ui_fixture_manual_connect" type="id" />
+    <item name="ui_fixture_enable_actions" type="id" />
+    <item name="ui_fixture_dry_run" type="id" />
+    <item name="ui_fixture_stop" type="id" />
+    <item name="ui_fixture_disable_service" type="id" />
+    <item name="ui_fixture_open_accessibility_settings" type="id" />
+    <item name="ui_fixture_probe" type="id" />
+    <item name="ui_fixture_confirmation" type="id" />
 </resources>

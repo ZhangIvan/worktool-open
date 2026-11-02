@@ -27,6 +27,7 @@ jobs:
           test -s "$ANDROID_HOME/licenses/android-sdk-license"
           test -f "$ANDROID_HOME/platforms/android-36/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
           test -x "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -62,10 +63,10 @@ jobs:
               text=Path(f'android-client/ci-artifact/permissions-{variant}.txt').read_text()
               assert set(re.findall(r"uses-permission: name='([^']+)'",text))=={'android.permission.INTERNET'}
           PYPERM
-          python3 android-client/tools/verify_variant_isolation.py --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" --apk debug=android-client/ci-artifact/worktool-open-native-debug.apk --apk release=android-client/ci-artifact/worktool-open-native-release-unsigned.apk --apk lab=android-client/ci-artifact/worktool-open-native-lab.apk > android-client/ci-artifact/variant-isolation.json
+          python3 android-client/tools/verify_variant_isolation.py --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" --apk debug=android-client/ci-artifact/worktool-open-native-debug.apk --apk release=android-client/ci-artifact/worktool-open-native-release-unsigned.apk --apk lab=android-client/ci-artifact/worktool-open-native-lab.apk > android-client/ci-artifact/variant-isolation.json
           cd android-client/ci-artifact
           sha256sum worktool-open-native-debug.apk worktool-open-native-release-unsigned.apk worktool-open-native-lab.apk > SHA256SUMS
-          printf '%s\n' 'CI build/static artifacts only; no device tests. Release APK is unsigned and not install-ready. Lab is cleartext, separate package, no default address. Deployment blocked pending hard session/queue budgets and separately authorized ingress. No service registered or WeCom integration.' > STATUS.txt
+          printf '%s\n' 'CI JVM/build/static artifacts only; no device or WeCom tests. Release APK is unsigned and not install-ready. Secure debug/release register a BIND_ACCESSIBILITY_SERVICE-protected own-fixture service; this does not enable device accessibility permission. Lab is cleartext, separate package, no default address or registered service/fixture activity, and retains client session/queue budgets. Deployment remains blocked on separately authorized bounded ingress; no proxy is implemented.' > STATUS.txt
       - name: Preserve bounded redacted three-variant JVM XML and lint summaries
         run: python3 android-client/tools/collect_ci_reports.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

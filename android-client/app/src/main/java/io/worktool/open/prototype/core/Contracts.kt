@@ -3,7 +3,7 @@ package io.worktool.open.prototype.core
 import org.json.JSONObject
 
 data class Identity(val endpoint: String, val deviceId: String, val keyId: String, val secret: String)
-data class Binding(val tenantId: String, val deviceId: String, val sessionId: String, val policyVersion: Long, val serverTimeMs: Long)
+data class Binding(val tenantId: String, val deviceId: String, val sessionId: String, val policyVersion: Long, val serverTimeMs: Long, val protocolVersion: String = "1.0")
 data class StoredCommand(val id: String, val digest: String, val attemptId: String, val stage: String, val body: String, val result: String?, val acked: Boolean, val stopped: Boolean)
 data class LocalEffect(val kind: String, val referenceId: String, val value: String)
 enum class EventDecision { NEW, DUPLICATE, CONFLICT }
@@ -45,4 +45,5 @@ interface EngineEvents {
     fun changed()
     fun confirmationRequired(commandId: String, exportId: String, scopeDigest: String)
     fun protocolError(code: String)
+    fun fixtureConfirmationRequired(request: FixtureApprovalRequest) {}
 }
