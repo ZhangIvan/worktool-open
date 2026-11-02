@@ -1,0 +1,31 @@
+# 构建产物（发布走 GitHub Releases，产物本地留档）
+dist/
+
+# 逆向/参考工作区（大体量、不可信数据，不入库）
+apk-analysis/
+reference/
+tools/
+
+# Android
+*.apk
+*.aab
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+
+# Node / 管理端
+node_modules/
+
+# 涉密与本地私有资料（永不上传，CI G13 拦截）
+local-private/
+secrets/
+*.pem
+*.p12
+*.p8
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db

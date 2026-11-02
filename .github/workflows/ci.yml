@@ -1,0 +1,42 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 必备文件存在（LICENSE/NOTICE/README）
+        run: test -f LICENSE && test -f NOTICE && test -f README.md
+
+      - name: 专有 SDK / 厂商域名字样门禁（G3-lite，仅源码目录）
+        run: |
+          dirs=$(ls -d android server admin protocol infra 2>/dev/null || true)
+          if [ -n "$dirs" ] && grep -rniE "umeng|talkingdata|ucweb\.com|ymdyes\.cn" $dirs; then
+            echo "::error::源码中发现专有 SDK/厂商域名字样（见 ADR-05 / 门禁 G3）"; exit 1
+          fi
+
+      - name: 已知硬编码密钥门禁（G2-lite）
+        run: |
+          dirs=$(ls -d android server admin protocol infra 2>/dev/null || true)
+          if [ -n "$dirs" ] && grep -rnE "9876543210abcdef|0123456789abcdef" $dirs; then
+            echo "::error::发现已知硬编码密钥常量（见门禁 G2 / SR-02）"; exit 1
+          fi
+
+      - name: 产品零 hook 门禁（G12-lite，产品源码目录）
+        run: |
+          dirs=$(ls -d android server admin protocol infra 2>/dev/null || true)
+          if [ -n "$dirs" ] && grep -rniE "frida|xposed|dexclassloader" $dirs --include='*.kt' --include='*.go' --include='*.ts'; then
+            echo "::error::产品源码出现 hook/注入类依赖（SR-13 / 门禁 G12；动态分析工具仅允许 test/ 与 lab 变体）"; exit 1
+          fi
+
+      - name: 涉密路径零入库门禁（G13）
+        run: |
+          if git ls-files | grep -E '^docs/audit/|^local-private/|^secrets/|\.jks$|\.keystore$|\.pem$|\.p12$|\.p8$'; then
+            echo "::error::检出涉密/敏感文件路径（政策 00 P7）"; exit 1
+          fi
+
+  # M1 起按车道追加：android.yml（JDK17+AGP8 构建/单测/lint）、server.yml（Go vet/test/golangci-lint+镜像）
