@@ -47,7 +47,10 @@ AUD-G 终审（独立审计 vs 本章程 G-1~G-5）──► v0.1.0 Release
 | D-2.5 | 主会话（RIG 首连 ✅：Android12/root/企微 5.0.13 在位；round-trip 并入 W-M3R） | 自测+AUD 抽查 | ✅ 通道达成 | RIG server_info 证据 |
 | W-M3R | workflow（**执行器补齐 101/102/501/502/509** + 真机装配 S1/D1 + round-trip 取证 + 05 矩阵回填；**脚本已预写** `.zcode/workflow-drafts/W-M3R-真机装配与矩阵填充.dwf.ts`，W-M3 落地即发射） | 全四门 | ⏸ 脚本就绪 | G-1 取证 |
 | W-M4 | workflow（admin 面/compose/Release Gate 预演；C-7 签名修复） | 全四门 | ⏸ | G-4/G-5 预演 |
-| AUD-G | 终审 | 对章程 G-1~G-5 | ⏸ | v0.1.0 |
+| W-M5 | workflow（B2 批：22 执行器+9 REST 端点，docs/10 §B2） | 全四门 | ⏸ | v0.2 |
+| W-M6 | workflow（B3 批：30 执行器+15 端点，docs/10 §B3） | 全四门 | ⏸ | v0.3 |
+| W-M7 | workflow（B4 批：长尾+平台项，docs/10 §B4） | 全四门 | ⏸ | v1.0 候选 |
+| AUD-G | 终审（G-1~G-5 + docs/10 对等矩阵逐行） | 对章程+对等计划 | ⏸ | v0.1.0 → v1.0 全量对等 |
 
 ## 4. 编排者职责（主会话）
 - 阶段间集成与推送（或授权 workflow 内推送）；设备/凭据类交互（RIG/keystore/S1）；规格裁决（如 C-9 类）；台账维护；终审组织。
