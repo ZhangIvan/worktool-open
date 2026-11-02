@@ -1,0 +1,58 @@
+name: Go backend foundation checks
+on:
+  pull_request:
+    branches: [main]
+    paths: ['backend-go/**', '.github/workflows/go-foundation.yml']
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths: ['backend-go/**', '.github/workflows/go-foundation.yml']
+permissions:
+  contents: read
+concurrency:
+  group: go-foundation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  foundation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend-go
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      GOPATH: ${{ runner.temp }}/worktool-go-path
+      GOCACHE: ${{ runner.temp }}/worktool-go-build
+      GOMODCACHE: ${{ runner.temp }}/worktool-go-modules
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+          cache: false
+          token: ''
+      - name: Verify pinned toolchain and module checksums
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = go1.27.3
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Format, vet and compile packages (no server starts)
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l internal)"
+          go vet ./...
+          go build ./...
+      - name: Unit and race checks only (no PostgreSQL or device)
+        run: |
+          set -euo pipefail
+          go test -count=1 -p 1 -v ./...
+          go test -race -count=1 -p 1 ./...
