@@ -1,3 +1,4 @@
+import {developerSchema} from './developer/schema.ts';
 import { DatabaseSync } from 'node:sqlite';
 export function openDB(path: string) {
  const db=new DatabaseSync(path);db.exec(`PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
@@ -17,6 +18,6 @@ export function openDB(path: string) {
  CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,tenant TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT NOT NULL,outcome TEXT NOT NULL,created INTEGER NOT NULL,FOREIGN KEY(tenant) REFERENCES tenants(id));
  CREATE TABLE IF NOT EXISTS exports(tenant TEXT NOT NULL,id TEXT NOT NULL,actor TEXT NOT NULL,scope TEXT NOT NULL,digest TEXT NOT NULL,reason TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',approval TEXT,approver TEXT,expires INTEGER NOT NULL,PRIMARY KEY(tenant,id),FOREIGN KEY(tenant,actor) REFERENCES users(tenant,id),FOREIGN KEY(tenant,approver) REFERENCES users(tenant,id),CHECK(approver IS NULL OR approver!=actor));
  CREATE TABLE IF NOT EXISTS deletions(tenant TEXT NOT NULL,id TEXT NOT NULL,device TEXT NOT NULL,state TEXT NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(tenant,id),FOREIGN KEY(tenant,device) REFERENCES devices(tenant,id));
- `);return db;
+ `);developerSchema(db);return db;
 }
 export function tx<T>(db:DatabaseSync,fn:()=>T):T {db.exec('BEGIN IMMEDIATE');try {const r=fn();db.exec('COMMIT');return r;}catch(e){db.exec('ROLLBACK');throw e;}}

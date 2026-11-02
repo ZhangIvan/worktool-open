@@ -102,7 +102,7 @@ internal class AppGraph(app: Application) : ClientUiBridge, EngineEvents {
             val rows=journal?.recent().orEmpty()
             val pendingIds=journal?.pendingCommands().orEmpty().map { it.id }.toSet()
             prompts.keys.retainAll(pendingIds)
-            state=state.copy(ledger=rows.map { LedgerUiRow(it.id,it.stage,it.result!=null,it.acked) },
+            state=state.copy(paused=engine?.isPaused() ?: true,ledger=rows.map { LedgerUiRow(it.id,it.stage,it.result!=null,it.acked) },
                 inbox=journal?.effectRows().orEmpty().mapNotNull { raw -> val j=JSONObject(raw); if(j.getString("kind")=="synthetic_inbox") SyntheticInboxUiRow(j.getString("referenceId"),j.getString("value")) else null },
                 confirmation=prompts.values.firstOrNull())
         } catch (_: Exception) { state=state.copy(errorCode="LOCAL_LEDGER_READ_FAILED") }

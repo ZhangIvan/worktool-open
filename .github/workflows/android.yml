@@ -59,10 +59,67 @@ jobs:
           cd android-client/ci-artifact
           sha256sum worktool-open-native-debug.apk > SHA256SUMS
           printf '%s\n' 'Build artifact only. No device tests executed. Remote effects remain SIMULATED. Accessibility service is not registered. No WeCom integration.' > STATUS.txt
+      - name: Preserve bounded redacted JVM XML and lint summary
+        shell: bash
+        run: |
+          python3 - <<'PYREPORT'
+          from pathlib import Path
+          import json, re, xml.etree.ElementTree as ET
+          root=Path('android-client/app/build')
+          out=Path('android-client/ci-artifact')
+          reports=sorted((root/'test-results/testDebugUnitTest').glob('TEST-*.xml'))
+          assert 1 <= len(reports) <= 20, 'JVM XML missing or report count exceeds limit'
+          dest=out/'jvm-test-results'; dest.mkdir(parents=True,exist_ok=True)
+          summary={'source':'actual Gradle JUnit XML','redaction':'properties, stdout/stderr, failure messages/stacks and paths omitted','suites':0,'tests':0,'failures':0,'errors':0,'skipped':0}
+          safe=re.compile(r'[A-Za-z0-9_.$() -]{1,160}\Z')
+          for index,path in enumerate(reports):
+              assert path.stat().st_size <= 1048576, 'JVM XML exceeds 1 MiB'
+              original=ET.parse(path).getroot()
+              assert original.tag=='testsuite', 'Unexpected JUnit root'
+              clean=ET.Element('testsuite')
+              for key in ['tests','failures','errors','skipped','time']:
+                  value=original.get(key,'0')
+                  assert re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',value), 'Invalid JUnit count'
+                  clean.set(key,value)
+                  if key!='time': summary[key]+=int(value)
+              name=original.get('name','suite')
+              clean.set('name',name if safe.fullmatch(name) else 'redacted_suite')
+              for case in original.findall('testcase'):
+                  attrs={}
+                  for key in ['name','classname']:
+                      value=case.get(key,'unknown')
+                      attrs[key]=value if safe.fullmatch(value) else 'redacted'
+                  duration=case.get('time','0')
+                  attrs['time']=duration if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',duration) else '0'
+                  item=ET.SubElement(clean,'testcase',attrs)
+                  for tag in ['failure','error','skipped']:
+                      if case.find(tag) is not None: ET.SubElement(item,tag)
+              ET.ElementTree(clean).write(dest/f'TEST-{index:02d}.xml',encoding='utf-8',xml_declaration=True)
+              summary['suites']+=1
+          assert summary['tests']>0, 'No executed JVM cases'
+          (out/'jvm-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          lint=root/'reports/lint-results-debug.xml'
+          assert lint.is_file() and lint.stat().st_size<=2097152, 'Lint XML missing or exceeds 2 MiB'
+          counts={}
+          for issue in ET.parse(lint).getroot().findall('issue'):
+              issue_id=issue.get('id','unknown'); severity=issue.get('severity','unknown')
+              assert safe.fullmatch(issue_id) and safe.fullmatch(severity)
+              key=issue_id+':'+severity; counts[key]=counts.get(key,0)+1
+          (out/'lint-summary.json').write_text(json.dumps({'source':'actual lintDebug XML','redaction':'only rule ID, severity and counts; no source excerpts or paths','issues':counts},indent=2)+'\n')
+          PYREPORT
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: worktool-native-debug-${{ github.sha }}
-          path: android-client/ci-artifact/
+          path: |
+            android-client/ci-artifact/worktool-open-native-debug.apk
+            android-client/ci-artifact/SHA256SUMS
+            android-client/ci-artifact/signature.txt
+            android-client/ci-artifact/badging.txt
+            android-client/ci-artifact/permissions.txt
+            android-client/ci-artifact/STATUS.txt
+            android-client/ci-artifact/jvm-test-results/TEST-*.xml
+            android-client/ci-artifact/jvm-summary.json
+            android-client/ci-artifact/lint-summary.json
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false

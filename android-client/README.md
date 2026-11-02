@@ -1,6 +1,6 @@
 # WorkTool Open native Android client
 
-New MIT source, not a repackaged APK. **Native implementation pending compilation and device verification.** No build or real-device success is claimed until CI artifacts and separate device records exist.
+New MIT source, not a repackaged APK. **Native client implementation; real-device verification remains pending.** Build/JVM/lint status is commit-specific in GitHub Actions; it is not a device or WeCom execution result. The first native build succeeded at commit `12cb1a384cdb093bf1edda1c35da5f84ec64cad9` ([CI run](https://github.com/ZhangIvan/worktool-open/actions/runs/41397454945)). Subsequent changes require their own CI/artifact checks.
 
 ## Actual modules
 - `core/NativeCommandEngine`: authenticated v1 frame validation, persistent command dispatch, pause/reconnect, event/command deduplication, local approval, result-event ACK binding. Interrupted running work becomes `execution_unknown`, never automatic replay.
@@ -33,6 +33,8 @@ The current Node prototype binds loopback: **a phone cannot reach it merely by t
 Pairing creates a new device identity; it does not enable execution. Connect/Resume is explicit, foreground-only, and local pause disconnects. Server revocation/stop is asynchronous; effects already committed cannot be undone. This is not a per-effect server execution-permit protocol. Android process death can lose unacknowledged network state, but durable results are resent after re-authentication rather than re-running effects. Local storage integrity failure stops execution for review.
 
 ## Validation status
-JVM and Android instrumentation test **source exists**, but neither compilation nor Android execution has run in the initial cloud workspace (no Gradle/SDK). CI compile/JVM/lint, APK static inspection, actual installation, foreground reconnect, process-death recovery, and accessibility fixture action tests are separate stages. Do not convert a build PASS into a real WeCom/Android E2E PASS.
+JVM and Android instrumentation test **source exists**. The original GitHub build ran JVM tests/lint and assembled the app and instrumentation APK; instrumentation/device tests were not executed. Local compilation remains unavailable in the authoring workspace (no Gradle/SDK). CI compile/JVM/lint, APK static inspection, actual installation, foreground reconnect, process-death recovery, and accessibility fixture action tests are separate stages. Do not convert a build PASS into a real WeCom/Android E2E PASS.
 
 Official dependency sources: https://developer.android.com/build/releases/agp-8-13-0-release-notes ; https://github.com/JetBrains/kotlin ; https://github.com/square/okhttp ; https://github.com/erdtman/java-json-canonicalization ; https://developer.android.com/jetpack/androidx/releases/test . New code inherits the repository MIT license; Kotlin/OkHttp/JCS/AndroidX/JUnit/JSON-java retain their own upstream licenses. No original sample, decompiled source, PRIVATE evidence, lamda or vendor service is embedded.
+
+The displayed local pause state comes from the execution engine, including server revocation; an established WebSocket is not execution authorization.

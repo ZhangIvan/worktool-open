@@ -69,4 +69,15 @@ class NativeCommandEngineTest {
 
     @Test fun failedStartedSendDisconnectsBeforeAnyEffectAndPersistsFailure(){val h=harness();h.link.failStarted=true;h.engine.frame(frame(command()));val row=h.journal.command("command_demo")!!;assertEquals("failed",row.stage);assertEquals("not_applied",JSONObject(row.result!!).getString("effectState"));assertEquals("START_NOTIFICATION_NOT_SENT",JSONObject(row.result!!).getString("code"));assertTrue(h.journal.effects.isEmpty());assertFalse(h.link.online);assertEquals(1,h.journal.pendingResults().size);assertFalse(h.link.sent.any{it.first=="execution_result"})}
 
+    @Test fun revokedPolicyPublishesPausedGateAndCannotResumeLocally() {
+        val h=harness()
+        assertFalse(h.engine.isPaused())
+        h.engine.frame(frame(JSONObject().put("policyVersion",2).put("revoked",true),1,"event_revoke","config_notification"))
+        assertTrue(h.engine.isPaused())
+        h.engine.resume()
+        assertTrue(h.engine.isPaused())
+        h.engine.frame(frame(command(),2,"event_after_revoke"))
+        assertTrue(h.journal.effects.isEmpty())
+        assertTrue(h.engine.isPaused())
+    }
 }

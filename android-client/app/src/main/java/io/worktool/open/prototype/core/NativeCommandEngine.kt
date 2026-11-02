@@ -197,6 +197,8 @@ class NativeCommandEngine(
         journal.pendingCommands().filter { it.stage=="accepted" }.forEach { finish(JSONObject(it.body),"rejected","not_started",code) }
         confirmations.clear()
     }
+    /** Authoritative execution gate for the UI; transport connection alone is not permission. */
+    @Synchronized fun isPaused(): Boolean = paused
     @Synchronized fun pause() { paused=true; rejectPending("LOCAL_PAUSED"); events.changed() }
     @Synchronized fun resume() { if(binding!=null && link.connected() && !revoked) paused=false; events.changed() }
     @Synchronized override fun closed(reasonCode: String) { binding=null; paused=true; confirmations.clear(); sentResults.clear(); events.changed() }
