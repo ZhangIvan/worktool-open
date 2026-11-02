@@ -44,8 +44,8 @@ AUD-G 终审（独立审计 vs 本章程 G-1~G-5）──► v0.1.0 Release
 | 阶段 | 形态 | 四门 | 状态 | 产出 |
 |------|------|------|------|------|
 | W-M3 | workflow（T3.1 执行器/T3.2 调度+apifox/T3.3 本地模式 + CR + E2E） | 全四门 | 🔄 运行中 | 本行由编排者随完成更新 |
-| D-2.5 | 主会话（RIG→D1 装包→round-trip） | 自测+AUD 抽查 | 🔄 并行进行 | T2.5 证据 |
-| W-M3R | workflow（真机回归、05 矩阵 P0 填 ✅） | 全四门 | ⏸ 待 D-2.5 | G-1 取证 |
+| D-2.5 | 主会话（RIG 首连 ✅：Android12/root/企微 5.0.13 在位；round-trip 并入 W-M3R） | 自测+AUD 抽查 | ✅ 通道达成 | RIG server_info 证据 |
+| W-M3R | workflow（**执行器补齐 101/102/501/502/509** + 真机装配 S1/D1 + round-trip 取证 + 05 矩阵回填；**脚本已预写** `.zcode/workflow-drafts/W-M3R-真机装配与矩阵填充.dwf.ts`，W-M3 落地即发射） | 全四门 | ⏸ 脚本就绪 | G-1 取证 |
 | W-M4 | workflow（admin 面/compose/Release Gate 预演；C-7 签名修复） | 全四门 | ⏸ | G-4/G-5 预演 |
 | AUD-G | 终审 | 对章程 G-1~G-5 | ⏸ | v0.1.0 |
 
