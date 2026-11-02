@@ -110,6 +110,25 @@ def resource_string(resources,name):
     return value
 
 
+def resource_file(resources,name,members):
+    # Use the exact named XML record selected by the validated metadata, never a
+    # source-tree filename. Optimized release APK members may have shorter names.
+    assert name=='xml/ui_fixture_accessibility_service', 'unexpected XML resource type/name'
+    found=[r for r in resources.values() if r['name']==name]
+    assert len(found)==1 and len(found[0]['values'])==1, 'unique default XML file mapping required'
+    line=found[0]['values'][0]
+    m=re.fullmatch(r'\(\)\s+\(file\)\s+(res/[A-Za-z0-9_./-]+)(?:\s+type=XML)?',line)
+    assert m, 'XML resource must be a default APK file mapping'
+    path=m.group(1)
+    assert len(path)<=256 and all(part not in ('','.','..') for part in path.split('/')), 'unsafe APK XML member path'
+    matches=[item for item in members if item.filename==path]
+    assert len(matches)==1, 'XML APK member missing or duplicate'
+    item=matches[0]
+    assert not item.is_dir() and (item.external_attr>>16)&0o170000!=0o120000, 'XML member is not regular data'
+    assert 0<item.file_size<=1048576, 'XML APK member size outside bound'
+    return path
+
+
 def normalize_service_numbers(root):
     # Exact Android integer equivalents, not permissive bit-mask subset tests.
     values={'accessibilityEventTypes':(0x820,'typeWindowStateChanged|typeWindowContentChanged'),
@@ -193,6 +212,25 @@ def resource_selftest():
     assert diag['metadata_resource_repr']==repr('@ref/0x7f020001')
     assert all(set(r)=={'id','type','name'} for r in diag['resource_identity_candidates'])
     assert diagnostic_reference('secret payload with spaces',resources)['metadata_resource_repr']=='ABSENT_OR_REDACTED'
+    def xml_resources(value):
+        return {'0x7f020001':{'name':'xml/ui_fixture_accessibility_service','values':[value]}}
+    def member(name):
+        info=zipfile.ZipInfo(name);info.file_size=64;return info
+    for path in ['res/xml/ui_fixture_accessibility_service.xml','res/a.xml','res/Ab']:
+        for suffix in ['', ' type=XML']:
+            assert resource_file(xml_resources('() (file) '+path+suffix),'xml/ui_fixture_accessibility_service',[member(path)])==path
+    for value in ['(en) (file) res/a.xml','() @xml/other','() (file) /res/a.xml','() (file) ../a.xml','() (file) res/../a.xml','() (file) res//a.xml','() (file) res/./a.xml','() (file) https://example.test/a.xml','() (file) res/a.xml type=PNG','() (file) res/a.xml?query','() (file) res/a%2exml','() (file) res/a\\b.xml']:
+        try:resource_file(xml_resources(value),'xml/ui_fixture_accessibility_service',[member('res/a.xml')])
+        except AssertionError:pass
+        else:raise AssertionError('unsafe/ambiguous XML file mapping accepted')
+    for members in [[],[member('res/a.xml'),member('res/a.xml')]]:
+        try:resource_file(xml_resources('() (file) res/a.xml'),'xml/ui_fixture_accessibility_service',members)
+        except AssertionError:pass
+        else:raise AssertionError('missing/duplicate XML member accepted')
+    for records in [{}, {'0x7f020001':{'name':'xml/ui_fixture_accessibility_service','values':['() (file) res/a.xml','(en) (file) res/b.xml']}}, {'0x7f020001':{'name':'string/ui_fixture_accessibility_service','values':['() (file) res/a.xml']}}, dict(xml_resources('() (file) res/a.xml'),other={'name':'xml/ui_fixture_accessibility_service','values':['() (file) res/a.xml']})]:
+        try:resource_file(records,'xml/ui_fixture_accessibility_service',[member('res/a.xml')])
+        except AssertionError:pass
+        else:raise AssertionError('missing/ambiguous/wrong-type resource accepted')
     return {'compiled_resource_parser_fixtures':'PASS','actual_apk_decode':'NOT_RUN'}
 
 
@@ -252,8 +290,13 @@ def verify_apk(variant,apk,apkanalyzer,aapt2):
                           aapt2_version=tool_version(Path(aapt2).resolve(),['version']))
         print(json.dumps(diagnostic),file=sys.stderr)
         raise
+    service_file=None
     if variant!='lab':
-        service_raw=subprocess.check_output([str(tool),'resources','xml','--file','res/xml/ui_fixture_accessibility_service.xml',str(apk)],text=True)
+        # check_manifest above already proved metadata resolves to this exact name.
+        with zipfile.ZipFile(apk) as archive:
+            service_file=resource_file(resources,'xml/ui_fixture_accessibility_service',archive.infolist())
+        print(json.dumps({'variant':variant,'stage':'COMPILED_SERVICE_XML_MEMBER','resource':'xml/ui_fixture_accessibility_service','apk_member':service_file}),file=sys.stderr)
+        service_raw=subprocess.check_output([str(tool),'resources','xml','--file',service_file,str(apk)],text=True)
         service_xml=ET.fromstring(service_raw)
         normalize_references(service_xml,resources)
         normalize_service_numbers(service_xml)
@@ -270,7 +313,7 @@ def verify_apk(variant,apk,apkanalyzer,aapt2):
         markers=[b'LabEndpointPolicy',b'LabFixtureCommandPolicy',b'LabClientBudget',b'MonotonicLeaseTimer',b'LAB CLEARTEXT',b'LAB FIXTURE NONCE']
         if variant=='lab':assert all(m in dex for m in markers)
         else:assert not any(m in dex for m in markers), 'lab bytecode or fixture marker leaked'
-    return {'variant':variant,'apk_isolation':'PASS','compiled_manifest':'PASS','compiled_service_filter':'PASS' if variant!='lab' else 'NOT_REGISTERED','shared_accessibility_dex':'NOT_A_REACHABILITY_PROOF','metadata_reference':diagnostic_reference(original_metadata,resources) if variant!='lab' else 'NOT_REGISTERED'}
+    return {'variant':variant,'apk_isolation':'PASS','compiled_manifest':'PASS','compiled_service_filter':'PASS' if variant!='lab' else 'NOT_REGISTERED','shared_accessibility_dex':'NOT_A_REACHABILITY_PROOF','service_xml_apk_member':service_file,'metadata_reference':diagnostic_reference(original_metadata,resources) if variant!='lab' else 'NOT_REGISTERED'}
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--apk',action='append',default=[],help='variant=/absolute/path.apk');p.add_argument('--apkanalyzer');p.add_argument('--aapt2');p.add_argument('--selftest',action='store_true')
