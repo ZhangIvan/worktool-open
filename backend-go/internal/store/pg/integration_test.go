@@ -216,11 +216,20 @@ func TestPGIntegrationSchemaAndDeviceBindings(t *testing.T) {
 	for name, q := range map[string]string{
 		"PG-GW-14_wrong_device_outbox":    `INSERT INTO outbox(tenant,device,command,kind) VALUES('T1','B','commandA','command')`,
 		"PG-GW-15_wrong_session_inbox":    `INSERT INTO inbox(tenant,device,event,digest,session,seq) VALUES('T1','A','evt','hash','sessionB',1)`,
-		"PG-GW-15_wrong_dispatch_session": `UPDATE commands SET dispatch_session='sessionB',dispatch_fence=1,dispatch_owner='instanceA',dispatch_recovery_epoch='epoch1' WHERE id='commandA'`,
-		"PG-GW-15_wrong_gateway_session":  `INSERT INTO device_gateway_leases(tenant,device,owner_instance,session_id,recovery_epoch,fence,lease_until) VALUES('T1','A','instanceA','sessionB','epoch1',1,clock_timestamp()+interval '1 minute')`,
+		"PG-GW-15_wrong_dispatch_session": `UPDATE commands SET dispatch_session='sessionB',dispatch_fence=1,dispatch_owner='instanceA',dispatch_recovery_epoch='epoch1',dispatch_connection='synthetic_conn' WHERE id='commandA'`,
+		"PG-GW-15_wrong_gateway_session":  `INSERT INTO device_gateway_leases(tenant,device,owner_instance,session_id,recovery_epoch,fence,lease_until,connection_id,state) VALUES('T1','A','instanceA','sessionB','epoch1',1,clock_timestamp()+interval '1 minute','synthetic_conn','active')`,
 		"PG-GW-07_cross_tenant":           `INSERT INTO outbox(tenant,device,command,kind) VALUES('T2','A','commandA','command')`,
 	} {
-		t.Run(name, func(t *testing.T) { expectRejected(t, f, nil, q) })
+		t.Run(name, func(t *testing.T) {
+			err := expectRejected(t, f, nil, q)
+			expected := map[string]string{"PG-GW-15_wrong_dispatch_session": "dispatch_session_binding", "PG-GW-15_wrong_gateway_session": "device_gateway_leases_tenant_device_session_id_fkey"}[name]
+			if expected != "" {
+				var pe *pgconn.PgError
+				if !errors.As(err, &pe) || pe.Code != "23503" || pe.ConstraintName != expected {
+					t.Fatal("wrong-session case did not hit exact original FK")
+				}
+			}
+		})
 	}
 }
 func TestPGIntegrationReservationBindings(t *testing.T) {

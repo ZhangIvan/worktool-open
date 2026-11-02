@@ -64,8 +64,8 @@ are mandatory. Harness validates same 127.0.0.1/port/nonempty wt_test_ DB, diffe
 users. No implicit localhost default or external DSN accepted.
 
 Runs only `go test -json -count=1 -p 1 -timeout 10m ./internal/store/pg -run
-^TestPG(Integration|Admission(ATC|Payload))`; job total15min, pull timeout3min, current test case context20s.
-The exact 14 expected top-level test IDs (4 schema groups + ATC01–08 + 2 payload/migration-guard groups) must each PASS; any SKIP, failure, missing test,
+^TestPG(Integration|Admission(ATC|Payload)|LeaseLF)`; job total15min, pull timeout3min, current test case context20s.
+The exact 22 expected top-level test IDs (4 schema groups + ATC01–08 + 2 payload/migration-guard groups + LF01–08) must each PASS; any SKIP, failure, missing test,
 non-JSON record or failed process makes CI fail. New reviewed test IDs require
 updating this explicit set. Output is sanitized ID/PASS and resource/version/
 migration SHA256 evidence, not raw Go error strings. Tests must not open more
@@ -100,3 +100,11 @@ claimed run. Their counters measure internal capacity quotas, not payments or fe
 The runner rejects logs containing only the previous four passes. No new services,
 privileges, credentials retained, image, network exposure or resource budget are added.
 Tenant-wide serialization is a correctness baseline, not a throughput benchmark.
+
+## Lease/fence candidate extension
+
+The preceding 14 groups passed actual PostgreSQL CI on source bab1a3c. This
+candidate additionally requires LF01–08; those lease tests are not yet claimed
+run. Receipt of a DB claim is not a socket-send or device-effect proof. The
+runner rejects logs containing only the previous 14 passes. Resources, image,
+roles, network exposure, cleanup and permission bounds are unchanged.
