@@ -22,7 +22,7 @@
 |-------|------|------|-----|------|--------|
 | T1.1 | L4 | monorepo 骨架 + LICENSE(Apache-2.0)+NOTICE+README+CI 模板 | ✅ 已完成并验证：git 仓库初始化，全部目录/LICENSE/NOTICE/CI 门禁/issue 模板入库（证据：`git log` 首提交 + 04 §6 台账 AUD-01 条目） | — | ✅ |
 | T1.2 | L1 | android 壳工程（Kotlin+AGP8+JDK17，`cn.worktool.open`）+ 空无障碍服务（透明声明） | CI 出 debug APK | T1.1 | ✅ |
-| T1.3 | L2 | server 骨架（Go module、config、健康检查）+ compose | CI 绿 + 本地 `go test` 通过；含"非 loopback 明文绑定启动即拒绝"断言（SR-09） | T1.1 | ✅ |
+| T1.3 | L2 | server 骨架（Go module、config、健康检查；compose 交付归 infra 车道/M4） | CI 绿 + 本地 `go test` 通过；含"非 loopback 明文绑定启动即拒绝"断言（SR-09） | T1.1 | ✅ |
 | T1.4 | L5 | S1 构建容器方案落地（`infra/builder/`） | 服务器产出 hello APK | SSH 已打通（免密，2026-11-02） | ✅ 可排期 |
 
 ### M2（W48-49）通讯与端侧核心

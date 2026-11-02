@@ -28,7 +28,7 @@
 | 分支协作 | `main` = 集成线（Codex PR 流）；**`zcode/main` = 本助手固定维护线（Go 服务端 + 我方完整规划）**，直接推送、不触碰 main；跨线合并与取长补短由用户以 PR 裁决 | 双线并行、互不否决、各自评估（2026-11-02） |
 | 发布平台 | **GitHub Releases 优先** | 构建物 APK+server 镜像+compose+校验和；Gitee 镜像可选（带宽） |
 | 本机构建 | 不设为必需 | 无本地 Android SDK 属常态；有则支持 |
-| CI | GitHub Actions 双工作流：`android.yml`（构建/单测/lint，自建 Ubuntu Android Runner 缓存 Gradle）+ `server.yml`（Go 单测/vet/golangci-lint/多阶段镜像构建） | CI 即"无 SDK 机器"的构建路径验证 |
+| CI | GitHub Actions 双工作流：`android.yml`（JDK17+Gradle 构建/单测）+ `server.yml`（Go vet+单测；golangci-lint/镜像构建待 M2） | CI 即"无 SDK 机器"的构建路径验证 |
 | 服务目录（S1） | `/srv/worktool-open/{builder,server,artifacts,scripts,logs}` | 见 §5 基础设施；服务器上容器化，本机零重依赖 |
 
 ## 3. 基础设施（应对本机资源限制）

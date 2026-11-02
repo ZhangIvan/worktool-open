@@ -61,7 +61,7 @@
 - 通道：`{host}/webserver/wework/{robotId}`（v1 兼容路径）+ v2 安全会话 `/api/v2/device-sessions`（新客户端首选）；v1 心跳 5s，v2 会话心跳 15s / 失联 45s 关闭（参数吸收自 contracts 线）。
 - v1 兼容信封：`WeworkMessageListBean{socketType, messageId, meta, apiSend, list|encryptedList, encryptType}`（字段与 201~234/501~509 映射输入 = local-private/audit/02 §A 还原表）。
 - **v2 安全增量（精确规格，2026-11-02 用户要求补齐）**，不改 v1 字段、扩展 `meta`：
-  - **配对与鉴权**：①控制台生成一次性配对码（6 位，TTL 10 分钟，单次有效）；②设备持配对码 + AndroidKeystore 签名公钥（Ed25519）请求 `POST /pair`，服务端注册公钥并返回 `deviceToken`（随机 256-bit，服务端仅存 hash，端侧 Keystore 加密存储）；③此后每帧 `meta{ts, nonce, hmac}`，`hmac = HMAC-SHA256(deviceToken, commandId|eventId|ts|nonce|payloadDigest)`，`payloadDigest = SHA-256(RFC 8785 规范 JSON)`；④时钟容差 ±30s，nonce 双向 5 分钟去重；⑤凭据轮换默认 30 天（重协商复用签名公钥）；撤销 = `tokenVersion+1` + 广播 REVOKED，离线设备重连时版本校验失败强制重配对。
+  - **配对与鉴权**：①控制台生成一次性配对码（6 位，TTL 10 分钟，单次有效）；②设备持配对码 + AndroidKeystore 签名公钥（Ed25519）请求 `POST /api/v2/pair`（路径以 protocol/spec.md §3 为准），服务端注册公钥并返回 `deviceToken`（随机 256-bit，服务端仅存 hash，端侧 Keystore 加密存储）；③此后每帧 `meta{ts, nonce, hmac}`，`hmac = HMAC-SHA256(deviceToken, commandId|eventId|ts|nonce|payloadDigest)`，`payloadDigest = SHA-256(RFC 8785 规范 JSON)`；④时钟容差 ±30s，nonce 双向 5 分钟去重；⑤凭据轮换默认 30 天（重协商复用签名公钥）；撤销 = `tokenVersion+1` + 广播 REVOKED，离线设备重连时版本校验失败强制重配对。
   - **投递语义**（吸收 contracts 线）：双向每会话 seq 严格递增 + eventId 去重（重复同内容回执、异内容冲突关闭）；API 幂等键 `tenant+actor+operation+key`（24h 窗口，同键变参 409；键构成对齐 contracts 线 storage 主键语义）；设备墓碑 ≥7 天（> TTL+幂等窗+时钟偏差）；execution_unknown 只凭持久证据对账（5.1）。
   - **加密**：`encryptType=2` 时 AES-256-GCM；配对报文中设备**同时提交 X25519 临时公钥**（与 Ed25519 签名公钥分列两字段），会话密钥 = ECDH(X25519) + HKDF-SHA256 派生（修复上游硬编码 CBC，SR-02；字段随 T2.1 schema 冻结）。
 - 规格载体：`protocol/`（spec.md + JSON Schema + state-transitions.csv + 夹具，T2.1 交付）；范式吸收自 contracts 线但**独立成文**，避免跨线引用漂移。

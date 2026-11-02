@@ -39,4 +39,4 @@ jobs:
             echo "::error::检出涉密/敏感文件路径（政策 00 P7）"; exit 1
           fi
 
-  # M1 起按车道追加：android.yml（JDK17+AGP8 构建/单测/lint）、server.yml（Go vet/test/golangci-lint+镜像）
+  # 车道工作流：android.yml（JDK17+Gradle 构建/单测）、server.yml（Go vet/test；golangci-lint/镜像构建待 M2）
