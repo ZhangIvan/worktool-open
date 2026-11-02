@@ -22,11 +22,13 @@ import (
 	"cn.worktool.open/server/internal/wire"
 )
 
-// 风险等级（FR-53 联动冻结口径：L1/L2 为危险类）。
+// 风险等级（docs/01 FR-53「分级裁决（2026-11-03，CR-R1-0）」权威口径：L0/L1/L2，
+// 原 L3 命名废止——L3 ≡ 裁决前的"L0 普通"代码别称，统一为 L0；未登记类型按 L2
+// fail-closed（裁决②），登记后方可降级）。
 const (
-	RiskL1 = "L1"
-	RiskL2 = "L2"
-	RiskL3 = "L3"
+	RiskL0 = "L0" // 普通（已实现指令基线，裁决③）
+	RiskL1 = "L1" // 批量发送/转发、建群、拉人（含加好友）
+	RiskL2 = "L2" // 解散群、删联系人、清队列；未登记类型 fail-closed 兜底
 )
 
 // 边 ID 常量（CSV 权威件 ID 引用；证据留痕判定用，不复述边表语义）。
@@ -47,19 +49,32 @@ var (
 
 // Service 为统一命令管线（单连接 SQLite：所有写路径经 withTx 串行）。
 type Service struct {
-	db *sqlite.DB
-	m  *statemachine.Machine
+	db      *sqlite.DB
+	m       *statemachine.Machine
+	guard   *guard
+	breaker *Breaker
 	// Now 为可注入时钟（TTL 扫描/幂等窗/墓碑保留期测试用）。
 	Now func() time.Time
 }
 
 // New 创建管线服务。
 func New(db *sqlite.DB, m *statemachine.Machine) *Service {
-	return &Service{db: db, m: m, Now: time.Now}
+	s := &Service{
+		db:      db,
+		m:       m,
+		guard:   newGuard(DefaultGuardConfig()),
+		breaker: NewBreaker(DefaultBreakerConfig()),
+		Now:     time.Now,
+	}
+	s.breaker.SetClock(func() time.Time { return s.Now().UTC() })
+	return s
 }
 
 // Machine 返回底层状态机。
 func (s *Service) Machine() *statemachine.Machine { return s.m }
+
+// Breaker 透出全局熔断器（状态查询/人工复位；FR-53）。
+func (s *Service) Breaker() *Breaker { return s.breaker }
 
 // SubmitRequest 为指令提交（E01 enqueue / E02 reject 入口；REST 兼容层 T3.2 接线）。
 type SubmitRequest struct {
@@ -70,24 +85,32 @@ type SubmitRequest struct {
 	Target      string // v2 deviceId 或 v1:robotId
 	CommandType int
 	Payload     string // list[0] JSON 对象原文
-	RiskClass   string // 空 = L3
+	RiskClass   string // 空 = 按类型分级（ClassifyRisk：已实现=L0 基线、未登记→L2 fail-closed）
+	// ApprovalID 为 L2 指令携带的审批号（空 = 登记待审批并返回 APPROVAL_REQUIRED；FR-53）。
+	ApprovalID string
+	// DryRun 为干跑标记（FR-54：不下发设备，服务端沿同一状态机产出报告）。
+	DryRun bool
 	// ParamsFingerprint 参与幂等“同键变参”判定的参数指纹（默认取 Payload）。
 	ParamsFingerprint string
 }
 
 // SubmitResult 为提交结果。
 type SubmitResult struct {
-	CommandID string
-	State     string
-	Replay    bool // 幂等命中（同键同参返回原响应，重试安全）
+	CommandID  string
+	State      string
+	Replay     bool   // 幂等命中（同键同参返回原响应，重试安全）
+	ApprovalID string // State=awaiting_approval 时携带（L2 待审批）
 }
 
 // Submit 落一条指令：E01 enqueue（幂等键占用 + 事件/审计同事务）或 E02 reject（仅审计）。
+// FR-53 门链（T3.2）：熔断 → L2 审批 → L1 白名单/限速 → 风险冻结。
 func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, error) {
 	now := s.Now().UTC()
 	risk := req.RiskClass
+	unregistered := false // 未登记类型按 L2 fail-closed（docs/01 FR-53 裁决②，CR-R1-0 收尾）
 	if risk == "" {
-		risk = RiskL3
+		risk = ClassifyRisk(req.CommandType) // 恒返回 L0/L1/L2（未登记→L2）
+		unregistered = riskUnregistered(req.CommandType)
 	}
 	// 静态校验（E02 guard：schema/约束失败即拒绝，不下发不入队）
 	if req.Target == "" {
@@ -96,6 +119,7 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 	if err := validatePayload(req.CommandType, req.Payload); err != nil {
 		return s.reject(ctx, now, err.Error())
 	}
+
 	idemKey := idempotencyKey(req)
 	params := req.ParamsFingerprint
 	if params == "" {
@@ -103,6 +127,84 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 	}
 	paramsHash := hashHex(params)
 	window := time.Duration(s.m.Policy().Idempotency.WindowHours) * time.Hour
+
+	// 幂等重放判定先于 FR-53 门链（CR-t32-T3.2-R2，spec §5.6.1「同键同参→返回原
+	// 响应」重试安全）：合法重试不得被熔断/审批消费/白名单收紧/限速计数拦截——
+	// 只有**新提交**才走门链。并发窗口内的漏网者仍由下方事务内重查兜底。
+	if idemKey != "" {
+		have, prevCmd, _, createdAt, ok, err := s.db.IdempotencyGet(ctx, nil, idemKey)
+		if err != nil {
+			return SubmitResult{}, err
+		}
+		if ok && s.Now().UTC().Sub(createdAt) <= window {
+			if have != paramsHash {
+				return SubmitResult{}, fmt.Errorf("%w：key=%s", ErrIdempotencyConflict, idemKey)
+			}
+			return SubmitResult{CommandID: prevCmd, State: "queued", Replay: true}, nil
+		}
+	}
+
+	// FR-53 全局熔断：open 期间自动暂停——新提交一律 E02（仅审计），冷却后 half-open 放行试探
+	if ok, retryAfter := s.breaker.Allow(); !ok {
+		return s.rejectGuard(ctx, now, &GuardError{Code: ErrCodeCircuitOpen,
+			Msg: fmt.Sprintf("全局熔断开启（错误率阈值触发自动暂停，FR-53），冷却剩余 %s", retryAfter.Truncate(time.Second))})
+	}
+
+	// FR-53 L2 审批门：无审批 → 登记 pending 审批并返回 APPROVAL_REQUIRED（不产生指令）
+	if risk == RiskL2 && req.ApprovalID == "" {
+		reason := "L2 危险指令（FR-53）自动登记待审批"
+		if unregistered {
+			// 未登记类型按 L2 fail-closed（裁决②）：以「未登记」为理由标记（审计 + 审批行）
+			reason = fmt.Sprintf("类型 %d 未登记（docs/01 FR-53 分级裁决②：未登记默认按 L2 fail-closed，分级表登记后方可降级）", req.CommandType)
+			if err := s.db.InsertAudit(ctx, nil, "risk_unregistered", req.Target, reason, now); err != nil {
+				return SubmitResult{}, err
+			}
+		}
+		a, err := s.RequestApproval(ctx, ApprovalRequestInput{
+			Tenant: req.Tenant, Actor: req.Actor, Target: req.Target,
+			CommandType: req.CommandType, Payload: req.Payload,
+			Reason: reason,
+		})
+		if err != nil {
+			return SubmitResult{}, err
+		}
+		msg := fmt.Sprintf("L2 指令须独立 approver 确认（FR-53）：审批 %s 已登记待决议", a.ApprovalID)
+		if unregistered {
+			msg = fmt.Sprintf("L2 指令须独立 approver 确认（FR-53，未登记类型 fail-closed，docs/01 裁决②）：审批 %s 已登记待决议", a.ApprovalID)
+		}
+		return SubmitResult{State: "awaiting_approval", ApprovalID: a.ApprovalID}, &GuardError{
+			Code: ErrCodeApprovalNeeded,
+			Msg:  msg,
+		}
+	}
+	var l2Approval sqlite.Approval // L2 携审批提交的审批行（一次性消费在入队事务内，见下）
+	if risk == RiskL2 {
+		a, err := s.verifyApproval(ctx, req.ApprovalID, req)
+		if err != nil {
+			var ge *GuardError
+			if errors.As(err, &ge) {
+				return s.rejectGuard(ctx, now, ge)
+			}
+			return SubmitResult{}, err
+		}
+		l2Approval = a
+	}
+
+	// FR-53 L1：接收人白名单（配置即强制）+ 每目标限速（默认 10/min）
+	if risk == RiskL1 {
+		if err := s.checkWhitelist(ctx, req.Target, req.Payload); err != nil {
+			var ge *GuardError
+			if errors.As(err, &ge) {
+				return s.rejectGuard(ctx, now, ge)
+			}
+			return SubmitResult{}, err
+		}
+		if !s.guard.allowL1Rate(req.Target, now) {
+			return s.rejectGuard(ctx, now, &GuardError{Code: ErrCodeRateLimited,
+				Msg: fmt.Sprintf("L1 指令限速：目标 %s 超出 %d 条/%s（FR-53 默认限速）",
+					req.Target, s.guard.cfg.L1MaxPerTx, s.guard.cfg.L1Window)})
+		}
+	}
 
 	// FR-53 冻结：同风险级存在 pending execution_unknown → 拒绝新提交
 	if risk == RiskL1 || risk == RiskL2 {
@@ -118,6 +220,8 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 	commandID := wire.NewUUID()
 	var replay bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		// 并发兜底：早前重放判定与门链之间可能有同键新提交抢先入队
+		//（命中即返回原响应，不再消费审批/不重复入队）。
 		if idemKey != "" {
 			have, prevCmd, _, createdAt, ok, err := s.db.IdempotencyGet(ctx, tx, idemKey)
 			if err != nil {
@@ -139,6 +243,7 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 			Payload:     req.Payload,
 			State:       "created",
 			RiskClass:   risk,
+			DryRun:      req.DryRun,
 			CreatedAt:   now,
 		}
 		if err := s.db.InsertCommand(ctx, tx, cmd); err != nil {
@@ -154,6 +259,19 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 		if idemKey != "" {
 			if err := s.db.IdempotencyPut(ctx, tx, idemKey, paramsHash, commandID, "", now); err != nil {
 				return err
+			}
+		}
+		// 一次性审批消费与 E01 入队**同事务**（CR-t32-T3.2-R3）：此前独立 UPDATE 在
+		// 入队前执行，后续任一步失败（同键变参/风险冻结/DB 错误）会把审批烧掉而指令
+		// 未入队。入队成功才消费；整体回滚即不消费。并发抢先消费（0 行生效）fail-closed。
+		if risk == RiskL2 && req.ApprovalID != "" && !l2Approval.Recurring {
+			consumed, err := s.db.ConsumeApprovalTx(ctx, tx, req.ApprovalID, now)
+			if err != nil {
+				return err
+			}
+			if !consumed {
+				return &GuardError{Code: ErrCodeApprovalMismatch,
+					Msg: fmt.Sprintf("审批 %s 已被并发消费（FR-53 一次性审批与单次提交绑定）", req.ApprovalID)}
 			}
 		}
 		commandID = cmd.CommandID
@@ -175,6 +293,15 @@ func (s *Service) reject(ctx context.Context, now time.Time, reason string) (Sub
 		return SubmitResult{}, err
 	}
 	return SubmitResult{}, fmt.Errorf("scheduler: 指令被拒绝（E02）: %s", reason)
+}
+
+// rejectGuard 为 FR-53 门拒绝的 E02 留痕（仅审计，不入队；类型化错误供 REST 层映射）。
+func (s *Service) rejectGuard(ctx context.Context, now time.Time, ge *GuardError) (SubmitResult, error) {
+	detail, _ := json.Marshal(map[string]string{"gate": ge.Code, "reason": ge.Msg})
+	if err := s.db.InsertAudit(ctx, nil, "command_reject", "", string(detail), now); err != nil {
+		return SubmitResult{}, err
+	}
+	return SubmitResult{}, ge
 }
 
 func validatePayload(commandType int, payload string) error {
@@ -353,9 +480,30 @@ func (s *Service) handleResultTx(ctx context.Context, tx *sql.Tx, commandID stri
 		return "", statemachine.NewIllegalTransitionError(cmd.State, event, "HandleResult→"+targetState)
 	}
 	detail := fmt.Sprintf("errorCode=%d reason=%q timeCost=%d", r.ErrorCode, r.ErrorReason, r.TimeCost)
+	if cmd.DryRun {
+		detail = "dry-run " + detail
+	}
 	cmd.TerminalState = sql.NullString{String: edge.To, Valid: true}
 	_, err = s.applyEdgeWithEffect(ctx, tx, &cmd, edge, detail, now, outboxEffect(s.db, &cmd, r, edge, now))
-	return edge.To, err
+	if err != nil {
+		return "", err
+	}
+	// FR-53 全局熔断：真实执行终态计入样本（干跑不计，防污染风控统计）；
+	// 翻开/闭合迁移落审计事件（SR-12）。
+	if !cmd.DryRun {
+		if prev, next, tripped := s.breaker.Record(now, targetState == "succeeded"); tripped {
+			if err := s.db.InsertAudit(ctx, tx, "circuit_breaker_open", cmd.CommandID,
+				fmt.Sprintf("%s→%s（错误率阈值触发自动暂停，FR-53；结果 errorCode=%d）", prev, next, r.ErrorCode), now); err != nil {
+				return "", err
+			}
+		} else if prev == BreakerHalfOpen && next == BreakerClosed {
+			if err := s.db.InsertAudit(ctx, tx, "circuit_breaker_closed", cmd.CommandID,
+				"half_open→closed（试探期连续成功，自动恢复）", now); err != nil {
+				return "", err
+			}
+		}
+	}
+	return edge.To, nil
 }
 
 // outboxEffect 为终态结果的回调 outbox 入队（与迁移同事务，不变量②；
@@ -372,6 +520,7 @@ func outboxEffect(db *sqlite.DB, cmd *sqlite.Command, r *wire.ExecResult, edge s
 			"successList": r.SuccessList,
 			"failList":    r.FailList,
 			"finalState":  edge.To,
+			"dryRun":      cmd.DryRun,
 			"at":          now.UnixMilli(),
 		}
 		return db.EnqueueOutbox(context.Background(), tx, "exec_result", cmd.CommandID, payload, now)

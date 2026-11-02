@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+    feature:executor 清单（T3.1）。
+    纯逻辑库：无组件、无权限、无 exported 面（SR-10 组件最小化）。
+-->
+<manifest />

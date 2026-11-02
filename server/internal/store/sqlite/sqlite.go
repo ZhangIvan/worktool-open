@@ -62,12 +62,68 @@ type Command struct {
 	Epoch         int64
 	Seq           int64 // 最近一次下发分配的会话内出向 seq（重发在新会话重分配）
 	EventID       string
-	RiskClass     string // L1/L2/L3（FR-53 冻结联动）
+	RiskClass     string // L0/L1/L2（docs/01 FR-53 裁决口径；原 L3 别称废止，CR-R1-0）
+	DryRun        bool   // FR-54 干跑：同引擎同路径，仅产出报告不下发设备（T3.2）
 	CreatedAt     time.Time
 	DispatchedAt  sql.NullTime
 	AckDeadline   sql.NullTime // dispatched_at + ack_ttl_seconds
 	TerminalAt    sql.NullTime
 	TerminalState sql.NullString
+}
+
+// Approval 为 L2 审批记录（FR-53：L2 需独立 approver 确认；T3.2）。
+type Approval struct {
+	ApprovalID   string
+	Tenant       string
+	Actor        string // 申请主体（提交人）；approver 必须与之不同（独立 approver）
+	Target       string
+	CommandType  int
+	ParamsDigest string // sha256(target|type|payload)——审批与实际提交参数绑定
+	RiskClass    string
+	Status       string // pending | approved | rejected | consumed
+	Approver     string // 决议人（须 ≠ Actor）
+	Reason       string
+	Recurring    bool // 常设审批（cron 周期任务模板；一次性提交为 false）
+	CreatedAt    time.Time
+	DecidedAt    sql.NullTime
+}
+
+// RecipientWhitelist 为 L1 接收人白名单行（FR-53；T3.2）。
+type RecipientWhitelist struct {
+	Target    string // 统一目标键（v2 deviceId / v1:robotId）
+	Recipient string // 接收人标识（载荷 targetRoom，候选字段名 spec §4.4/Q1）
+	AddedBy   string
+	At        time.Time
+}
+
+// APIToken 为对外 REST 兼容面（/openapi/v1）API 令牌行（FR-34；T3.2）。
+// 仅存 SHA-256 hash（原始 token 一次返回，与服务端凭据同纪律，spec §5.1.3）。
+type APIToken struct {
+	TokenHash  string
+	RobotID    string
+	Tenant     string
+	Status     string // active | revoked
+	CreatedAt  time.Time
+	LastUsedAt sql.NullTime
+}
+
+// CronJob 为 cron 定时任务行（FR-38；T3.2）。
+type CronJob struct {
+	JobID         string
+	Name          string
+	Tenant        string
+	Actor         string
+	Target        string
+	CommandType   int
+	Payload       string // list[0] 原文 JSON（每次触发原样入队）
+	CronExpr      string // 5 字段（min hour dom mon dow）
+	RiskClass     string // 空 = 按类型分级（scheduler.ClassifyRisk）
+	ApprovalID    string // L2 任务须绑定常设审批（Recurring=true）
+	Enabled       bool
+	LastFireAt    sql.NullTime
+	NextFireAt    time.Time
+	LastCommandID string // 最近一次触发产生的 commandId（堆积保护判定）
+	CreatedAt     time.Time
 }
 
 // CommandEvent 为 command_events 行（每条边触发必须留痕，不变量①）。
@@ -114,6 +170,8 @@ type InboundEvent struct {
 	At            time.Time
 }
 
+// schema 为嵌入式 DDL。risk_class 兜底 DEFAULT 'L2'（fail-closed，docs/01 FR-53
+// 裁决②）：提交路径（scheduler.Submit）恒显式分级写入，DEFAULT 仅防御库外直插。
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version    INTEGER PRIMARY KEY,
@@ -165,7 +223,8 @@ CREATE TABLE IF NOT EXISTS commands (
   epoch          INTEGER NOT NULL DEFAULT 0,
   seq            INTEGER NOT NULL DEFAULT 0,
   event_id       TEXT NOT NULL DEFAULT '',
-  risk_class     TEXT NOT NULL DEFAULT 'L3',
+  risk_class     TEXT NOT NULL DEFAULT 'L2',
+  dry_run        INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,
   dispatched_at  INTEGER,
   ack_deadline   INTEGER,
@@ -233,6 +292,60 @@ CREATE TABLE IF NOT EXISTS inbound_events (
   at             INTEGER NOT NULL,
   PRIMARY KEY (device_id, event_id)
 );
+
+-- T3.2（迁移 v2）：FR-53 审批门 / L1 白名单、FR-38 cron、FR-34 兼容面令牌。
+CREATE TABLE IF NOT EXISTS approvals (
+  approval_id   TEXT PRIMARY KEY,
+  tenant        TEXT NOT NULL DEFAULT '',
+  actor         TEXT NOT NULL,
+  target        TEXT NOT NULL,
+  command_type  INTEGER NOT NULL,
+  params_digest TEXT NOT NULL,
+  risk_class    TEXT NOT NULL DEFAULT 'L2',
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected|consumed
+  approver      TEXT NOT NULL DEFAULT '',
+  reason        TEXT NOT NULL DEFAULT '',
+  recurring     INTEGER NOT NULL DEFAULT 0,
+  created_ms    INTEGER NOT NULL,
+  decided_ms    INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS recipient_whitelist (
+  target    TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  added_by  TEXT NOT NULL DEFAULT '',
+  at_ms     INTEGER NOT NULL,
+  PRIMARY KEY (target, recipient)
+);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  token_hash   TEXT PRIMARY KEY,
+  robot_id     TEXT NOT NULL,
+  tenant       TEXT NOT NULL DEFAULT 'default',
+  status       TEXT NOT NULL DEFAULT 'active',
+  created_ms   INTEGER NOT NULL,
+  last_used_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_robot ON api_tokens(robot_id);
+
+CREATE TABLE IF NOT EXISTS cron_jobs (
+  job_id           TEXT PRIMARY KEY,
+  name             TEXT NOT NULL DEFAULT '',
+  tenant           TEXT NOT NULL DEFAULT '',
+  actor            TEXT NOT NULL DEFAULT '',
+  target           TEXT NOT NULL,
+  command_type     INTEGER NOT NULL,
+  payload          TEXT NOT NULL,
+  cron_expr        TEXT NOT NULL,
+  risk_class       TEXT NOT NULL DEFAULT '',
+  approval_id      TEXT NOT NULL DEFAULT '',
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  last_fire_ms     INTEGER,
+  next_fire_ms     INTEGER NOT NULL,
+  last_command_id  TEXT NOT NULL DEFAULT '',
+  created_ms       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_due ON cron_jobs(enabled, next_fire_ms);
 `
 
 // ErrNotFound 为行未找到。
@@ -280,6 +393,21 @@ func (db *DB) migrate() error {
 	if version < 1 {
 		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)`, time.Now().UnixMilli()); err != nil {
 			return fmt.Errorf("sqlite: 登记迁移失败: %w", err)
+		}
+	}
+	// v2（T3.2）：commands 增 dry_run 列（既有库 ALTER；新库已含列）。
+	if version < 2 {
+		var hasCol int
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name='dry_run'`).Scan(&hasCol); err != nil {
+			return fmt.Errorf("sqlite: 探测 commands.dry_run 失败: %w", err)
+		}
+		if hasCol == 0 {
+			if _, err := db.sql.Exec(`ALTER TABLE commands ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return fmt.Errorf("sqlite: 迁移 v2（commands.dry_run）失败: %w", err)
+			}
+		}
+		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)`, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("sqlite: 登记迁移 v2 失败: %w", err)
 		}
 	}
 	return nil
@@ -497,17 +625,17 @@ func (db *DB) CloseSession(ctx context.Context, sessionID string, at time.Time) 
 func (db *DB) InsertCommand(ctx context.Context, tx *sql.Tx, c Command) error {
 	exec := db.exec(ctx, tx)
 	_, err := exec(`
-INSERT INTO commands(command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		c.CommandID, c.Target, c.CommandType, c.Payload, c.State, c.Epoch, c.Seq, c.EventID, c.RiskClass, c.CreatedAt.UnixMilli())
+INSERT INTO commands(command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		c.CommandID, c.Target, c.CommandType, c.Payload, c.State, c.Epoch, c.Seq, c.EventID, c.RiskClass, boolInt(c.DryRun), c.CreatedAt.UnixMilli())
 	return err
 }
 
 // UpdateCommandState 更新指令状态（迁移落库）。
 func (db *DB) UpdateCommandState(ctx context.Context, tx *sql.Tx, c Command) error {
 	exec := db.exec(ctx, tx)
-	_, err := exec(`UPDATE commands SET state=?, epoch=?, seq=?, event_id=?, dispatched_at=?, ack_deadline=?, terminal_at=?, terminal_state=? WHERE command_id=?`,
-		c.State, c.Epoch, c.Seq, c.EventID,
+	_, err := exec(`UPDATE commands SET state=?, epoch=?, seq=?, event_id=?, dry_run=?, dispatched_at=?, ack_deadline=?, terminal_at=?, terminal_state=? WHERE command_id=?`,
+		c.State, c.Epoch, c.Seq, c.EventID, boolInt(c.DryRun),
 		nullMilli(c.DispatchedAt), nullMilli(c.AckDeadline), nullMilli(c.TerminalAt), nullStrPtr(c.TerminalState),
 		c.CommandID)
 	return err
@@ -516,7 +644,7 @@ func (db *DB) UpdateCommandState(ctx context.Context, tx *sql.Tx, c Command) err
 // GetCommand 按 commandID 查询。
 func (db *DB) GetCommand(ctx context.Context, commandID string) (Command, bool, error) {
 	row := db.sql.QueryRowContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
 FROM commands WHERE command_id = ?`, commandID)
 	return scanCommand(row)
 }
@@ -524,23 +652,24 @@ FROM commands WHERE command_id = ?`, commandID)
 // GetCommandForUpdate 在事务内取指令行（SQLite 整库锁下仍按约定加 IMMEDIATE 语义由调用方保证）。
 func (db *DB) GetCommandForUpdate(ctx context.Context, tx *sql.Tx, commandID string) (Command, bool, error) {
 	row := tx.QueryRowContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
 FROM commands WHERE command_id = ?`, commandID)
 	return scanCommand(row)
 }
 
 func scanCommand(row interface{ Scan(...any) error }) (Command, bool, error) {
 	var c Command
-	var created int64
+	var created, dryRun int64
 	var dispatched, deadline, terminal sql.NullInt64
 	var terminalState sql.NullString
 	if err := row.Scan(&c.CommandID, &c.Target, &c.CommandType, &c.Payload, &c.State, &c.Epoch, &c.Seq, &c.EventID,
-		&c.RiskClass, &created, &dispatched, &deadline, &terminal, &terminalState); err != nil {
+		&c.RiskClass, &dryRun, &created, &dispatched, &deadline, &terminal, &terminalState); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Command{}, false, nil
 		}
 		return Command{}, false, err
 	}
+	c.DryRun = dryRun != 0
 	c.CreatedAt = time.UnixMilli(created)
 	c.DispatchedAt = milliTime(dispatched)
 	c.AckDeadline = milliTime(deadline)
@@ -552,10 +681,12 @@ func scanCommand(row interface{ Scan(...any) error }) (Command, bool, error) {
 }
 
 // QueuedForTarget 返回目标的待下发指令（queued，FIFO）。
+// dry_run 指令除外（FR-54：干跑不产生真实副作用，绝不下发设备——由
+// ExecuteDryRun 在服务端同步走完同一状态机）。
 func (db *DB) QueuedForTarget(ctx context.Context, target string, limit int) ([]Command, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
-FROM commands WHERE target = ? AND state = 'queued' ORDER BY created_at LIMIT ?`, target, limit)
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+FROM commands WHERE target = ? AND state = 'queued' AND dry_run = 0 ORDER BY created_at LIMIT ?`, target, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +697,7 @@ FROM commands WHERE target = ? AND state = 'queued' ORDER BY created_at LIMIT ?`
 // InflightStates 返回处于执行链路上的指令（dispatched/acked/running）。
 func (db *DB) InflightStates(ctx context.Context) (map[string][]Command, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
 FROM commands WHERE state IN ('dispatched','acked','running')`)
 	if err != nil {
 		return nil, err
@@ -586,7 +717,7 @@ FROM commands WHERE state IN ('dispatched','acked','running')`)
 // DueAckTTL 返回 ACK TTL 到期的 dispatched/acked 指令（E17/E18 扫描输入）。
 func (db *DB) DueAckTTL(ctx context.Context, now time.Time) ([]Command, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
 FROM commands WHERE state IN ('dispatched','acked') AND ack_deadline IS NOT NULL AND ack_deadline < ?`, now.UnixMilli())
 	if err != nil {
 		return nil, err
@@ -617,7 +748,7 @@ func (db *DB) PendingUnknownRisk(ctx context.Context) (map[string]int, error) {
 // CommandsByState 返回指定状态的指令（测试/对账）。
 func (db *DB) CommandsByState(ctx context.Context, state string) ([]Command, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
+SELECT command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at, dispatched_at, ack_deadline, terminal_at, terminal_state
 FROM commands WHERE state = ? ORDER BY created_at`, state)
 	if err != nil {
 		return nil, err
@@ -853,6 +984,249 @@ func (db *DB) GetInboundReceipt(ctx context.Context, deviceID, eventID string) (
 		return "", false, err
 	}
 	return receipt, true, nil
+}
+
+// ---- T3.2：审批（FR-53 L2）/ 白名单（L1）/ API 令牌（FR-34）/ cron（FR-38）----
+
+// InsertApproval 落一条审批请求（pending）。
+func (db *DB) InsertApproval(ctx context.Context, a Approval) error {
+	_, err := db.sql.ExecContext(ctx, `
+INSERT INTO approvals(approval_id, tenant, actor, target, command_type, params_digest, risk_class, status, approver, reason, recurring, created_ms, decided_ms)
+VALUES (?,?,?,?,?,?,?,'pending','',?,?,?,NULL)`,
+		a.ApprovalID, a.Tenant, a.Actor, a.Target, a.CommandType, a.ParamsDigest, a.RiskClass, a.Reason, boolInt(a.Recurring), a.CreatedAt.UnixMilli())
+	return err
+}
+
+// GetApproval 按 approvalID 查询。
+func (db *DB) GetApproval(ctx context.Context, approvalID string) (Approval, bool, error) {
+	row := db.sql.QueryRowContext(ctx, `
+SELECT approval_id, tenant, actor, target, command_type, params_digest, risk_class, status, approver, reason, recurring, created_ms, decided_ms
+FROM approvals WHERE approval_id = ?`, approvalID)
+	var a Approval
+	var recurring int
+	var created int64
+	var decided sql.NullInt64
+	if err := row.Scan(&a.ApprovalID, &a.Tenant, &a.Actor, &a.Target, &a.CommandType, &a.ParamsDigest, &a.RiskClass,
+		&a.Status, &a.Approver, &a.Reason, &recurring, &created, &decided); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Approval{}, false, nil
+		}
+		return Approval{}, false, err
+	}
+	a.Recurring = recurring != 0
+	a.CreatedAt = time.UnixMilli(created)
+	a.DecidedAt = milliTime(decided)
+	return a, true, nil
+}
+
+// DecideApproval 事务内决议审批：仅 pending 可决议（幂等冲突返回 ok=false）。
+func (db *DB) DecideApproval(ctx context.Context, approvalID, status, approver, reason string, decidedAt time.Time) (bool, error) {
+	ok := false
+	err := db.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+UPDATE approvals SET status=?, approver=?, reason=?, decided_ms=? WHERE approval_id=? AND status='pending'`,
+			status, approver, reason, decidedAt.UnixMilli(), approvalID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		ok = n == 1
+		return nil
+	})
+	return ok, err
+}
+
+// ConsumeApprovalTx 事务内把一次性审批标记为 consumed（approved → consumed；
+// 常设审批不动）。与 E01 入队同事务（CR-t32-T3.2-R3）：入队失败整体回滚不烧审批。
+// 返回是否生效（0 行 = 已被并发消费/非常设审批态，调用方 fail-closed）。
+func (db *DB) ConsumeApprovalTx(ctx context.Context, tx *sql.Tx, approvalID string, at time.Time) (bool, error) {
+	res, err := db.exec(ctx, tx)(`
+UPDATE approvals SET status='consumed', decided_ms=COALESCE(decided_ms, ?) WHERE approval_id=? AND status='approved' AND recurring=0`,
+		at.UnixMilli(), approvalID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// ApprovalsByStatus 按状态列出审批（测试/审计面）。
+func (db *DB) ApprovalsByStatus(ctx context.Context, status string) ([]Approval, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT approval_id, tenant, actor, target, command_type, params_digest, risk_class, status, approver, reason, recurring, created_ms, decided_ms
+FROM approvals WHERE status=? ORDER BY created_ms`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		var a Approval
+		var recurring int
+		var created int64
+		var decided sql.NullInt64
+		if err := rows.Scan(&a.ApprovalID, &a.Tenant, &a.Actor, &a.Target, &a.CommandType, &a.ParamsDigest, &a.RiskClass,
+			&a.Status, &a.Approver, &a.Reason, &recurring, &created, &decided); err != nil {
+			return nil, err
+		}
+		a.Recurring = recurring != 0
+		a.CreatedAt = time.UnixMilli(created)
+		a.DecidedAt = milliTime(decided)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// AddRecipientWhitelist 登记接收人白名单（upsert）。
+func (db *DB) AddRecipientWhitelist(ctx context.Context, target, recipient, addedBy string, at time.Time) error {
+	_, err := db.sql.ExecContext(ctx, `
+INSERT INTO recipient_whitelist(target, recipient, added_by, at_ms) VALUES (?,?,?,?)
+ON CONFLICT(target, recipient) DO UPDATE SET added_by=excluded.added_by, at_ms=excluded.at_ms`,
+		target, recipient, addedBy, at.UnixMilli())
+	return err
+}
+
+// RemoveRecipientWhitelist 移除一条白名单。
+func (db *DB) RemoveRecipientWhitelist(ctx context.Context, target, recipient string) error {
+	_, err := db.sql.ExecContext(ctx, `DELETE FROM recipient_whitelist WHERE target=? AND recipient=?`, target, recipient)
+	return err
+}
+
+// WhitelistForTarget 返回目标的全部白名单接收人（空切片 = 未配置白名单）。
+func (db *DB) WhitelistForTarget(ctx context.Context, target string) ([]string, error) {
+	rows, err := db.sql.QueryContext(ctx, `SELECT recipient FROM recipient_whitelist WHERE target=? ORDER BY at_ms`, target)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// InsertAPIToken 登记兼容面令牌（仅 hash）。
+func (db *DB) InsertAPIToken(ctx context.Context, tokenHash, robotID, tenant string, at time.Time) error {
+	_, err := db.sql.ExecContext(ctx, `
+INSERT INTO api_tokens(token_hash, robot_id, tenant, status, created_ms) VALUES (?,?,?,'active',?)`,
+		tokenHash, robotID, tenant, at.UnixMilli())
+	return err
+}
+
+// GetAPIToken 按 hash 查询令牌（原始 token 不落库——按 hash 索引查询即比对）。
+func (db *DB) GetAPIToken(ctx context.Context, tokenHash string) (APIToken, bool, error) {
+	row := db.sql.QueryRowContext(ctx, `
+SELECT token_hash, robot_id, tenant, status, created_ms, last_used_ms FROM api_tokens WHERE token_hash=?`, tokenHash)
+	var t APIToken
+	var created int64
+	var lastUsed sql.NullInt64
+	if err := row.Scan(&t.TokenHash, &t.RobotID, &t.Tenant, &t.Status, &created, &lastUsed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return APIToken{}, false, nil
+		}
+		return APIToken{}, false, err
+	}
+	t.CreatedAt = time.UnixMilli(created)
+	t.LastUsedAt = milliTime(lastUsed)
+	return t, true, nil
+}
+
+// TouchAPIToken 记录令牌最近使用（审计辅助；失败不阻断请求）。
+func (db *DB) TouchAPIToken(ctx context.Context, tokenHash string, at time.Time) error {
+	_, err := db.sql.ExecContext(ctx, `UPDATE api_tokens SET last_used_ms=? WHERE token_hash=?`, at.UnixMilli(), tokenHash)
+	return err
+}
+
+// InsertCronJob 落一条 cron 任务。
+func (db *DB) InsertCronJob(ctx context.Context, j CronJob) error {
+	_, err := db.sql.ExecContext(ctx, `
+INSERT INTO cron_jobs(job_id, name, tenant, actor, target, command_type, payload, cron_expr, risk_class, approval_id, enabled, last_fire_ms, next_fire_ms, last_command_id, created_ms)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		j.JobID, j.Name, j.Tenant, j.Actor, j.Target, j.CommandType, j.Payload, j.CronExpr, j.RiskClass, j.ApprovalID,
+		boolInt(j.Enabled), nullMilli(j.LastFireAt), j.NextFireAt.UnixMilli(), j.LastCommandID, j.CreatedAt.UnixMilli())
+	return err
+}
+
+// DueCronJobs 返回到期任务（enabled 且 next_fire <= now）。
+func (db *DB) DueCronJobs(ctx context.Context, now time.Time, limit int) ([]CronJob, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT job_id, name, tenant, actor, target, command_type, payload, cron_expr, risk_class, approval_id, enabled, last_fire_ms, next_fire_ms, last_command_id, created_ms
+FROM cron_jobs WHERE enabled=1 AND next_fire_ms <= ? ORDER BY next_fire_ms LIMIT ?`, now.UnixMilli(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectCronJobs(rows)
+}
+
+// UpdateCronJobFire 登记一次触发（last_fire/next_fire/last_command_id）。
+func (db *DB) UpdateCronJobFire(ctx context.Context, jobID, lastCommandID string, lastFire, nextFire time.Time) error {
+	_, err := db.sql.ExecContext(ctx, `
+UPDATE cron_jobs SET last_fire_ms=?, next_fire_ms=?, last_command_id=? WHERE job_id=?`,
+		lastFire.UnixMilli(), nextFire.UnixMilli(), lastCommandID, jobID)
+	return err
+}
+
+// SetCronJobEnabled 启停任务。
+func (db *DB) SetCronJobEnabled(ctx context.Context, jobID string, enabled bool) error {
+	_, err := db.sql.ExecContext(ctx, `UPDATE cron_jobs SET enabled=? WHERE job_id=?`, boolInt(enabled), jobID)
+	return err
+}
+
+// CronJobs 列出全部任务（测试/运维面）。
+func (db *DB) CronJobs(ctx context.Context) ([]CronJob, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT job_id, name, tenant, actor, target, command_type, payload, cron_expr, risk_class, approval_id, enabled, last_fire_ms, next_fire_ms, last_command_id, created_ms
+FROM cron_jobs ORDER BY created_ms`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectCronJobs(rows)
+}
+
+func collectCronJobs(rows *sql.Rows) ([]CronJob, error) {
+	var out []CronJob
+	for rows.Next() {
+		var j CronJob
+		var enabled int
+		var lastFire sql.NullInt64
+		var nextFire, created int64
+		if err := rows.Scan(&j.JobID, &j.Name, &j.Tenant, &j.Actor, &j.Target, &j.CommandType, &j.Payload, &j.CronExpr,
+			&j.RiskClass, &j.ApprovalID, &enabled, &lastFire, &nextFire, &j.LastCommandID, &created); err != nil {
+			return nil, err
+		}
+		j.Enabled = enabled != 0
+		j.LastFireAt = milliTime(lastFire)
+		j.NextFireAt = time.UnixMilli(nextFire)
+		j.CreatedAt = time.UnixMilli(created)
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// OutboxByCommand 返回该指令的全部出站行（RAW_CONFIRM 结果查询取 kind=exec_result）。
+func (db *DB) OutboxByCommand(ctx context.Context, commandID string) ([]OutboxItem, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at
+FROM outbox WHERE command_id=? ORDER BY id`, commandID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectOutbox(rows)
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ---- 内部辅助 ----

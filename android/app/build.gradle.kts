@@ -63,6 +63,10 @@ dependencies {
     // 协议层（T2.2：纯 JVM 协议语义 + Android 落地适配）
     implementation(project(":core:protocol"))
     implementation(project(":core:protocol-android"))
+    // 本地任务引擎（T3.3：模式A 规则/cron/fallback 仲裁/暂停/干跑，纯 JVM）
+    implementation(project(":core:task-engine"))
+    // T3.1 指令执行器框架（app 层装配适配：FeatureExecutorBinding 合流两车道）
+    implementation(project(":feature:executor"))
 
     testImplementation(libs.junit)
 }

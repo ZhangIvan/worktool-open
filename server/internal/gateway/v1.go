@@ -234,7 +234,8 @@ func (c *v1Conn) handleReportItem(ctx context.Context, item json.RawMessage, now
 	}
 }
 
-// flushQueued 把目标 queued 指令以 v1 信封下发并落 E03。
+// flushQueued 把目标 queued 指令以 v1 信封下发并落 E03（取批→发送→留痕整段
+// 持 Hub 级 flush 锁，防并发双发，见 Hub.flushMu 注释）。
 func (c *v1Conn) flushQueued(ctx context.Context) (int, error) {
 	c.mu.Lock()
 	closed := c.closed
@@ -242,6 +243,8 @@ func (c *v1Conn) flushQueued(ctx context.Context) (int, error) {
 	if closed {
 		return 0, nil
 	}
+	c.hub.flushMu.Lock()
+	defer c.hub.flushMu.Unlock()
 	cmds, err := c.hub.Pipeline.QueuedForTarget(ctx, c.target, 64)
 	if err != nil {
 		return 0, err

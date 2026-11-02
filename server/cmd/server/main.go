@@ -89,12 +89,13 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	}
 	srv.Outbox = worker
 
-	// 后台任务：ACK TTL 扫描（E17/E18）+ 调度泵 + 回调投递
+	// 后台任务：ACK TTL 扫描（E17/E18）+ 调度泵 + 回调投递 + cron 定时调度（FR-38）
 	bgCtx, bgStop := context.WithCancel(ctx)
 	defer bgStop()
 	go func() { _ = pipeline.RunAckTTLScanner(bgCtx, 10*time.Second) }()
 	go func() { _ = hub.RunDispatchPump(bgCtx, time.Second) }()
 	go func() { _ = worker.Run(bgCtx) }()
+	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()
 
 	httpSrv := &http.Server{
 		Handler:           api.NewServeMux(api.Options{Server: srv}),

@@ -61,7 +61,7 @@ func (f *fixture) submitE(typ int, risk string) (string, error) {
 func (f *fixture) seed(t *testing.T, state string) string {
 	t.Helper()
 	ctx := context.Background()
-	id := f.submit(t, 203, RiskL3)
+	id := f.submit(t, 203, RiskL0)
 	if state == "queued" {
 		return id
 	}
@@ -101,9 +101,9 @@ var edgeDrivers = map[string]struct {
 	from string
 	run  func(f *fixture, t *testing.T) string
 }{
-	"E01": {"created", func(f *fixture, t *testing.T) string { return f.submit(t, 203, RiskL3) }},
+	"E01": {"created", func(f *fixture, t *testing.T) string { return f.submit(t, 203, RiskL0) }},
 	"E02": {"created", func(f *fixture, t *testing.T) string {
-		if _, err := f.submitE(999, RiskL3); err == nil {
+		if _, err := f.submitE(999, RiskL0); err == nil {
 			t.Fatal("非法指令应被拒绝（E02）")
 		}
 		return ""
@@ -472,7 +472,7 @@ func TestRiskFreeze(t *testing.T) {
 		t.Fatalf("L1 应被冻结: %v", err)
 	}
 	// 异类 L3 不受影响
-	if _, err := f.submitE(203, RiskL3); err != nil {
+	if _, err := f.submitE(203, RiskL0); err != nil {
 		t.Fatalf("L3 不应被冻结: %v", err)
 	}
 	// 对账离出后解冻（E13 never_started）
@@ -591,7 +591,7 @@ func TestCrashRecoverySemantics(t *testing.T) {
 	if _, err := f.svc.HandleResult(ctx, term, &wire.ExecResult{Type: 203, ErrorCode: 0}); err != nil {
 		t.Fatal(err)
 	}
-	q := f.submit(t, 203, RiskL3)
+	q := f.submit(t, 203, RiskL0)
 	got3, err := restarted.RecoverInflight(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -640,7 +640,7 @@ func TestOrphanResult(t *testing.T) {
 // TestSubmitRejectE02：非法载荷 → E02 仅审计（无指令行、不入队）。
 func TestSubmitRejectE02(t *testing.T) {
 	f := newFixture(t)
-	if _, err := f.submitE(203, RiskL3); err != nil {
+	if _, err := f.submitE(203, RiskL0); err != nil {
 		// 用合法基线确认 submit 可用
 		t.Fatalf("基线提交失败: %v", err)
 	}

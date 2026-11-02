@@ -45,6 +45,11 @@ type Hub struct {
 	v2ByDev map[string]*v2Session // deviceID → 当前活动会话（一设备一会话）
 	v1      map[string]*v1Conn    // robotId → v1 兼容连接
 
+	// flushMu 串行化“取 queued 批→发送→E03 留痕”整段（hello 冲刷/调度泵/
+	// 显式 DispatchQueued 并发时防止同一指令被取走两次——双发帧 + 第二次
+	// MarkDispatched 409；T3.2 修复的既有竞态）。
+	flushMu sync.Mutex
+
 	upgrader websocket.Upgrader
 }
 
@@ -263,9 +268,16 @@ func closeWith(mu *sync.Mutex, conn *websocket.Conn, code int, reason string) {
 		websocket.FormatCloseMessage(code, reason), time.Now().Add(2*time.Second))
 }
 
-// writeRaw 线程安全写原始文本帧。
+// wsWriteDeadline 单帧写上限（CR-t32-T3.2-R4）：卡死/恶意客户端 TCP 零窗口停读时
+// WriteMessage 可无限期阻塞——写锁（会话 writeMu/Hub flushMu）被长期持有会放大为
+// 全部设备的调度泵停摆。超时即判连接失效（写错误走既有关闭路径）。
+// var 而非 const：慢客户端回归测试注入短值，避免真等 10s。
+var wsWriteDeadline = 10 * time.Second
+
+// writeRaw 线程安全写原始文本帧（写前设 deadline，见 [wsWriteDeadline]）。
 func writeRaw(mu *sync.Mutex, conn *websocket.Conn, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteDeadline))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }

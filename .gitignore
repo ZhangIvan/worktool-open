@@ -27,5 +27,7 @@ secrets/
 
 # 杂项
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 Thumbs.db

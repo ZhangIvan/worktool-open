@@ -557,6 +557,9 @@ func (h *Hub) dispatchV2Payload(ctx context.Context, s *v2Session, env *wire.Env
 }
 
 // flushQueued 把目标的 queued 指令构造为签名帧下发并落 E03（先发送后留痕）。
+// 取批→发送→留痕整段持 Hub 级 flush 锁：与 hello 冲刷/调度泵并发时防止同一
+// queued 指令被取走两次（双发帧 + 第二次 MarkDispatched 409，T3.2 修复的
+// 既有竞态——帧发送为小文本写，锁窗口可接受）。
 func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
 	s.mu.Lock()
 	closed := s.closed
@@ -564,6 +567,8 @@ func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
 	if closed {
 		return 0, nil
 	}
+	h.flushMu.Lock()
+	defer h.flushMu.Unlock()
 	cmds, err := h.Pipeline.QueuedForTarget(ctx, s.DeviceID, 64)
 	if err != nil {
 		return 0, err

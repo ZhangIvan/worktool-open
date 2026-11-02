@@ -55,6 +55,10 @@ type Server struct {
 	Log      Logger
 
 	Outbox *OutboxWorker
+
+	// apifox 兼容面（FR-34，T3.2）：配置与按 robot 限流器（默认 60QPM）。
+	openapiCfg     OpenAPIConfig
+	openapiLimiter *openapiLimiter
 }
 
 // NewServer 装配 API 服务。
@@ -62,7 +66,18 @@ func NewServer(db *sqlite.DB, hub *gateway.Hub, pipeline *scheduler.Service, m *
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{DB: db, Hub: hub, Pipeline: pipeline, Machine: m, Now: time.Now, Log: logger}
+	cfg := OpenAPIConfig{}.withDefaults()
+	return &Server{
+		DB: db, Hub: hub, Pipeline: pipeline, Machine: m, Now: time.Now, Log: logger,
+		openapiCfg: cfg, openapiLimiter: newOpenAPILimiter(cfg),
+	}
+}
+
+// SetOpenAPIConfig 调整兼容面限流配置（默认 60QPM；部署/测试注入）。
+func (s *Server) SetOpenAPIConfig(cfg OpenAPIConfig) {
+	cfg = cfg.withDefaults()
+	s.openapiCfg = cfg
+	s.openapiLimiter = newOpenAPILimiter(cfg)
 }
 
 // Options 为 NewServeMux 的可选依赖（零值 = 仅 /healthz 骨架模式，T1.3 兼容）。
@@ -90,6 +105,9 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 	mux.HandleFunc("/api/v2/device-sessions", s.Hub.HandleCreateSession) // POST（方法守卫在 handler）
 	mux.HandleFunc("/api/v2/device-sessions/{sessionId}", s.Hub.HandleDeviceSessionWS)
 	mux.HandleFunc("/webserver/wework/{robotId}", s.Hub.HandleV1)
+	// apifox 兼容面（FR-34，ADR-08；方法守卫在 handler）
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands", s.HandleOpenAPICommand)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands/{commandId}", s.HandleOpenAPIResult)
 	return mux
 }
 
