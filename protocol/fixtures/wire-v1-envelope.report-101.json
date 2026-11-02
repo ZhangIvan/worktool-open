@@ -1,0 +1,27 @@
+{
+  "socketType": 2,
+  "messageId": "2026-11-02#10:00:03#99887766-5544-4d3c-9b2a-0f1e2d3c4b5a",
+  "meta": "",
+  "apiSend": 0,
+  "encryptType": 0,
+  "list": [
+    {
+      "type": 101,
+      "roomType": 2,
+      "textType": 1,
+      "subMessageList": [
+        {
+          "sender": 0,
+          "textType": 1,
+          "itemMessageList": [
+            {"feature": 2, "text": "示例入站文本消息"}
+          ],
+          "nameList": ["张三"],
+          "imageRepeat": false,
+          "imageSize": 0,
+          "image": ""
+        }
+      ]
+    }
+  ]
+}

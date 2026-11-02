@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:wire-v1-envelope:1.0.0",
+  "title": "WorkTool-Open v1 兼容信封（WeworkMessageListBean）",
+  "description": "上行/下行统一信封，字段语义还原自上游开源仓库 v2.8.1（见 protocol/spec.md §4，来源 local-private/audit/02 §A）。v1 范围 encryptType 仅 0/1；v2 帧（meta 为对象、encryptType=2）由 command-envelope.schema.json 描述。",
+  "type": "object",
+  "required": ["socketType"],
+  "properties": {
+    "socketType": {
+      "type": "integer",
+      "enum": [0, 1, 2, 3],
+      "description": "0=心跳 1=消息确认 2=消息列表(指令或上报) 3=指令执行结果确认(RAW_CONFIRM)"
+    },
+    "messageId": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}#[0-9]{2}:[0-9]{2}:[0-9]{2}#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "description": "格式 yyyy-MM-dd#HH:mm:ss#<UUID>（上游生成时把日期与时间之间的空格替换为 #）"
+    },
+    "meta": {
+      "type": "string",
+      "description": "v1：透传自定义信息（字符串）。v2 帧中 meta 为对象，见 command-envelope.schema.json"
+    },
+    "apiSend": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0=后台消息 1=API 指令调用"
+    },
+    "list": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/weworkMessageBean"},
+      "description": "encryptType=0 时明文载荷"
+    },
+    "encryptedList": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]+$",
+      "description": "加密后的 list 的 hex 编码。encryptType=1=上游 AES/CBC/PKCS7（默认禁用，仅解码兼容）；encryptType=2=v2 AES-256-GCM"
+    },
+    "encryptType": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0=不加密 1=AES/CBC/PKCS7（上游硬编码 key/iv，本项目默认禁用，SR-02/G2）"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"encryptType": {"const": 0}}, "required": ["encryptType"]},
+      "then": {"required": ["list"]}
+    },
+    {
+      "if": {"properties": {"encryptType": {"const": 1}}, "required": ["encryptType"]},
+      "then": {"required": ["encryptedList"]}
+    }
+  ],
+  "definitions": {
+    "weworkMessageBean": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "integer",
+          "description": "指令/消息类型，全表见 spec.md §4.2（11/101/102/201~234/301~304/501~509，v2 扩展 9xx 控制类）"
+        },
+        "roomType": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "description": "0=未知 1=外部群 2=外部联系人 3=内部群 4=内部联系人"
+        },
+        "textType": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18,
+          "description": "0=未知 1=文本 2=图片 3=语音 4=名片 5=视频 6=定位 7=小程序 8=链接 9=文件 10=警告 11=腾讯文档 12=群接龙 13=合并聊天记录 14=群收集表 15=引用回复 16=内部群机器人通知 17=视频号视频 18=视频号直播"
+        },
+        "at": {"type": "array", "items": {"type": "string"}},
+        "atList": {"type": "array", "items": {"type": "string"}},
+        "extraText": {"type": "string", "description": "转发类指令的附加留言"},
+        "fileUrl": {"type": "string"},
+        "fileBase64": {"type": "string"},
+        "fileType": {"type": "string"},
+        "friend": {"$ref": "#/definitions/friend"},
+        "subMessageList": {"type": "array", "items": {"$ref": "#/definitions/subMessageBean"}},
+        "source": {
+          "type": "string",
+          "enum": ["local", "server"],
+          "description": "v2 增量：端侧离线已执行事件重连补报时 source=local（docs/02 §5.2 重连合并）"
+        }
+      },
+      "additionalProperties": true,
+      "description": "载荷字段仅收录已还原字段名（audit/02 §A）；正文/目标会话等字段名待 apifox 对照冻结（spec.md §4.4），additionalProperties 放开以兼容上游"
+    },
+    "subMessageBean": {
+      "type": "object",
+      "properties": {
+        "sender": {"type": "integer", "minimum": 0, "maximum": 2, "description": "0=他人 1=自己 2=系统"},
+        "textType": {"type": "integer", "minimum": 0, "maximum": 18},
+        "itemMessageList": {"type": "array", "items": {"$ref": "#/definitions/itemMessageBean"}},
+        "nameList": {"type": "array", "items": {"type": "string"}},
+        "imageRepeat": {"type": "boolean"},
+        "imageSize": {"type": "integer", "minimum": 0},
+        "image": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "itemMessageBean": {
+      "type": "object",
+      "properties": {
+        "feature": {"type": "integer", "enum": [0, 2], "description": "0=消息头上方系统信息 2=消息内容"},
+        "text": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "friend": {
+      "type": "object",
+      "properties": {
+        "phone": {"type": "string"},
+        "name": {"type": "string"},
+        "markName": {"type": "string"},
+        "markCorp": {"type": "string"},
+        "markExtra": {"type": "string"},
+        "tagList": {"type": "array", "items": {"type": "string"}},
+        "newFriend": {"type": "boolean"},
+        "leavingMsg": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

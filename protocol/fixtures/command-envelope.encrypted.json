@@ -1,0 +1,17 @@
+{
+  "socketType": 2,
+  "messageId": "2026-11-02#10:00:06#bccddeef-ff00-4a56-8b8b-1c2d3e4f5065",
+  "meta": {
+    "ver": 2,
+    "ts": 1793613606000,
+    "nonce": "6d2e0b8c4f3a5d7e9b1c3e5f7a9d0e2f",
+    "hmac": "e753fbdfdbd6e521197ce47278e532ce3e2407308327eb3749de810a71b4b544",
+    "seq": 414,
+    "eventId": "8e7f6a5b-4c3d-4e5f-9a0b-2c3d4e5f6a7b",
+    "commandId": "d2c3b4a5-f6e7-4d8c-9a0b-1d2e3f4a5b6c",
+    "tokenVersion": 2
+  },
+  "apiSend": 1,
+  "encryptType": 2,
+  "encryptedList": "244e3fd5a4d243fca2fec1c9330de45c440e2c7808b25e25ff3375c6434d4098117d6232eaebaba28015a7bc6283a1f1"
+}

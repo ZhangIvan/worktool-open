@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  core:accessibility 清单（T1.2）。
+  SR-10 透明命名：服务 label/description 明示用途与归属，不伪装系统或第三方组件。
+  - exported=false：仅系统（持 BIND_ACCESSIBILITY_SERVICE）可绑定，不对其他应用开放
+  - 无任何 uses-permission
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name=".WorkToolAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+    </application>
+
+</manifest>

@@ -1,0 +1,74 @@
+name: android
+
+# T1.2（L1 车道）：android 壳工程构建与 JVM 单测。
+# DoD（docs/03 §2 T1.2）：CI 出 debug APK。
+
+on:
+  push:
+    branches: [main, zcode/main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+# Release 签名（docs/ops/SIGNING.md §2）：四项 secrets 齐备才执行 assembleRelease，
+# 任一缺失（secrets 未配置时为空串）则自动跳过 —— debug 签名先行。
+env:
+  WORKTOOL_STORE_FILE: ${{ secrets.WORKTOOL_STORE_FILE }}
+  WORKTOOL_STORE_PASSWORD: ${{ secrets.WORKTOOL_STORE_PASSWORD }}
+  WORKTOOL_KEY_ALIAS: ${{ secrets.WORKTOOL_KEY_ALIAS }}
+  WORKTOOL_KEY_PASSWORD: ${{ secrets.WORKTOOL_KEY_PASSWORD }}
+
+jobs:
+  build:
+    name: assembleDebug + test（JDK17 / AGP 8.5 / Gradle 8.7）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: JDK 17（temurin）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle 8.7（AGP 8.5 要求 ≥8.7；含构建缓存）
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 构建 debug APK + JVM 单测
+        run: gradle --no-daemon assembleDebug test
+
+      - name: Release 构建（签名 env 齐备时；缺失则跳过）
+        if: >-
+          env.WORKTOOL_STORE_FILE != '' &&
+          env.WORKTOOL_STORE_PASSWORD != '' &&
+          env.WORKTOOL_KEY_ALIAS != '' &&
+          env.WORKTOOL_KEY_PASSWORD != ''
+        run: gradle --no-daemon assembleRelease
+
+      - name: 上传 debug APK（T1.2 DoD 产物）
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: 上传 release APK（如已执行签名构建）
+        if: >-
+          env.WORKTOOL_STORE_FILE != '' &&
+          env.WORKTOOL_STORE_PASSWORD != '' &&
+          env.WORKTOOL_KEY_ALIAS != '' &&
+          env.WORKTOOL_KEY_PASSWORD != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk

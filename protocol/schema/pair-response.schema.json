@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:pair-response:1.0.0",
+  "title": "WorkTool-Open v2 配对响应",
+  "description": "服务端注册设备公钥后签发凭据。deviceToken 随机 256-bit，服务端仅存 SHA-256 hash，端侧 Keystore 加密存储。规格见 protocol/spec.md §5.1。",
+  "type": "object",
+  "required": ["deviceId", "sessionId", "deviceToken", "tokenVersion", "serverX25519PublicKey", "heartbeatIntervalSeconds", "sessionTimeoutSeconds", "rotationIntervalDays", "issuedAt", "wsPath"],
+  "properties": {
+    "deviceId": {"type": "string", "pattern": "^[A-Za-z0-9._-]{8,64}$"},
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "本次协商的会话标识，同时作为 HKDF salt 输入（spec.md §5.3）"
+    },
+    "deviceToken": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "随机 256-bit 凭据（hex）。逐帧 HMAC 的密钥即此原始字节"
+    },
+    "tokenVersion": {"type": "integer", "minimum": 1, "description": "初始为 1；轮换 +1、撤销 +1 并广播 REVOKED（spec.md §5.5）"},
+    "serverX25519PublicKey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "服务端 X25519 临时公钥（32 字节 hex），与设备 x25519EphemeralPublicKey 做 ECDH"
+    },
+    "heartbeatIntervalSeconds": {"const": 15, "description": "v2 会话心跳间隔（docs/02 §5 冻结值）"},
+    "sessionTimeoutSeconds": {"const": 45, "description": "失联判定窗口，超时关闭会话（docs/02 §5 冻结值）"},
+    "rotationIntervalDays": {"type": "integer", "minimum": 1, "description": "凭据轮换周期，默认 30 天（docs/02 §5）"},
+    "issuedAt": {"type": "integer", "minimum": 0, "description": "签发时间 Unix 毫秒"},
+    "wsPath": {
+      "type": "string",
+      "pattern": "^/api/v2/device-sessions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "本会话 WebSocket 路径（v2 安全会话端点，docs/02 §5）"
+    }
+  },
+  "additionalProperties": false
+}

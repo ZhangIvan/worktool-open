@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍服务配置（T1.2 骨架，默认最弱权限）：
+  - canRetrieveWindowContent=false：不读取任何窗口内容（节点树/文本均不可见）
+  - canPerformGestures=false：不注入手势
+  - 未声明 packageNames 与 accessibilityEventTypes：不监听任何应用、不接收任何事件
+  T2.4 落地原子操作时按最小必要原则逐项放开（docs/04 §4 G10 审查项）。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:canPerformGestures="false" />

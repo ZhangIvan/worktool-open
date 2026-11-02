@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:session-hello:1.0.0",
+  "title": "WorkTool-Open v2 会话 hello（WS 首帧）",
+  "description": "设备在 /api/v2/device-sessions/{sessionId} 建连后发送的第一帧，携带会话绑定信息与逐帧鉴权 meta（seq 从 1 起）。规格见 protocol/spec.md §5.4。服务端以 hello_ack 应答（形状见 spec.md §5.4.3，schema 随 T3.4 冻结）。",
+  "type": "object",
+  "required": ["type", "deviceId", "tokenVersion", "meta"],
+  "properties": {
+    "type": {"const": "hello"},
+    "deviceId": {"type": "string", "pattern": "^[A-Za-z0-9._-]{8,64}$"},
+    "tokenVersion": {"type": "integer", "minimum": 1, "description": "设备当前持有的凭据版本；与服务端不匹配时按 §5.5 走重协商或强制重配对"},
+    "lastEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "端侧 journal 已应用的最小命令 epoch：服务端不得下发 epoch 小于该值的指令（端侧拒旧，docs/02 §5.1）"
+    },
+    "lastReceivedSeq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "端侧持久确认的最高入向 seq；服务端从此值 +1 起补发（断线重连不丢不重）"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "clientVersion": {"type": "string", "minLength": 1, "maxLength": 32},
+        "encryptTypeMax": {"type": "integer", "enum": [0, 2], "description": "0=仅明文 2=支持 AES-256-GCM"},
+        "commands": {"type": "array", "items": {"type": "integer", "minimum": 11, "maximum": 999}, "description": "端侧声明可执行的指令 type 列表"}
+      },
+      "required": ["clientVersion"],
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "required": ["ver", "ts", "nonce", "hmac", "seq", "eventId", "commandId", "tokenVersion"],
+      "properties": {
+        "ver": {"const": 2},
+        "ts": {"type": "integer", "minimum": 0},
+        "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "hmac": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "hello 为空载荷帧：payloadDigest = SHA-256(空字节串)，输入式同 spec.md §5.2"},
+        "seq": {"const": 1, "description": "hello 是本方向第一帧，seq 恒为 1"},
+        "eventId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "commandId": {"const": ""},
+        "tokenVersion": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,75 @@
+{
+  "$comment": "金标准测试向量（TEST-ONLY，deviceTokenTest 为伪造值，非任何真实凭据）。HMAC 输入式与 payloadDigest 规则见 protocol/spec.md §5.2；夹具中的 meta.hmac 即按本向量计算，L1/L2 单测应以本文件逐字节复算校验。",
+  "deviceTokenTest": "5dbf5c6a4465c44060e763c9cff7711d7eae18c2ef75b96cab1790ef092d08a4",
+  "hmacAlgorithm": "HMAC-SHA256(key=deviceToken bytes, msg=UTF-8(inputString))",
+  "hmacInputFormat": "commandId|eventId|ts|nonce|payloadDigest",
+  "payloadDigestRule": {
+    "encryptType0": "hex(SHA-256(JCS(RFC 8785 canonical JSON of list))); list 缺失或空数组按空字节串计",
+    "encryptType2": "hex(SHA-256(UTF-8 bytes of encryptedList string as-is))",
+    "emptyPayloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "vectors": [
+    {
+      "fixture": "command-envelope.plain.json",
+      "tokenVersion": 1,
+      "commandId": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+      "eventId": "7d6e5f4a-3b2c-4d5e-8f9a-0b1c2d3e4f5a",
+      "ts": 1793613605000,
+      "nonce": "5c1f9a7b3e2d4c6f8a0b2d4e6f8a0c2e",
+      "encryptType": 0,
+      "payloadDigest": "570502d1f1024c9a0b4148c0e1bca072c408f24a9147ac067d10439462bdf054",
+      "inputString": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f|7d6e5f4a-3b2c-4d5e-8f9a-0b1c2d3e4f5a|1793613605000|5c1f9a7b3e2d4c6f8a0b2d4e6f8a0c2e|570502d1f1024c9a0b4148c0e1bca072c408f24a9147ac067d10439462bdf054",
+      "hmac": "3a5c9596e5180e4c0de365b1f57bbb57f1e96f623cc01154582e7b328203d822"
+    },
+    {
+      "fixture": "command-envelope.encrypted.json",
+      "tokenVersion": 2,
+      "commandId": "d2c3b4a5-f6e7-4d8c-9a0b-1d2e3f4a5b6c",
+      "eventId": "8e7f6a5b-4c3d-4e5f-9a0b-2c3d4e5f6a7b",
+      "ts": 1793613606000,
+      "nonce": "6d2e0b8c4f3a5d7e9b1c3e5f7a9d0e2f",
+      "encryptType": 2,
+      "payloadDigest": "93b5129be56daccf33320247cdad9b3301b5f1e18c58a344f549a7e08bc57c7a",
+      "inputString": "d2c3b4a5-f6e7-4d8c-9a0b-1d2e3f4a5b6c|8e7f6a5b-4c3d-4e5f-9a0b-2c3d4e5f6a7b|1793613606000|6d2e0b8c4f3a5d7e9b1c3e5f7a9d0e2f|93b5129be56daccf33320247cdad9b3301b5f1e18c58a344f549a7e08bc57c7a",
+      "hmac": "e753fbdfdbd6e521197ce47278e532ce3e2407308327eb3749de810a71b4b544"
+    },
+    {
+      "fixture": "command-envelope.heartbeat.json",
+      "tokenVersion": 1,
+      "commandId": "",
+      "eventId": "9f8e7d6c-5b4a-4c6d-8e9f-3d4e5f6a7b8c",
+      "ts": 1793613620000,
+      "nonce": "7e3f1c9d5a4b6e8f0c2d4f6a8b0d2e3f",
+      "encryptType": 0,
+      "payloadEmpty": true,
+      "payloadDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "inputString": "|9f8e7d6c-5b4a-4c6d-8e9f-3d4e5f6a7b8c|1793613620000|7e3f1c9d5a4b6e8f0c2d4f6a8b0d2e3f|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "hmac": "90956ae419dec95ee24b548b2f5891d80605b772345ae3ede5a5428baf497c15"
+    },
+    {
+      "fixture": "session-hello.valid.json",
+      "tokenVersion": 1,
+      "commandId": "",
+      "eventId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "ts": 1793613604000,
+      "nonce": "4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d",
+      "encryptType": 0,
+      "payloadEmpty": true,
+      "payloadDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "inputString": "|1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d|1793613604000|4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "hmac": "2ee20794f9ea690594b0b85acc86f6723fbce4a757231819873165c09b24f0c1"
+    },
+    {
+      "fixture": "command-envelope.exec-result.json",
+      "tokenVersion": 1,
+      "commandId": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+      "eventId": "6a5b4c3d-2e1f-4a5b-8c9d-4e5f6a7b8c9d",
+      "ts": 1793613607000,
+      "nonce": "8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c",
+      "encryptType": 0,
+      "payloadDigest": "e2b43c449ca4a52b58b80b254c4943a09fea8ae9b0fd86fe8fe5b2b254a06980",
+      "inputString": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f|6a5b4c3d-2e1f-4a5b-8c9d-4e5f6a7b8c9d|1793613607000|8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c|e2b43c449ca4a52b58b80b254c4943a09fea8ae9b0fd86fe8fe5b2b254a06980",
+      "hmac": "fff33edb071fcd4e24e23825877f3e60ee09abf171806d29344d151b71712f0a"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "type": 203,
+  "errorCode": 0,
+  "errorReason": "",
+  "runTime": "2026-11-02 10:00:06",
+  "timeCost": 1830,
+  "successList": ["外部群测试群"],
+  "failList": [],
+  "metaJson": "{\"dispatchId\":\"c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f\"}"
+}

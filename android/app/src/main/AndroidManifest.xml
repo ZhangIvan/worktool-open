@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  app 模块清单（T1.2）。
+  SR-10 组件最小化：
+  - allowBackup=false（禁止 adb 备份导出应用数据）
+  - 零 uses-permission（壳工程无网络/存储/位置等任何权限；未设置 usesCleartextTraffic，
+    targetSdk 28+ 默认禁明文，满足 SR-01/SR-09）
+  - 唯一组件 MainActivity，exported=true 仅为 LAUNCHER 入口必需
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WorkToolOpen">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

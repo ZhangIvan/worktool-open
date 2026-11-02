@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:exec-callback:1.0.0",
+  "title": "WorkTool-Open 指令执行结果回执载荷（ExecCallbackBean）",
+  "description": "socketType=3（RAW_CONFIRM）帧 list[0] 的载荷结构（v1 载荷、v2 帧内同构）。字段族还原自上游开源仓库（见 protocol/spec.md §4.3）。正例见 fixtures/exec-callback.success.json 与 fixtures/command-envelope.exec-result.json。",
+  "type": "object",
+  "required": ["type", "errorCode"],
+  "properties": {
+    "type": {
+      "type": "integer",
+      "minimum": 201,
+      "maximum": 509,
+      "description": "所响应的原始指令 type（201~234 操作类 / 501~509 获取类）"
+    },
+    "errorCode": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0=成功；10xxx=格式/权限错误；20xxx=执行错误；50xxx=服务端错误（已知值子集见 spec.md §4.3）"
+    },
+    "errorReason": {"type": "string"},
+    "runTime": {"type": "string", "description": "执行时间（上游为字符串时间；v2 建议同时携带 meta.ts 毫秒值，本字段保留兼容）"},
+    "timeCost": {"type": "integer", "minimum": 0, "description": "耗时毫秒"},
+    "successList": {"type": "array", "items": {"type": "string"}, "description": "执行成功的目标列表（群名/联系人等）"},
+    "failList": {"type": "array", "items": {"type": "string"}},
+    "metaJson": {"type": "string", "description": "附加元数据 JSON 字符串（透传调用方 meta）"},
+    "rawMsg": {"type": "string", "description": "v1 兼容字段（原始指令回显）。v2 SHOULD 省略——错误 details 不 echo 内容（docs/02 §6.1 泄露面收敛）"}
+  },
+  "additionalProperties": true
+}

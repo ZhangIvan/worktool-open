@@ -1,0 +1,34 @@
+# 服务端车道 CI（任务卡 T1.3；车道文件所有权见 docs/03-EXECUTION-PLAN.md §1：
+# server/** 与本文件归 L2 独占）。DoD：CI 绿（go vet + go test ./...，
+# docs/03 T1.3；质量门见 docs/04 §3）。G12/G13 由 ci.yml 全仓门禁覆盖，此处不重复。
+name: server
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+
+jobs:
+  vet-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # 与 server/go.mod 的 go 指令一致
+          cache: false # 零第三方依赖（无 go.sum），无依赖缓存需求
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...

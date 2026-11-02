@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:pair-request:1.0.0",
+  "title": "WorkTool-Open v2 配对请求（POST /api/v2/pair）",
+  "description": "设备持控制台生成的一次性配对码 + AndroidKeystore Ed25519 签名公钥 + X25519 临时公钥请求配对。公钥分列两字段（修复上游 CBC 硬编码与裸 robotId 鉴权，SR-02/SR-08）。规格见 protocol/spec.md §5.1。",
+  "type": "object",
+  "required": ["pairingCode", "deviceId", "ed25519PublicKey", "x25519EphemeralPublicKey"],
+  "properties": {
+    "pairingCode": {
+      "type": "string",
+      "pattern": "^[0-9]{6}$",
+      "description": "控制台生成的一次性配对码：6 位数字，TTL 10 分钟，单次有效（配对成功即作废）"
+    },
+    "deviceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{8,64}$",
+      "description": "设备稳定标识（首次启动生成并持久化）"
+    },
+    "deviceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "可选的人类可读设备名（日志/控制台展示用，入站即脱敏校验）"
+    },
+    "ed25519PublicKey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Ed25519 签名公钥（32 字节 hex），AndroidKeystore 生成，配对后服务端注册；凭据轮换重协商时复用该公钥"
+    },
+    "x25519EphemeralPublicKey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "X25519 临时公钥（32 字节 hex），每次配对/重协商新生成；与 ed25519PublicKey 分列，会话密钥 = ECDH(X25519) + HKDF-SHA256 派生（spec.md §5.3）"
+    }
+  },
+  "additionalProperties": false
+}

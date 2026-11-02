@@ -1,0 +1,87 @@
+{
+  "$comment": "执行状态机终态与策略表（WorkTool-Open T2.1）。状态机唯一权威边集 = protocol/state-transitions.csv（docs/02 §5.1：禁止在计划文档复述边表防漂移；本文件只承载终态判定与策略参数）。非法状态迁移（不在边集内）= 409 ILLEGAL_TRANSITION，与 command_events/审计同事务留痕。",
+  "version": "1.0.0",
+  "authority": {
+    "edges": "protocol/state-transitions.csv",
+    "architecture": "docs/02-ARCHITECTURE.md §5.1",
+    "note": "边集语义与本文件不一致时以 state-transitions.csv 为准并提 AUD 复核"
+  },
+  "states": {
+    "created": {
+      "terminal": false,
+      "owner": "server.scheduler",
+      "on_entry": "静态校验 + 幂等键检查（tenant+actor+operation+key，24h 窗口）"
+    },
+    "queued": {
+      "terminal": false,
+      "owner": "server.scheduler",
+      "on_entry": "持久化+审计落库；用户接管暂停（FR-52）在此状态持住——只入队不执行"
+    },
+    "dispatched": {
+      "terminal": false,
+      "owner": "server.gateway",
+      "on_entry": "分配 seq/eventId/epoch 并发送；启动 300s ACK TTL"
+    },
+    "acked": {
+      "terminal": false,
+      "owner": "server.gateway",
+      "on_entry": "记录传输确认；transport ack ≠ 执行许可"
+    },
+    "running": {
+      "terminal": false,
+      "owner": "device",
+      "on_entry": "端侧 journal 先于副作用持久化执行门禁与去重记录"
+    },
+    "execution_unknown": {
+      "terminal": false,
+      "owner": "server.scheduler",
+      "on_entry": "登记 UNKNOWN 对账任务（周期扫描 + 重连触发）；冻结同类 L1/L2 风险级新指令（FR-53）",
+      "exit": "只凭持久证据（设备 journal / reconcile_unstarted）或人工裁决离出；禁止超时推断成败"
+    },
+    "succeeded": {
+      "terminal": true,
+      "owner": "server.scheduler",
+      "retention": "结果按保留期策略（默认 30 天，可配）"
+    },
+    "failed": {
+      "terminal": true,
+      "owner": "server.scheduler",
+      "retry": "仅幂等指令且策略允许时有界重试；非幂等指令永不自动重试（docs/02 §5.1 原则②）",
+      "dead_letter": "重试穷尽或人工裁决需要介入时转死信"
+    },
+    "cancelled": {
+      "terminal": true,
+      "owner": "server.scheduler",
+      "retry": "永不重试；如需再次执行必须以新 commandId 重新提交"
+    }
+  },
+  "terminal_states": ["succeeded", "failed", "cancelled"],
+  "illegal_transition": {
+    "http_status": 409,
+    "code": "ILLEGAL_TRANSITION"
+  },
+  "idempotency": {
+    "key_fields": ["tenant", "actor", "operation", "key"],
+    "window_hours": 24,
+    "same_key_same_params": "返回原响应（重放安全）",
+    "same_key_diff_params": {
+      "http_status": 409,
+      "code": "IDEMPOTENCY_CONFLICT"
+    },
+    "scope": "全部 POST 创建类端点（docs/06 借鉴②：教训扩展到所有 POST）"
+  },
+  "tombstone": {
+    "min_retention_days": 7,
+    "rationale": "7 天 > 300s 投递 TTL + 24h 幂等窗 + 30s 时钟偏差（docs/02 §5 / docs/06 借鉴③）",
+    "content": "仅元数据（commandId/eventId/终态/时间戳），不含消息正文",
+    "cleanup_guard": "清理前确认该 commandId 无 pending 的 execution_unknown"
+  },
+  "dispatch": {
+    "ack_ttl_seconds": 300
+  },
+  "security_constants": {
+    "clock_skew_tolerance_seconds": 30,
+    "nonce_dedup_window_seconds": 300,
+    "credential_rotation_days_default": 30
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "socketType": 2,
+  "messageId": "2026-11-02#10:00:05#aabbccdd-eeff-4a55-8b8b-1c2d3e4f5064",
+  "meta": "apifox-demo",
+  "apiSend": 1,
+  "encryptType": 0,
+  "list": [
+    {
+      "type": 203,
+      "roomType": 1,
+      "targetRoom": "外部群测试群",
+      "receivedContent": "您好，WorkTool-Open 协议测试消息",
+      "at": [],
+      "atList": []
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:command-envelope:1.0.0",
+  "title": "WorkTool-Open v2 帧信封（逐帧鉴权 + 投递语义）",
+  "description": "不改 v1 信封字段，扩展 meta 为对象并携带逐帧鉴权（ts/nonce/hmac）与投递语义（seq/eventId/commandId/tokenVersion）。规格见 protocol/spec.md §5.2/§5.4/§5.6。v2 范围 encryptType 仅 0（明文）/2（AES-256-GCM）；encryptType=1 禁用。",
+  "type": "object",
+  "required": ["socketType", "messageId", "meta"],
+  "properties": {
+    "socketType": {
+      "type": "integer",
+      "enum": [0, 2, 3],
+      "description": "v2 会话内帧：0=心跳 2=消息列表(指令或上报，含 9xx 控制类) 3=指令执行结果确认。socketType=1（v1 消息确认）在 v2 会话中不使用——确认语义由 seq/eventId 承载"
+    },
+    "messageId": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}#[0-9]{2}:[0-9]{2}:[0-9]{2}#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "meta": {"$ref": "#/definitions/frameMeta"},
+    "apiSend": {"type": "integer", "enum": [0, 1]},
+    "list": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/weworkMessageBeanLite"}
+    },
+    "encryptedList": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]+$",
+      "description": "hex( AES-256-GCM 密文 || 16 字节 tag )，GCM nonce 与 AAD 构成见 spec.md §5.3"
+    },
+    "encryptType": {
+      "type": "integer",
+      "enum": [0, 2]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"encryptType": {"const": 0}}, "required": ["encryptType"]},
+      "then": {"required": ["list"]}
+    },
+    {
+      "if": {"properties": {"encryptType": {"const": 2}}, "required": ["encryptType"]},
+      "then": {"required": ["encryptedList"]}
+    }
+  ],
+  "definitions": {
+    "frameMeta": {
+      "type": "object",
+      "required": ["ver", "ts", "nonce", "hmac", "seq", "eventId", "commandId", "tokenVersion"],
+      "properties": {
+        "ver": {"const": 2},
+        "ts": {"type": "integer", "minimum": 0, "description": "Unix 毫秒；接收方校验 |ts - now| ≤ 30s（超差拒绝，关闭码 4403）"},
+        "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "128-bit 随机数 hex；双向各自维护 5 分钟去重窗口（重放拒绝，关闭码 4402）"},
+        "hmac": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "HMAC-SHA256(deviceToken, commandId|eventId|ts|nonce|payloadDigest)，输入式冻结见 spec.md §5.2 与 fixtures/hmac-vector.json"},
+        "seq": {"type": "integer", "minimum": 1, "description": "每会话每方向严格递增，从 1 起；乱序拒绝并触发重新同步（9xx 控制帧）"},
+        "eventId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "帧唯一 ID（UUID v4）；重复 eventId：同 payloadDigest 幂等回执原确认，异内容冲突关闭（4405）"},
+        "commandId": {"type": "string", "pattern": "^(|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", "description": "指令 ID（服务端创建时分配）；非指令帧（心跳/上报/结果回执以外的控制帧）为空串。结果回执帧回填所响应的 commandId"},
+        "tokenVersion": {"type": "integer", "minimum": 1, "description": "凭据版本；每帧必带，校验失败关闭 4404 并按策略重协商或强制重配对（spec.md §5.5）"}
+      },
+      "additionalProperties": false
+    },
+    "weworkMessageBeanLite": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "integer"},
+        "roomType": {"type": "integer", "minimum": 0, "maximum": 4},
+        "textType": {"type": "integer", "minimum": 0, "maximum": 18},
+        "at": {"type": "array", "items": {"type": "string"}},
+        "atList": {"type": "array", "items": {"type": "string"}},
+        "extraText": {"type": "string"},
+        "fileUrl": {"type": "string"},
+        "fileBase64": {"type": "string"},
+        "fileType": {"type": "string"},
+        "source": {"type": "string", "enum": ["local", "server"]},
+        "errorCode": {"type": "integer", "minimum": 0},
+        "errorReason": {"type": "string"},
+        "runTime": {"type": "string"},
+        "timeCost": {"type": "integer", "minimum": 0},
+        "successList": {"type": "array", "items": {"type": "string"}},
+        "failList": {"type": "array", "items": {"type": "string"}},
+        "metaJson": {"type": "string"}
+      },
+      "additionalProperties": true,
+      "description": "载荷结构与 v1 一致（完整定义见 wire-v1-envelope.schema.json definitions；此处内联精简版并为 socketType=3 结果帧并入 ExecCallbackBean 字段，字段族见 spec.md §4.3/§5.4）"
+    }
+  }
+}

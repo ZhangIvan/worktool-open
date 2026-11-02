@@ -1,0 +1,6 @@
+{
+  "pairingCode": "12ab!",
+  "deviceId": "device-9f2c7b41",
+  "ed25519PublicKey": "67f1dc5eb7b5c4ea807c3c4bf86b704e646200ebb5505cac939bc94883c02f3c",
+  "x25519EphemeralPublicKey": "7a6f28f12b1ebc96c379eb3e634e359c380c7a5ff139f11ee47140bb2774189c"
+}

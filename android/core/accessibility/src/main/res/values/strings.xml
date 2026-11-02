@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SR-10：透明命名 —— 明示归属（WorkTool Open）与用途，无任何伪装。 -->
+    <string name="accessibility_service_label">WorkTool Open 自动化服务（无障碍）</string>
+    <string name="accessibility_service_description">WorkTool-Open 的自动化执行通道：通过 Android 无障碍接口驱动设备上的企业微信客户端完成您配置的指令。\n\n当前为骨架阶段（T1.2）：不读取任何窗口内容、不监听任何应用、不执行任何操作。\n\n请仅在您拥有或获得授权的设备上启用本服务。</string>
+</resources>

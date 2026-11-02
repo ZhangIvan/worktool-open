@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SR-10 / R4：命名不含任何"官方/腾讯"暗示，无上游商标混淆。 -->
+    <string name="app_name">WorkTool Open</string>
+    <string name="guide_title">WorkTool-Open</string>
+    <string name="guide_stage">壳工程阶段（T1.2 / v%1$s）</string>
+    <string name="guide_body">引导页占位。\n服务端配置、无障碍服务启用引导与悬浮窗控制在后续版本提供。</string>
+</resources>

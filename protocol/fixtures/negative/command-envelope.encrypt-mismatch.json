@@ -1,0 +1,19 @@
+{
+  "socketType": 2,
+  "messageId": "2026-11-02#10:00:06#bccddeef-ff00-4a56-8b8b-1c2d3e4f5065",
+  "meta": {
+    "ver": 2,
+    "ts": 1791000006000,
+    "nonce": "6d2e0b8c4f3a5d7e9b1c3e5f7a9d0e2f",
+    "hmac": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seq": 414,
+    "eventId": "8e7f6a5b-4c3d-4e5f-9a0b-2c3d4e5f6a7b",
+    "commandId": "d2c3b4a5-f6e7-4d8c-9a0b-1d2e3f4a5b6c",
+    "tokenVersion": 2
+  },
+  "apiSend": 1,
+  "encryptType": 2,
+  "list": [
+    {"type": 203, "roomType": 1, "targetRoom": "外部群测试群", "receivedContent": "encryptType=2 却携带明文 list、缺 encryptedList，必须被拒绝", "at": [], "atList": []}
+  ]
+}

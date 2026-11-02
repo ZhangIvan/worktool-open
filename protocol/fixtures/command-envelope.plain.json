@@ -1,0 +1,26 @@
+{
+  "socketType": 2,
+  "messageId": "2026-11-02#10:00:05#aabbccdd-eeff-4a55-8b8b-1c2d3e4f5064",
+  "meta": {
+    "ver": 2,
+    "ts": 1793613605000,
+    "nonce": "5c1f9a7b3e2d4c6f8a0b2d4e6f8a0c2e",
+    "hmac": "3a5c9596e5180e4c0de365b1f57bbb57f1e96f623cc01154582e7b328203d822",
+    "seq": 413,
+    "eventId": "7d6e5f4a-3b2c-4d5e-8f9a-0b1c2d3e4f5a",
+    "commandId": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+    "tokenVersion": 1
+  },
+  "apiSend": 1,
+  "encryptType": 0,
+  "list": [
+    {
+      "type": 203,
+      "roomType": 1,
+      "targetRoom": "外部群测试群",
+      "receivedContent": "您好，WorkTool-Open 协议测试消息",
+      "at": [],
+      "atList": []
+    }
+  ]
+}
