@@ -86,6 +86,49 @@ class CryptoVectorTest {
         assertArrayEquals(k1, k2)
     }
 
+    // ---- XDH 标准名 fallback（W-M3R 真机装配：Android 12- Conscrypt 仅注册 "XDH"）----
+
+    @Test
+    fun `X25519 XDH 标准名 fallback 全链等价`() {
+        // 以不存在的别名强制走 XDH fallback 分支（SunEC 同样提供 "XDH"）
+        val kpg = X25519.keyPairGenerator(alias = "X25519-nonexistent", standard = "XDH")
+        val alice = kpg.genKeyPair()
+        val bob = kpg.genKeyPair()
+
+        // raw 导出/导入（RFC 8410 SPKI 路径）在 fallback 公钥上往返一致
+        assertArrayEquals(
+            X25519.publicRaw(alice.public),
+            X25519.publicRaw(X25519.importPublic(X25519.publicRaw(alice.public))),
+        )
+
+        // ECDH：fallback 提供的 KeyAgreement("XDH") 与固定向量私钥兼容
+        val aliceSeed = Hex.decode("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+        val alicePriv = X25519.decodePrivatePkcs8(
+            Hex.decode("302e020100300506032b656e04220420") + aliceSeed,
+        )
+        val agreement = X25519.keyAgreement(alias = "X25519-nonexistent", standard = "XDH")
+        agreement.init(alicePriv)
+        agreement.doPhase(
+            X25519.keyFactory(alias = "X25519-nonexistent", standard = "XDH")
+                .generatePublic(
+                    java.security.spec.X509EncodedKeySpec(
+                        Hex.decode("302a300506032b656e032100") +
+                            Hex.decode("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"),
+                    ),
+                ),
+            true,
+        )
+        assertEquals(
+            "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+            Hex.encode(agreement.generateSecret()),
+        )
+
+        // 生成对与共享密钥：fallback 生成 ↔ 默认名导入互通（真实混合部署形态）
+        val k = X25519.sharedSecret(alice.private, X25519.publicRaw(bob.public))
+        assertEquals(32, k.size)
+        assertArrayEquals(k, X25519.sharedSecret(bob.private, X25519.publicRaw(alice.public)))
+    }
+
     // ---- RFC 8032 §7.1 TEST 1（Ed25519 空消息）----
 
     @Test

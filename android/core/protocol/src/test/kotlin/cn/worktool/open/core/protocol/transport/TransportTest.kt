@@ -93,6 +93,33 @@ class EndpointPolicyTest {
         assertEquals(EndpointPolicy.Check.Violated::class.java, EndpointPolicy.check("ftp://example.com").javaClass)
         assertEquals(EndpointPolicy.Check.Violated::class.java, EndpointPolicy.check("wss:///nohost").javaClass)
     }
+
+    // —— lab 变体例外（W-M3R 真机装配）：产品零行为差异 + fail-closed 语义 ——
+
+    @Test
+    fun `lab 裸 IP 例外-默认空注册表零行为差异`() {
+        EndpointPolicy.allowLabRawIpHosts(emptySet()) // 复位（测试隔离）
+        val violated = EndpointPolicy.check("https://192.0.2.53:8463/api/v2/pair")
+        assertTrue(violated is EndpointPolicy.Check.Violated && violated.rule == "bare_ip_host")
+    }
+
+    @Test
+    fun `lab 裸 IP 例外-注册后仅放行 TLS 且仅该主机`() {
+        EndpointPolicy.allowLabRawIpHosts(setOf("192.0.2.53"))
+        try {
+            assertEquals(EndpointPolicy.Check.Ok, EndpointPolicy.check("https://192.0.2.53:8463/api/v2/pair"))
+            assertEquals(EndpointPolicy.Check.Ok, EndpointPolicy.check("wss://192.0.2.53:8463/api/v2/device-sessions/s1"))
+            assertEquals(setOf("192.0.2.53"), EndpointPolicy.labRawIpHostsSnapshot())
+            // 未注册的其他裸 IP 依旧拒绝（fail-closed）
+            val other = EndpointPolicy.check("https://192.0.2.54:8463/api/v2/pair")
+            assertTrue(other is EndpointPolicy.Check.Violated && other.rule == "bare_ip_host")
+            // 明文不可经 lab 例外豁免（SR-09 前置分支）
+            val plain = EndpointPolicy.check("ws://192.0.2.53:8463/x")
+            assertTrue(plain is EndpointPolicy.Check.Violated && plain.rule == "plain_text_not_loopback")
+        } finally {
+            EndpointPolicy.allowLabRawIpHosts(emptySet())
+        }
+    }
 }
 
 /** 手动推进的虚拟调度器。 */

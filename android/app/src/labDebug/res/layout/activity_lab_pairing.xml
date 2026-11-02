@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- lab 配对最小面（仅 labDebug 构型）：host + 6 位配对码 + 状态区。 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/lab_pairing_title"
+            android:textColor="@color/primary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/lab_host"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:hint="@string/lab_host_hint"
+            android:text="@string/lab_host_default"
+            android:autofillHints=""
+            android:inputType="textUri" />
+
+        <EditText
+            android:id="@+id/lab_code"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="@string/lab_code_hint"
+            android:autofillHints=""
+            android:inputType="number"
+            android:maxLength="6" />
+
+        <Button
+            android:id="@+id/lab_pair_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lab_pair_button" />
+
+        <TextView
+            android:id="@+id/lab_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lab_status_idle"
+            android:textSize="13sp"
+            android:textIsSelectable="true" />
+    </LinearLayout>
+</ScrollView>

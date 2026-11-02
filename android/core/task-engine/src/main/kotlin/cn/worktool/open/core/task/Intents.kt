@@ -66,13 +66,18 @@ object RiskLevels {
         MessageTypes.ROBOT_QUEUE_CLEAR,
         -> RiskLevel.L2
 
-        // L0：端侧已实现的普通指令（T3.1 P0 执行器集，feature:executor
-        // ExecutorRegistry.defaultP0 中的非 L1/L2 项；FR-53 裁决③「其余已实现
-        // 指令=L0」——212 经端侧执行器实现，与 server dryrun.go plannedActionNames
-        // 口径一致）。新增执行器时须同步本名单。
+        // L0：端侧已实现的普通指令（FR-53 裁决③「其余已实现指令=L0」）：
+        // defaultP0 非 L1/L2 项 203/212/225 + defaultFirstBatch 查询面 501/502/509。
+        // 501/502/509 在 server 侧已登记（dryrun.go plannedActionNames 名单内，
+        // guard.go ClassifyRisk 分级表外+已实现 → L0），端侧补齐后两表同指令同级；
+        // 503~508 端侧执行器未实现前仍落 else→L2 fail-closed（裁决②），实现后随
+        // 「新增执行器时须同步本名单」义务降级。
         MessageTypes.SEND_MESSAGE,
         MessageTypes.PASS_ALL_FRIEND_REQUEST,
         MessageTypes.MODIFY_GROUP_MEMBER_INFO,
+        MessageTypes.GET_GROUP_INFO,
+        MessageTypes.GET_FRIEND_INFO,
+        MessageTypes.GET_LOCAL_FILE,
         -> RiskLevel.L0
 
         // 未登记类型 → L2 fail-closed（FR-53 裁决②；与服务端 riskUnregistered

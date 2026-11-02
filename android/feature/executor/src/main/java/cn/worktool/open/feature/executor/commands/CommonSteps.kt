@@ -87,6 +87,22 @@ internal object CommonSteps {
         StepOutcome.Success
     }
 
+    /** 切换到底部「通讯录」Tab（212/501/502 入口）；Tab 缺失 → NODE_NOT_FOUND。 */
+    fun openContactsTab(
+        rules: WeworkScreenRules,
+    ): PlanStep = PlanStep(
+        id = "open-contacts-tab",
+        description = "切换到底部「通讯录」Tab",
+    ) { driver ->
+        val tab = driver.currentRoot()
+            ?.let { rules.find(it, WeworkSelectorIds.CONTACTS_TAB) }
+            ?: return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.NODE_NOT_FOUND,
+                "「通讯录」Tab 缺失（当前不在主界面？）",
+            )
+        clickOrReject(driver, tab, "「通讯录」Tab")
+    }
+
     /** 通用：等待某选择器命中（null 返回即超时）。 */
     fun awaitSelector(
         driver: UiDriver,
@@ -104,4 +120,12 @@ internal object CommonSteps {
         )
         return onHit(node)
     }
+
+    /** 点击或报 ACTION_REJECTED（多执行器共用的小工具）。 */
+    fun clickOrReject(driver: UiDriver, node: UiNode, what: String): StepOutcome =
+        if (driver.click(node)) {
+            StepOutcome.Success
+        } else {
+            StepOutcome.Failure(ExecutorErrorCodes.ACTION_REJECTED, "点击$what 被界面拒绝")
+        }
 }

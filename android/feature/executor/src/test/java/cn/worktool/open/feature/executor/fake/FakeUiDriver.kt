@@ -52,6 +52,11 @@ class FakeUiDriver(
 
     private val transitions = mutableListOf<Registered>()
 
+    /** 滚动效果注册（分页夹具用：滚动容器追加下一页条目，模拟懒加载）。 */
+    private data class RegisteredScroll(val screen: String, val node: FakeExecutorNode, val effect: FakeUiDriver.() -> Unit)
+
+    private val scrollTransitions = mutableListOf<RegisteredScroll>()
+
     /** 动作日志：`click(...)` / `input(...)` / `scroll(...)` / `back` / `sleep(ms)`。 */
     val actionLog = mutableListOf<String>()
 
@@ -91,6 +96,11 @@ class FakeUiDriver(
         transitions += Registered(screen.name, node, effect)
     }
 
+    /** 注册滚动效果：在 [screen] 屏滚动 [node]（容器）触发 [effect]（如追加下一页）。 */
+    fun onScroll(screen: FakeScreen, node: FakeExecutorNode, effect: FakeUiDriver.() -> Unit) {
+        scrollTransitions += RegisteredScroll(screen.name, node, effect)
+    }
+
     // ---- UiDriver ----
 
     override fun currentRoot(): UiNode? = current?.root
@@ -118,9 +128,16 @@ class FakeUiDriver(
 
     override fun scroll(node: UiNode, direction: ScrollDirection): Boolean {
         actionLog += "scroll(${describe(node)}, $direction)"
-        val ok = atomic.scroll(node, direction) is OpResult.Ok
+        // 懒加载效果仅在容器可滚动时生效（与点击跳转同口径：不可滚动=真机末页拒滚）
+        val hit = scrollTransitions.firstOrNull { it.screen == current?.name && it.node === node }
+        val result = if (hit != null && node.isScrollable) {
+            hit.effect(this)
+            true
+        } else {
+            atomic.scroll(node, direction) is OpResult.Ok
+        }
         onAfterAction?.invoke()
-        return ok
+        return result
     }
 
     override fun goBack(): Boolean {

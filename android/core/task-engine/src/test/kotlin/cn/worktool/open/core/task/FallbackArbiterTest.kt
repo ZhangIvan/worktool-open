@@ -144,5 +144,12 @@ class DryRunRunnerTest {
         assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.SEND_MESSAGE))
         assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.PASS_ALL_FRIEND_REQUEST))
         assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.MODIFY_GROUP_MEMBER_INFO))
+        // 查询面 501/502/509（defaultFirstBatch 执行器已实现）→ L0（CR W-M3R
+        // exec-gap 修正：server 侧 dryrun.go plannedActionNames 已登记、
+        // guard.go ClassifyRisk→L0，端侧补齐即同指令同级；503~508 未实现仍 L2）
+        assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.GET_GROUP_INFO))
+        assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.GET_FRIEND_INFO))
+        assertEquals(RiskLevel.L0, RiskLevels.of(MessageTypes.GET_LOCAL_FILE))
+        assertEquals(RiskLevel.L2, RiskLevels.of(MessageTypes.GET_MY_INFO))
     }
 }

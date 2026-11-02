@@ -17,6 +17,13 @@ import cn.worktool.open.core.protocol.MessageTypes
  * - [UpdateGroup]（type=207 UPDATE_GROUP，FR-10）
  * - [ModifyGroupMemberInfo]（type=225 MODIFY_GROUP_MEMBER_INFO，FR-10）
  * - [PassFriend]（type=212 PASS_ALL_FRIEND_REQUEST，FR-15）
+ *
+ * v0.1 首批补齐（docs/05 P0 首批行 501/502/509；查询类只读）：
+ * - [GetGroupList]（type=501 GET_GROUP_INFO，FR-28）
+ * - [GetFriendList]（type=502 GET_FRIEND_INFO，FR-29）
+ * - [GetLocalFile]（type=509 GET_LOCAL_FILE，FR-33；dry-run=报告文件+大小）
+ *
+ * 上报方向意图（101）不进本接口——见 [MessageEvent]（端→云，非云下发指令）。
  */
 sealed interface CommandIntent {
 
@@ -80,6 +87,45 @@ sealed interface CommandIntent {
             const val DEFAULT_ACCEPT_LIMIT: Int = 50
         }
     }
+
+    // ---- 查询类 501/502/509（docs/05 P0 首批行；只读 → FR-53 L0） ----
+
+    /** 501 群列表查询（FR-28）：导航+分页读取 → 结构化 [cn.worktool.open.feature.executor.query.QueryResult.GroupList]。 */
+    data class GetGroupList(
+        val maxPages: Int = DEFAULT_MAX_PAGES,
+    ) : CommandIntent {
+        override val commandType: Int get() = MessageTypes.GET_GROUP_INFO
+        override val targetDescription: String get() = "通讯录「群聊」列表（全量分页）"
+
+        companion object {
+            /** 翻页护栏（防界面异常无界滚动；对齐 PassFriend 单轮上限口径）。 */
+            const val DEFAULT_MAX_PAGES: Int = 50
+        }
+    }
+
+    /** 502 好友列表查询（FR-29）：导航+分页读取 → 结构化 [cn.worktool.open.feature.executor.query.QueryResult.FriendList]。 */
+    data class GetFriendList(
+        val maxPages: Int = DEFAULT_MAX_PAGES,
+    ) : CommandIntent {
+        override val commandType: Int get() = MessageTypes.GET_FRIEND_INFO
+        override val targetDescription: String get() = "通讯录联系人列表（全量分页）"
+
+        companion object {
+            const val DEFAULT_MAX_PAGES: Int = 50
+        }
+    }
+
+    /**
+     * 509 上传本地文件（FR-33；语义 = GET_LOCAL_FILE 上传，默认当前日志，
+     * audit/02 F30）：dry-run 报告「将上传哪个文件 + 大小」。
+     */
+    data class GetLocalFile(
+        /** 目标文件路径；null = 默认当前日志文件（执行器经 LocalFilePort 解析）。 */
+        val filePath: String? = null,
+    ) : CommandIntent {
+        override val commandType: Int get() = MessageTypes.GET_LOCAL_FILE
+        override val targetDescription: String get() = filePath ?: "当前日志文件（默认）"
+    }
 }
 
 /**
@@ -120,4 +166,7 @@ object PayloadFields {
 
     /** 成员标签（候选，225；备选取值为 friend.tagList，spec §4.3 Friend 已还原字段）。 */
     const val TAG_LIST = "tagList"
+
+    /** 目标文件路径（候选，509；空缺 = 默认当前日志文件，audit/02 F30）。 */
+    const val FILE_PATH = "filePath"
 }

@@ -9,6 +9,8 @@ import cn.worktool.open.feature.executor.commands.ModifyGroupMemberInfoExecutor
 import cn.worktool.open.feature.executor.commands.PassFriendExecutor
 import cn.worktool.open.feature.executor.commands.SendTextExecutor
 import cn.worktool.open.feature.executor.commands.UpdateGroupExecutor
+import cn.worktool.open.feature.executor.fake.FakeLocalFiles
+import cn.worktool.open.feature.executor.fake.RecordingQuerySink
 import cn.worktool.open.feature.executor.intent.CommandIntent
 import cn.worktool.open.feature.executor.risk.RiskLevel
 import org.junit.Assert.assertEquals
@@ -53,6 +55,46 @@ class ExecutorRegistryTest {
     @Test(expected = IllegalArgumentException::class)
     fun `重复注册同一指令号-构造即拒绝`() {
         ExecutorRegistry.of(SendTextExecutor(), SendTextExecutor())
+    }
+
+    // ---- v0.1 首批全量注册表（docs/05 P0 首批行：五指令 + 501/502/509） ----
+
+    @Test
+    fun `首批注册表-八指令覆盖defaultP0超集`() {
+        val registry = ExecutorRegistry.defaultFirstBatch(
+            querySink = RecordingQuerySink(),
+            files = FakeLocalFiles(mapOf(), null),
+        )
+        assertEquals(
+            setOf(
+                MessageTypes.SEND_MESSAGE,
+                MessageTypes.INIT_GROUP,
+                MessageTypes.UPDATE_GROUP,
+                MessageTypes.MODIFY_GROUP_MEMBER_INFO,
+                MessageTypes.PASS_ALL_FRIEND_REQUEST,
+                MessageTypes.GET_GROUP_INFO,
+                MessageTypes.GET_FRIEND_INFO,
+                MessageTypes.GET_LOCAL_FILE,
+            ),
+            registry.supportedTypes,
+        )
+        assertTrue("defaultP0 是首批子集", ExecutorRegistry.defaultP0().supportedTypes.all { registry.supports(it) })
+        // 503/505 未实现 → 首批之外（fail-closed）
+        assertFalse(registry.supports(MessageTypes.GET_MY_INFO))
+        assertFalse(registry.supports(MessageTypes.GET_RECENT_LIST))
+    }
+
+    /** FR-53：查询类只读指令 = L0（裁决③「其余已实现指令=L0」；501/502/509 未入 L1/L2 基线表）。 */
+    @Test
+    fun `风险级矩阵-查询类501_502_509均L0`() {
+        val registry = ExecutorRegistry.defaultFirstBatch(
+            querySink = RecordingQuerySink(),
+            files = FakeLocalFiles(mapOf(), null),
+        )
+        assertEquals(RiskLevel.L0, registry.executorFor(MessageTypes.GET_GROUP_INFO)!!.riskLevel(CommandIntent.GetGroupList()))
+        assertEquals(RiskLevel.L0, registry.executorFor(MessageTypes.GET_FRIEND_INFO)!!.riskLevel(CommandIntent.GetFriendList()))
+        assertEquals(RiskLevel.L0, registry.executorFor(MessageTypes.GET_LOCAL_FILE)!!.riskLevel(CommandIntent.GetLocalFile()))
+        assertEquals(RiskLevel.L0, registry.executorFor(MessageTypes.GET_LOCAL_FILE)!!.riskLevel(CommandIntent.GetLocalFile(filePath = "/x/y.log")))
     }
 
     /** FR-53 风险级矩阵（docs/01 FR-53 清单原文映射）。 */

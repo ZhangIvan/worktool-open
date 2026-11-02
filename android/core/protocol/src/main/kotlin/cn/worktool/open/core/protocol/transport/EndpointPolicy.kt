@@ -46,7 +46,9 @@ object EndpointPolicy {
         if (isPlain && !allowInsecureLoopback) {
             return Check.Violated("insecure_disabled", "$scheme://$host")
         }
-        if (isRawIpHost(host) && !isLoopback && !allowRawIpHost) {
+        if (isRawIpHost(host) && !isLoopback && !allowRawIpHost &&
+            host.lowercase() !in labRawIpHosts
+        ) {
             return Check.Violated(
                 "bare_ip_host",
                 "$host —— SR-09：默认禁裸 IP（显式配置可开启）",
@@ -54,6 +56,22 @@ object EndpointPolicy {
         }
         return Check.Ok
     }
+
+    // —— lab 变体例外（W-M3R 真机装配；docs/07 SR-13 行「lab 专属 EndpointPolicy」设计）——
+    // 产品变体（debug/release 源集）从不调用 [allowLabRawIpHosts]，注册表恒为空 →
+    // 本节对产品零行为差异（G12 精神）。仅 lab 装配（app labDebug 源集）在配对前注册
+    // 自签 TLS 部署（见 docs/02 §6.1）的裸 IP 主机；例外只豁免 bare_ip_host 一条规则，
+    // 明文非 loopback（SR-09）在前置分支已被拒绝、不可经此豁免。
+    @Volatile
+    private var labRawIpHosts: Set<String> = emptySet()
+
+    /** lab 装配注册允许的裸 IP 主机（小写精确匹配；线程安全；覆盖式）。 */
+    fun allowLabRawIpHosts(hosts: Set<String>) {
+        labRawIpHosts = hosts.mapTo(LinkedHashSet()) { it.lowercase() }
+    }
+
+    /** 诊断/测试：lab 裸 IP 例外注册表快照。 */
+    fun labRawIpHostsSnapshot(): Set<String> = labRawIpHosts
 
     private fun isLoopback(host: String): Boolean {
         val h = host.lowercase()

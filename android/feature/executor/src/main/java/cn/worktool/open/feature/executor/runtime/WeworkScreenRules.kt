@@ -68,6 +68,21 @@ object WeworkSelectorIds {
 
     /** 好友请求行「接受」按钮。 */
     const val FRIEND_ACCEPT_BUTTON = "wework.contacts.friend_accept"
+
+    /** 通讯录「群聊」入口（501 群列表导航）。 */
+    const val GROUP_CHAT_ENTRY = "wework.contacts.group_chat_entry"
+
+    /** 群聊列表滚动容器（501 分页读取）。 */
+    const val GROUP_LIST_CONTAINER = "wework.contacts.group_list_container"
+
+    /** 群聊列表项群名文本（501 分页读取）。 */
+    const val GROUP_LIST_ITEM = "wework.contacts.group_list_item"
+
+    /** 通讯录联系人列表滚动容器（502 分页读取）。 */
+    const val CONTACTS_LIST_CONTAINER = "wework.contacts.list_container"
+
+    /** 通讯录联系人条目名称文本（502 分页读取）。 */
+    const val CONTACT_LIST_ITEM = "wework.contacts.contact_item"
 }
 
 /**
@@ -119,6 +134,7 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
     companion object {
         private const val TEXT_VIEW = "android.widget.TextView"
         private const val EDIT_TEXT = "android.widget.EditText"
+        private const val VIEW_GROUP_PLACEHOLDER = "android.view.ViewGroup"
 
         /** 内置占位默认（与 fixtures 假节点树对齐；真机校准后由配置覆盖）。 */
         val DEFAULTS: Map<String, SelectorDef> = mapOf(
@@ -195,6 +211,26 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
             ),
             WeworkSelectorIds.FRIEND_ACCEPT_BUTTON to sel(
                 text = "接受",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.GROUP_CHAT_ENTRY to sel(
+                text = "群聊",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.GROUP_LIST_CONTAINER to sel(
+                resourceId = "com.tencent.wework:id/group_list_container",
+                className = VIEW_GROUP_PLACEHOLDER,
+            ),
+            WeworkSelectorIds.GROUP_LIST_ITEM to sel(
+                resourceId = "com.tencent.wework:id/group_list_item_name",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.CONTACTS_LIST_CONTAINER to sel(
+                resourceId = "com.tencent.wework:id/contacts_list_container",
+                className = VIEW_GROUP_PLACEHOLDER,
+            ),
+            WeworkSelectorIds.CONTACT_LIST_ITEM to sel(
+                resourceId = "com.tencent.wework:id/contact_item_name",
                 className = TEXT_VIEW,
             ),
         )

@@ -4,6 +4,7 @@
 package cn.worktool.open.feature.executor.fixture
 
 import cn.worktool.open.feature.executor.fake.FakeClock
+import cn.worktool.open.feature.executor.fake.FakeLocalFiles
 import cn.worktool.open.feature.executor.fake.FakePauseGate
 import cn.worktool.open.feature.executor.fake.FakeUiDriver
 
@@ -218,4 +219,95 @@ class PassFriendWorld(
             onClick(requests.screen, row.acceptNode) { row.rowNode.detachFromParent() }
         }
     }
+}
+
+/** 501 GET_GROUP_INFO 世界（通讯录 → 群聊 → 分页懒加载）。 */
+class GroupListWorld(
+    /** 群分页数据（首屏=第 1 页，滚动逐页追加）。 */
+    groupPages: List<List<String>> = listOf(
+        listOf("交付群", "客户群", "外部合作群"),
+        listOf("测试群", "售后群"),
+        listOf("最后一批群"),
+    ),
+    infiniteScroll: Boolean = false,
+    withContactsTab: Boolean = true,
+    withGroupChatEntry: Boolean = true,
+) {
+    val clock = FakeClock()
+    val gate = FakePauseGate()
+    val home = HomeFixture(
+        conversations = listOf("工作群"),
+        withContactsTab = withContactsTab,
+    )
+    val contacts = ContactsFixture(
+        withNewFriendsEntry = true,
+        withGroupChatEntry = withGroupChatEntry,
+    )
+    val groupList = GroupListFixture(pages = groupPages, infinite = infiniteScroll)
+
+    val driver = FakeUiDriver(clock).apply {
+        show(home.screen)
+        if (withContactsTab) {
+            onClick(home.screen, home.contactsTab!!) { push(contacts.screen) }
+        }
+        if (withGroupChatEntry) {
+            onClick(contacts.screen, contacts.groupChatEntry!!) { push(groupList.screen) }
+        }
+        onScroll(groupList.screen, groupList.listContainer) { groupList.appendNextPage() }
+    }
+}
+
+/** 502 GET_FRIEND_INFO 世界（通讯录联系人分页懒加载）。 */
+class FriendListWorld(
+    friendPages: List<List<String>> = listOf(
+        listOf("张三", "李四", "王五"),
+        listOf("赵六"),
+    ),
+    infiniteScroll: Boolean = false,
+    withContactsTab: Boolean = true,
+) {
+    val clock = FakeClock()
+    val gate = FakePauseGate()
+    val home = HomeFixture(
+        conversations = listOf("工作群"),
+        withContactsTab = withContactsTab,
+    )
+    private val pages = friendPages
+    private val infinite = infiniteScroll
+    private var synthetic = 0
+    val contacts = ContactsFixture(
+        withNewFriendsEntry = false,
+        friendPages = friendPages,
+    )
+
+    val driver = FakeUiDriver(clock).apply {
+        show(home.screen)
+        if (withContactsTab) {
+            onClick(home.screen, home.contactsTab!!) { push(contacts.screen) }
+        }
+        contacts.friendList?.let { list ->
+            onScroll(contacts.screen, list) {
+                if (infinite) {
+                    synthetic++
+                    contacts.appendNamedFriend("滚动测试好友-$synthetic")
+                } else {
+                    contacts.appendNextFriendPage()
+                }
+            }
+        }
+    }
+}
+
+/** 509 GET_LOCAL_FILE 世界（纯文件面，无界面导航；文件表 + 默认日志路径）。 */
+class LocalFileWorld(
+    files: Map<String, Long> = mapOf(
+        "/data/local/tmp/worktool/logs/robot.log" to 4096L,
+        "/sdcard/Download/手册.pdf" to 1_048_576L,
+    ),
+    defaultLogPath: String? = "/data/local/tmp/worktool/logs/robot.log",
+) {
+    val clock = FakeClock()
+    val gate = FakePauseGate()
+    val filePort = FakeLocalFiles(files, defaultLogPath)
+    val driver = FakeUiDriver(clock)
 }

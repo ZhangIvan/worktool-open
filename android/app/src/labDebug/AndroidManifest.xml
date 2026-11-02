@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  lab 变体清单叠加（W-M3R 真机装配，仅 labDebug 构型；产品 main/debug/release 源集零改动，G12）：
+  - INTERNET 权限：产品壳工程零权限（SR-10），lab 需与 S1 自签 TLS 部署通信；
+  - networkSecurityConfig：仅对 lab 主机（192.0.2.10）信任 lab CA（res/raw/ca_lab.crt，
+    公钥材料；对应私钥仅存 local-private/，G13 不入库）；
+  - LabPairingActivity：配对最小面（host + 6 位配对码 → PairingClient → V2Session hello）。
+    exported=true 仅为 RIG/adb 显式启动通道（lab 装配验证），无 intent-filter。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <activity
+            android:name="cn.worktool.open.app.lab.LabPairingActivity"
+            android:exported="true"
+            android:label="@string/lab_pairing_title" />
+    </application>
+
+</manifest>

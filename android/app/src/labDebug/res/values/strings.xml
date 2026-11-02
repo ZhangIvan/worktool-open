@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- lab 变体字符串（仅 labDebug 构型；产品 strings.xml 零改动）。 -->
+<resources>
+    <string name="lab_pairing_title">WorkTool-Open Lab 配对</string>
+    <string name="lab_host_hint">服务端 base URL（https://host:port）</string>
+    <string name="lab_host_default">https://192.0.2.10:8463</string>
+    <string name="lab_code_hint">6 位配对码</string>
+    <string name="lab_pair_button">配对并建立会话</string>
+    <string name="lab_status_idle">待配对：输入服务端地址与配对码（服务端签发，10 分钟内单次有效）</string>
+</resources>

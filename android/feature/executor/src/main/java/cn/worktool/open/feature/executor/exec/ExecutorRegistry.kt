@@ -5,6 +5,9 @@ package cn.worktool.open.feature.executor.exec
 
 import cn.worktool.open.feature.executor.commands.InitGroupExecutor
 import cn.worktool.open.feature.executor.commands.ModifyGroupMemberInfoExecutor
+import cn.worktool.open.feature.executor.commands.GetFriendListExecutor
+import cn.worktool.open.feature.executor.commands.GetGroupListExecutor
+import cn.worktool.open.feature.executor.commands.GetLocalFileExecutor
 import cn.worktool.open.feature.executor.commands.PassFriendExecutor
 import cn.worktool.open.feature.executor.commands.SendTextExecutor
 import cn.worktool.open.feature.executor.commands.UpdateGroupExecutor
@@ -50,6 +53,33 @@ class ExecutorRegistry private constructor(
             UpdateGroupExecutor(),
             ModifyGroupMemberInfoExecutor(),
             PassFriendExecutor(),
+        )
+
+        /**
+         * v0.1 首批全量注册表（docs/05 P0 首批行：101/102 上报面 +
+         * 203/206/207/225/212 + 501/502/509 查询面）= defaultP0 五指令
+         * + 三个查询执行器。
+         *
+         * 查询执行器经端口外接（[cn.worktool.open.feature.executor.query.QueryResultSink]
+         * 结构化结果出口 / [cn.worktool.open.feature.executor.query.LocalFilePort]
+         * 文件元数据）——**显式传参**而非默认空实现：生产接线必须提供出口，
+         * 缺省静默丢结果属接线错误，类型系统上强制（fail-safe）。
+         *
+         * 101/102 上报方向不经本注册表（云→端路由无此方向），见
+         * `report/MessageEventReporter`（端→云上报执行器）。
+         */
+        fun defaultFirstBatch(
+            querySink: cn.worktool.open.feature.executor.query.QueryResultSink,
+            files: cn.worktool.open.feature.executor.query.LocalFilePort,
+        ): ExecutorRegistry = of(
+            SendTextExecutor(),
+            InitGroupExecutor(),
+            UpdateGroupExecutor(),
+            ModifyGroupMemberInfoExecutor(),
+            PassFriendExecutor(),
+            GetGroupListExecutor(querySink),
+            GetFriendListExecutor(querySink),
+            GetLocalFileExecutor(files, querySink),
         )
     }
 }

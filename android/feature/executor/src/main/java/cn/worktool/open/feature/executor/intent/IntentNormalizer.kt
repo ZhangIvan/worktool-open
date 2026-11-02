@@ -29,6 +29,9 @@ class IntentNormalizer(
         MessageTypes.PASS_ALL_FRIEND_REQUEST -> NormalizedIntent.Valid(
             CommandIntent.PassFriend(),
         )
+        MessageTypes.GET_GROUP_INFO -> NormalizedIntent.Valid(CommandIntent.GetGroupList())
+        MessageTypes.GET_FRIEND_INFO -> NormalizedIntent.Valid(CommandIntent.GetFriendList())
+        MessageTypes.GET_LOCAL_FILE -> normalizeGetLocalFile(bean)
         else -> NormalizedIntent.Unsupported(bean.type)
     }
 
@@ -111,6 +114,14 @@ class IntentNormalizer(
                 markName = markName?.takeIf { it.isNotBlank() },
                 tagList = tags.filter { it.isNotBlank() },
             ),
+        )
+    }
+
+    /** 509：路径可选（空缺 = 默认当前日志，语义在执行器经 LocalFilePort 解析）。 */
+    private fun normalizeGetLocalFile(bean: WeworkMessageBean): NormalizedIntent {
+        val path = bean.extraString(PayloadFields.FILE_PATH)?.trim()
+        return NormalizedIntent.Valid(
+            CommandIntent.GetLocalFile(filePath = path?.takeIf { it.isNotBlank() }),
         )
     }
 

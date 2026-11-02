@@ -1,3 +1,5 @@
+import java.io.File
+
 /*
  * app 模块（T1.2）：壳工程 + 空引导页。
  * 包名 cn.worktool.open（ADR-04，docs/00 §ADR）。
@@ -46,6 +48,18 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // W-M3R 真机装配（D1 lab）：lab 变体 = 独立 buildType（非 flavor），保证
+        // debug/release 产品变体任务名与源集零改动（CI assembleDebug 不受影响，
+        // G12 精神），产物任务名 assembleLabDebug。lab 专属内容全部在
+        // src/labDebug/ 源集：INTERNET 权限 + networkSecurityConfig 信任 lab CA +
+        // 配对最小 UI；applicationId 加 .lab 后缀与产品安装共存。
+        create("labDebug") {
+            initWith(getByName("debug"))
+            isDebuggable = true
+            applicationIdSuffix = ".lab"
+            versionNameSuffix = "-lab"
+            matchingFallbacks += listOf("debug") // 库模块无 labDebug 变体 → 回落 debug
+        }
     }
 
     compileOptions {
@@ -55,6 +69,53 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    sourceSets {
+        // W-M3R 裁决 B（2026-11-03）：D1（Android 12/API 31）JCA 无 Ed25519 任何算法名，
+        // 配对必填 ed25519PublicKey（spec §5.1.2 冻结）→ lab 一次性密钥对经构建参数注入
+        // labDebug 资产（build/generated/，不入库）；资产只含公钥单字段（CR-R2 白名单
+        // 拷贝），私钥仅存 local-private/ 注入参数侧，不入库、不入日志、不入 APK 产物（G13）。
+        // 产品级回退提供者 = T2.6（W-M4，钉版本纯 Kotlin Ed25519，过 AUD-07 后生效）。
+        getByName("labDebug") {
+            assets.srcDir(layout.buildDirectory.dir("generated/labAssets"))
+        }
+    }
+}
+
+// lab 注入资产生成：WORKTOOL_LAB_ED25519_KEY_JSON（或 gradle property）提供
+// {"ed25519PublicKeyHex":..,"ed25519PrivatePkcs8Hex":..}；未提供则资产缺位，
+// lab 配对 UI 如实报错（fail-closed，不落任何兜底密钥）。
+// CR-R2 白名单拷贝：注入参数侧含私钥（仅存 local-private/，G13），但端侧只消费
+// ed25519PublicKeyHex（LabPairingActivity.loadLabInjectedEd25519PublicHex）——
+// 资产只落公钥单字段，私钥绝不写入 build/generated、绝不进入 labDebug APK 产物。
+val labEd25519KeyJson: String? = providers.gradleProperty("worktoolLabEd25519KeyJson")
+    .orElse(providers.environmentVariable("WORKTOOL_LAB_ED25519_KEY_JSON"))
+    .orNull
+
+val wtGenerateLabEd25519Asset = tasks.register("wtGenerateLabEd25519Asset") {
+    outputs.upToDateWhen { false } // 始终按最新构建参数重生成（值不入日志）
+    doLast {
+        val dir = layout.buildDirectory.dir("generated/labAssets").get().asFile
+        dir.mkdirs()
+        val f = File(dir, "lab_ed25519_key.json")
+        if (labEd25519KeyJson.isNullOrBlank()) {
+            f.delete()
+        } else {
+            // 注入 JSON 须含形状合法的 ed25519PublicKeyHex（64 位小写 hex，与端侧
+            // 运行时校验同契约）；形状非法 = 构建期注入错误，立即失败不产半份资产
+            val parsed = groovy.json.JsonSlurper().parseText(labEd25519KeyJson) as? Map<*, *>
+                ?: throw GradleException("lab 注入密钥 JSON 形状非法（须为对象）")
+            val publicHex = parsed["ed25519PublicKeyHex"] as? String
+            if (publicHex == null || !publicHex.matches(Regex("^[0-9a-f]{64}$"))) {
+                throw GradleException("lab 注入密钥缺/非法 ed25519PublicKeyHex（fail-closed，资产不落盘）")
+            }
+            f.writeText("""{"ed25519PublicKeyHex":"$publicHex"}""")
+        }
+    }
+}
+
+tasks.matching { it.name == "mergeLabDebugAssets" }.configureEach {
+    dependsOn(wtGenerateLabEd25519Asset)
 }
 
 dependencies {

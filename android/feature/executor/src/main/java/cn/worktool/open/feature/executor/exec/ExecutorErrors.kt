@@ -34,6 +34,9 @@ object ExecutorErrorCodes {
     /** 执行后校验失败（副作用未见上屏）。 */
     const val VERIFY_FAILED = 201004
 
+    /** 509：目标本地文件不存在或不可读。 */
+    const val LOCAL_FILE_MISSING = 201005
+
     /** 步骤内部异常（防御兜底，正常不应出现）。 */
     const val STEP_ERROR = 201099
 }

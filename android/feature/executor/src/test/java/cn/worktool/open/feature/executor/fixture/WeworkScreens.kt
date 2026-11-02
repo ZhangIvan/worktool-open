@@ -361,19 +361,112 @@ class MemberDetailFixture(
     )
 }
 
-/** 通讯录页（好友请求入口）。 */
+/**
+ * 通讯录页（好友请求入口 + 501「群聊」入口 + 502 联系人分页列表）。
+ * [friendPages] 传 null = 旧形态（PassFriendWorld：仅静态张三文本，无列表容器）。
+ */
 class ContactsFixture(
     withNewFriendsEntry: Boolean = true,
+    /** 联系人分页数据（502；首屏=第 1 页，滚动经 [appendNextFriendPage] 追加）。 */
+    friendPages: List<List<String>>? = null,
+    /** 「群聊」入口（501 导航第二步）。 */
+    withGroupChatEntry: Boolean = false,
 ) {
+    private val pages: List<List<String>>? = friendPages
+    private var nextFriendPage: Int = 1
+
     val newFriendsEntry: FakeExecutorNode? =
         if (withNewFriendsEntry) fakeNode(text = "新的朋友", cls = TEXT_VIEW, clickable = true) else null
+
+    val groupChatEntry: FakeExecutorNode? =
+        if (withGroupChatEntry) fakeNode(text = "群聊", cls = TEXT_VIEW, clickable = true) else null
+
+    /** 联系人列表滚动容器（CONTACTS_LIST_CONTAINER 选择器锚点）。 */
+    val friendList: FakeExecutorNode? = friendPages?.let {
+        fakeNode(
+            cls = VIEW_GROUP,
+            resId = "com.tencent.wework:id/contacts_list_container",
+            scrollable = true,
+        ) {
+            it.first().forEach { name -> add(contactItemNode(name)) }
+        }
+    }
+
+    /** 滚动追加下一页联系人（页耗尽返回 false → 分页读取判「无新增」收敛）。 */
+    fun appendNextFriendPage(): Boolean {
+        val next = pages?.getOrNull(nextFriendPage) ?: return false
+        nextFriendPage++
+        next.forEach { friendList?.add(contactItemNode(it)) }
+        return true
+    }
+
+    /** 追加单个命名联系人（无限滚动护栏场景用）。 */
+    fun appendNamedFriend(name: String) {
+        friendList?.add(contactItemNode(name))
+    }
+
+    private fun contactItemNode(name: String): FakeExecutorNode = fakeNode(
+        text = name,
+        resId = "com.tencent.wework:id/contact_item_name",
+        cls = TEXT_VIEW,
+    )
 
     val screen: FakeScreen = FakeScreen(
         name = "contacts",
         root = fakeNode(cls = VIEW_GROUP) {
             add(fakeNode(text = "通讯录", cls = TEXT_VIEW))
             newFriendsEntry?.let { add(it) }
-            add(fakeNode(text = "张三", cls = TEXT_VIEW))
+            groupChatEntry?.let { add(it) }
+            friendList?.let { add(it) } ?: add(fakeNode(text = "张三", cls = TEXT_VIEW))
+        },
+    )
+}
+
+/** 群聊列表页（501）：分页懒加载容器（滚动追加下一页；[infinite]=异常不收敛场景）。 */
+class GroupListFixture(
+    pages: List<List<String>>,
+    /** true = 每次滚动都追加新群（护栏 VERIFY_FAILED 场景）。 */
+    private val infinite: Boolean = false,
+) {
+    private val pagesInternal: List<List<String>> = pages
+    private var nextPage: Int = 1
+    private var syntheticIndex: Int = 0
+
+    val listContainer: FakeExecutorNode = fakeNode(
+        cls = VIEW_GROUP,
+        resId = "com.tencent.wework:id/group_list_container",
+        scrollable = true,
+    ) {
+        pages.first().forEach { name -> add(groupItemNode(name)) }
+    }
+
+    /** 滚动追加下一页群（页耗尽返回 false；infinite 永续追加）。 */
+    fun appendNextPage(): Boolean {
+        if (infinite) {
+            syntheticIndex++
+            listContainer.add(groupItemNode("滚动测试群-$syntheticIndex"))
+            return true
+        }
+        val next = pagesInternal.getOrNull(nextPage) ?: return false
+        nextPage++
+        next.forEach { listContainer.add(groupItemNode(it)) }
+        return true
+    }
+
+    /** 当前容器内全部群名（断言用）。 */
+    fun groupNames(): List<String?> = listContainer.children.map { it.textValue }
+
+    private fun groupItemNode(name: String): FakeExecutorNode = fakeNode(
+        text = name,
+        resId = "com.tencent.wework:id/group_list_item_name",
+        cls = TEXT_VIEW,
+    )
+
+    val screen: FakeScreen = FakeScreen(
+        name = "group-list",
+        root = fakeNode(cls = VIEW_GROUP) {
+            add(fakeNode(text = "群聊", cls = TEXT_VIEW))
+            add(listContainer)
         },
     )
 }

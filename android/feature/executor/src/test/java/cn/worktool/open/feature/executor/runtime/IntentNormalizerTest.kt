@@ -27,7 +27,13 @@ import org.junit.Test
  */
 class IntentNormalizerTest {
 
-    private val normalizer = IntentNormalizer(ExecutorRegistry.defaultP0().supportedTypes)
+    /** 支持集 = v0.1 首批全量注册表（五指令 + 501/502/509）。 */
+    private val normalizer = IntentNormalizer(
+        ExecutorRegistry.defaultFirstBatch(
+            querySink = cn.worktool.open.feature.executor.fake.RecordingQuerySink(),
+            files = cn.worktool.open.feature.executor.fake.FakeLocalFiles(mapOf(), null),
+        ).supportedTypes,
+    )
     private val codec = EnvelopeCodec()
 
     // ---- protocol 夹具消费（spec §7：文件名与字段冻结为测试数据接口） ----
@@ -143,6 +149,33 @@ class IntentNormalizerTest {
         assertEquals(listOf("VIP"), intent.tagList)
     }
 
+    // ---- 501/502/509（v0.1 首批补齐，docs/05 P0 首批行） ----
+
+    @Test
+    fun `501与502-无必填字段默认意图规范化`() {
+        val group = normalizer.normalize(bean(MessageTypes.GET_GROUP_INFO)) as NormalizedIntent.Valid
+        assertEquals(CommandIntent.GetGroupList(), group.intent)
+
+        val friend = normalizer.normalize(bean(MessageTypes.GET_FRIEND_INFO)) as NormalizedIntent.Valid
+        assertEquals(CommandIntent.GetFriendList(), friend.intent)
+    }
+
+    @Test
+    fun `509-filePath候选字段可选`() {
+        val withPath = normalizer.normalize(
+            bean(MessageTypes.GET_LOCAL_FILE, extras = mapOf("filePath" to JsonPrimitive("/sdcard/Download/手册.pdf"))),
+        ) as NormalizedIntent.Valid
+        assertEquals("/sdcard/Download/手册.pdf", (withPath.intent as CommandIntent.GetLocalFile).filePath)
+
+        val blank = normalizer.normalize(
+            bean(MessageTypes.GET_LOCAL_FILE, extras = mapOf("filePath" to JsonPrimitive("  "))),
+        ) as NormalizedIntent.Valid
+        assertEquals("空白路径归默认（当前日志）", null, (blank.intent as CommandIntent.GetLocalFile).filePath)
+
+        val none = normalizer.normalize(bean(MessageTypes.GET_LOCAL_FILE)) as NormalizedIntent.Valid
+        assertEquals(null, (none.intent as CommandIntent.GetLocalFile).filePath)
+    }
+
     // ---- 未支持类型 ----
 
     @Test
@@ -152,6 +185,9 @@ class IntentNormalizerTest {
 
         val delContact = bean(MessageTypes.DELETE_CONTACT)
         assertTrue(normalizer.normalize(delContact) is NormalizedIntent.Unsupported)
+
+        val getMyInfo = bean(MessageTypes.GET_MY_INFO) // 503 未实现（不在首批）
+        assertTrue(normalizer.normalize(getMyInfo) is NormalizedIntent.Unsupported)
     }
 
     // ---- 工具 ----
