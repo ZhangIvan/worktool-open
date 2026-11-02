@@ -69,13 +69,35 @@ def parse_resources(text):
 # Official format source: Android tools/base commit
 # 6a81855c2fa102ae4532ad9a645e40177770a26a ResourceIdResolver.NO_RESOLUTION
 # emits @ref/0x%x. Still require the exact ID in this APK's aapt2 table.
+def normalize_reference_attributes(attributes,resources):
+    for element,attr,location in attributes:
+        value=element.get(attr,'')
+        m=re.fullmatch(r'@(?:ref/0x|0x)?([0-9a-fA-F]{8})',value)
+        if m:
+            key='0x'+m.group(1).lower()
+            # Only fixed caller-owned location + numeric resource ID; no values.
+            assert key in resources, 'unresolved consumed resource: '+location+' '+key
+            element.set(attr,'@'+resources[key]['name'])
+        elif re.fullmatch(r'@[A-Za-z0-9_]+/[A-Za-z0-9_]+',value):
+            matches=[r for r in resources.values() if r['name']==value[1:]]
+            assert len(matches)==1, 'unresolved consumed symbolic resource: '+location
+        # Unsupported syntax remains unchanged and fails exact semantic checker.
+
+
 def normalize_references(root,resources):
-    for element in root.iter():
-        for attr,value in list(element.attrib.items()):
-            m=re.fullmatch(r'@(?:ref/0x|0x)?([0-9a-fA-F]{8})',value)
-            if m:
-                key='0x'+m.group(1).lower();assert key in resources,'unresolved compiled resource'
-                element.set(attr,'@'+resources[key]['name'])
+    # Do not resolve unrelated framework theme/icon references via app resources.
+    # These are the ONLY reference-valued attributes consumed by security checks.
+    attributes=[]
+    if root.tag=='manifest':
+        for service in root.findall('application/service'):
+            for meta in service.findall('meta-data'):
+                if meta.get(A+'name')=='android.accessibilityservice':
+                    attributes.append((meta,A+'resource','service.metadata.resource'))
+    elif root.tag=='accessibility-service':
+        attributes=[(root,A+name,'service.xml.'+name) for name in ('description','packageNames')]
+    else:
+        raise AssertionError('unsupported reference normalization root')
+    normalize_reference_attributes(attributes,resources)
 
 
 def resource_string(resources,name):
@@ -105,7 +127,7 @@ def resource_selftest():
     resources=parse_resources('resource 0x7f010001 string/ui_accessibility_package_filter\n  () "io.worktool.open.prototype"\nresource 0x7f020001 xml/ui_fixture_accessibility_service\n  () (file) res/xml/ui_fixture_accessibility_service.xml')
     assert resource_string(resources,'string/ui_accessibility_package_filter')=='io.worktool.open.prototype'
     xml=ET.fromstring('<x xmlns:android="http://schemas.android.com/apk/res/android" android:packageNames="@0x7f010001" android:accessibilityEventTypes="0x820"/>')
-    normalize_references(xml,resources);normalize_service_numbers(xml)
+    normalize_reference_attributes([(xml,A+'packageNames','fixture.packageNames')],resources);normalize_service_numbers(xml)
     assert xml.get(A+'packageNames')=='@string/ui_accessibility_package_filter'
     assert xml.get(A+'accessibilityEventTypes')=='typeWindowStateChanged|typeWindowContentChanged'
     for bad in ['resource 0x7f010001 string/ui_accessibility_package_filter\n  () "*"\n  (en) "io.worktool.open.prototype"','resource 0x7f010001 string/ui_accessibility_package_filter\n  () @string/other']:
@@ -115,25 +137,58 @@ def resource_selftest():
     # Official no-resolver format must resolve only through an exact table ID.
     for raw in ['@ref/0x7f020001','@ref/0x7F020001','@0x7f020001','@7f020001']:
         x=ET.Element('meta-data',{A+'resource':raw})
-        normalize_references(x,resources)
+        normalize_reference_attributes([(x,A+'resource','fixture.resource')],resources)
         assert x.get(A+'resource')=='@xml/ui_fixture_accessibility_service'
     for raw in ['@ref/0x7f020099','@0x7f020099']:
-        try:normalize_references(ET.Element('x',{A+'resource':raw}),resources)
+        try:normalize_reference_attributes([(ET.Element('x',{A+'resource':raw}),A+'resource','fixture.resource')],resources)
         except AssertionError:pass
         else:raise AssertionError('unknown resource ID accepted')
     for raw in ['@dref/0x7f020001','@ref/0x7f020001suffix','@ref/0x7f020001\n','@ref/2130837505','@wrong/0x7f020001']:
-        x=ET.Element('x',{A+'resource':raw});normalize_references(x,resources)
-        assert x.get(A+'resource')!='@xml/ui_fixture_accessibility_service'
-    x=ET.Element('x',{A+'resource':'@ref/0x7f010001'});normalize_references(x,resources)
+        x=ET.Element('x',{A+'resource':raw})
+        try:normalize_reference_attributes([(x,A+'resource','fixture.resource')],resources)
+        except AssertionError:pass
+        else:assert x.get(A+'resource')!='@xml/ui_fixture_accessibility_service'
+    x=ET.Element('x',{A+'resource':'@ref/0x7f010001'});normalize_reference_attributes([(x,A+'resource','fixture.resource')],resources)
     assert x.get(A+'resource')=='@string/ui_accessibility_package_filter' # wrong type is NOT aliased to xml
     for raw,accepted in [('@ref/0x7f020001',True),('@ref/0x7f010001',False),('@dref/0x7f020001',False)]:
         manifest=ET.parse(ROOT/'app/src/main/AndroidManifest.xml').getroot()
         manifest.set('package','io.worktool.open.prototype')
         manifest.find('application/service/meta-data').set(A+'resource',raw)
-        normalize_references(manifest,resources)
-        try:check_manifest(manifest,'debug')
+        try:
+            normalize_references(manifest,resources)
+            check_manifest(manifest,'debug')
         except AssertionError:assert not accepted
         else:assert accepted
+    # Unconsumed framework refs are preserved; consumed missing refs still fail.
+    manifest=ET.parse(ROOT/'app/src/main/AndroidManifest.xml').getroot()
+    manifest.set('package','io.worktool.open.prototype')
+    manifest.find('application').set(A+'theme','@ref/0x01030224')
+    meta=manifest.find('application/service/meta-data')
+    meta.set(A+'resource','@ref/0x7f020001')
+    normalize_references(manifest,resources);check_manifest(manifest,'debug')
+    assert manifest.find('application').get(A+'theme')=='@ref/0x01030224'
+    for raw in ['@ref/0x01030224','@ref/0x7f020099','@xml/missing']:
+        meta.set(A+'resource',raw)
+        try:normalize_references(manifest,resources)
+        except AssertionError:pass
+        else:raise AssertionError('missing consumed resource accepted')
+    service=ET.Element('accessibility-service',{A+'description':'@ref/0x7f010099',A+'packageNames':'@ref/0x7f010001'})
+    try:normalize_references(service,resources)
+    except AssertionError as error:assert 'service.xml.description' in str(error)
+    else:raise AssertionError('missing consumed description accepted')
+    for target,attribute in [('application','usesCleartextTraffic'),('application','allowBackup'),('application/service','permission'),('application/service','exported')]:
+        m=ET.parse(ROOT/'app/src/main/AndroidManifest.xml').getroot();m.set('package','io.worktool.open.prototype')
+        m.find(target).set(A+attribute,'@ref/0x7f010001')
+        normalize_references(m,resources)
+        try:check_manifest(m,'debug')
+        except AssertionError:pass
+        else:raise AssertionError('referenced security attribute accepted')
+    for attribute in ['accessibilityEventTypes','accessibilityFlags','canRetrieveWindowContent','canPerformGestures','isAccessibilityTool']:
+        sx=ET.parse(ROOT/'app/src/main/res/xml/ui_fixture_accessibility_service.xml').getroot()
+        sx.set(A+attribute,'@ref/0x7f010001')
+        try:check_service_xml(sx,'io.worktool.open.prototype')
+        except AssertionError:pass
+        else:raise AssertionError('referenced service security attribute accepted')
     diag=diagnostic_reference('@ref/0x7f020001',resources)
     assert diag['metadata_resource_repr']==repr('@ref/0x7f020001')
     assert all(set(r)=={'id','type','name'} for r in diag['resource_identity_candidates'])
