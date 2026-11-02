@@ -45,7 +45,7 @@ AUD-G 终审（独立审计 vs 本章程 G-1~G-5）──► v0.1.0 Release
 |------|------|------|------|------|
 | W-M3 | workflow（T3.1 执行器/T3.2 调度+apifox/T3.3 本地模式 + CR + E2E） | 全四门 | ✅ 完成（E2E 72/72、AUD-05 通过、CR 经主会话收口评审 B1 修复后清零；见 04 §6） | 三车道 + E2E 套件 + FR-53 分级裁决 |
 | D-2.5 | 主会话（RIG 首连 ✅：Android12/root/企微 5.0.13 在位；round-trip 并入 W-M3R） | 自测+AUD 抽查 | ✅ 通道达成 | RIG server_info 证据 |
-| W-M3R | workflow（**执行器补齐 101/102/501/502/509** + 真机装配 S1/D1 + round-trip 取证 + 05 矩阵回填；**脚本已预写** `.zcode/workflow-drafts/W-M3R-真机装配与矩阵填充.dwf.ts`，W-M3 落地即发射） | 全四门 | ⏸ 脚本就绪 | G-1 取证 |
+| W-M3R | workflow（**执行器补齐 101/102/501/502/509** + 真机装配 S1/D1 + round-trip 取证 + 05 矩阵回填；**脚本已预写** `.zcode/workflow-drafts/W-M3R-真机装配与矩阵填充.dwf.ts`，W-M3 落地即发射） | 全四门 | ✅ 完成（@cd6ee5c，CI 绿）——管道真机全线贯通至**帧层**：配对/hello/30×干跑/幂等重放/断网补传全部实证；**执行层被 hello_ack 格式拒收阻塞（T3.4 规格缺陷）**，矩阵诚实全 ⬜ | G-2② 部分达成；G-1 待 T3.4 后复跑取证 |
 | W-M4 | workflow（admin 面/compose/Release Gate 预演；C-7 签名修复） | 全四门 | ⏸ | G-4/G-5 预演 |
 | W-M5 | workflow（B2 批：22 执行器+9 REST 端点，docs/10 §B2） | 全四门 | ⏸ | v0.2 |
 | W-M6 | workflow（B3 批：30 执行器+15 端点，docs/10 §B3） | 全四门 | ⏸ | v0.3 |

@@ -71,6 +71,8 @@ G1~G13 全绿=W-M4｜依赖审计三线（govulncheck/Gradle/npm）=W-M4｜gitle
 | W-M3 内部 CR 13 项残留 | ✅ 已由主会话收口评审闭环（仅 B1 真实存在，已修+测试） | ✅ |
 | e2e 双路径垫片入口统一（收口 C5） | W-M4 | ⏸ |
 | **Ed25519 API24~32 回退提供者（产品缺陷：Android 7~12 无法生成配对必填密钥）** | W-M4（T2.6，dwfq-f63d4173-1 裁决；本阶段 lab 注入密钥过渡） | ⏸ |
+| **hello_ack 格式拒收（Go 产/python 收/Kotlin 拒=三方不一致→规格缺陷，901~904 控制帧 schema 未冻结）**：设备执行层因此未装配、G-1 阻塞 | **W-M4 第一优先级（T3.4）：schema 冻结+三实现对齐+设备执行回路接线 → 复跑取证翻矩阵** | ⏸ |
+| 证据卫生三件（AUD-06 F2 command_events 重采 / F3 截图按 magic-bytes 命名 / F4 送验 APK 归档） | W-M4（取证脚本固化） | ⏸ |
 
 ## G. 编排衔接规则（防断链）
 1. 每阶段 workflow 完成通知 → 主会话 24h 内：四门核收 → 台账/本清单回填 → **立即以 path 发射下一阶段脚本**（W-M3R/W-M4 脚本预先写好存 `.zcode/workflow-drafts/`）；
