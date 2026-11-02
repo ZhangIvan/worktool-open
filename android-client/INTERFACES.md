@@ -1,0 +1,8 @@
+# Android native slice — small integration contract
+Package `io.worktool.open.prototype` (device-management preflight reports absent; check again before install). Only INTERNET. Foreground Activity session, no foreground service/boot/other-app access. Endpoint HTTPS/WSS only; backend reachability not yet provisioned. Existing wire v1, only two remote capabilities. Real Accessibility API adapter source is included for compilation, but has not yet been built and no service is registered/enabled; only own FixtureActivity package allowed, no WeCom implementation claim.
+
+`Contracts.kt` defines module interfaces: transport/ owns HTTP/WS, Keystore and SQLite; core/ owns protocol validation and command lifecycle; accessibility/ restricts native action APIs to the fixture; ui/ owns foreground interaction. AppGraph serializes integration. The Android slice does not replace the Node backend or change its authorization policies.
+
+Frame handling and all state transitions use one Serial Executor; transport callbacks route to it. UI callbacks go main thread. Journal mutation is atomic. Results durable before network send, ACK only marks already persisted result; interrupted RUNNING with no durable result becomes unknown, never replay. Only local synthetic inbox/hash effects, no real file reads. Native lifecycle/pairing/WS/SQLite are actual Android modules, not a renamed Node simulator.
+
+Pinned build inputs: compile/target36 min26, AGP8.13.2 Gradle8.13 Kotlin2.2.21 JDK17, platform Views, SQLiteOpenHelper, OkHttp5.3.2, official JCS Java1.1. No SDK/Gradle download locally. CI candidate uses official fixed-SHA actions and already licensed installed SDK. Build/artifact/device tests NOT_RUN until actual evidence.

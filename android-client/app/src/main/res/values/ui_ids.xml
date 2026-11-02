@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="ui_main_root" type="id" />
+    <item name="ui_main_banner" type="id" />
+    <item name="ui_main_endpoint" type="id" />
+    <item name="ui_main_enrollment_id" type="id" />
+    <item name="ui_main_enrollment_token" type="id" />
+    <item name="ui_main_pair" type="id" />
+    <item name="ui_main_resume" type="id" />
+    <item name="ui_main_pause" type="id" />
+    <item name="ui_main_status" type="id" />
+    <item name="ui_main_identity" type="id" />
+    <item name="ui_main_ledger" type="id" />
+    <item name="ui_main_inbox" type="id" />
+    <item name="ui_main_error" type="id" />
+    <item name="ui_main_open_fixture" type="id" />
+    <item name="ui_export_confirmation" type="id" />
+    <item name="ui_fixture_root" type="id" />
+    <item name="ui_fixture_banner" type="id" />
+    <item name="ui_fixture_target" type="id" />
+    <item name="ui_fixture_input" type="id" />
+    <item name="ui_fixture_send" type="id" />
+    <item name="ui_fixture_clear" type="id" />
+    <item name="ui_fixture_status" type="id" />
+    <item name="ui_fixture_output" type="id" />
+    <item name="ui_fixture_back" type="id" />
+</resources>

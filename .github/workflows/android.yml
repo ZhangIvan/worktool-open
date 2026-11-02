@@ -1,0 +1,68 @@
+name: Android native client checks
+on:
+  pull_request:
+    branches: [main]
+    paths: ['android-client/**', '.github/workflows/android.yml']
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths: ['android-client/**', '.github/workflows/android.yml']
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require existing licensed Android SDK (do not install or accept new licenses)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ANDROID_HOME:-}"
+          test -s "$ANDROID_HOME/licenses/android-sdk-license"
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+        with:
+          gradle-version: '8.13'
+          cache-disabled: true
+          dependency-graph: disabled
+      - name: Compile native app, JVM contracts, lint (no device/emulator execution)
+        run: gradle --no-daemon -p android-client :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
+      - name: Static APK identity and permission evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-client/ci-artifact
+          APK=android-client/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" > android-client/ci-artifact/signature.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > android-client/ci-artifact/badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK" > android-client/ci-artifact/permissions.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text=Path('android-client/ci-artifact/permissions.txt').read_text()
+          permissions=re.findall(r"uses-permission: name='([^']+)'",text)
+          assert set(permissions)=={'android.permission.INTERNET'}, permissions
+          PY
+          cp "$APK" android-client/ci-artifact/worktool-open-native-debug.apk
+          cd android-client/ci-artifact
+          sha256sum worktool-open-native-debug.apk > SHA256SUMS
+          printf '%s\n' 'Build artifact only. No device tests executed. Remote effects remain SIMULATED. Accessibility service is not registered. No WeCom integration.' > STATUS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: worktool-native-debug-${{ github.sha }}
+          path: android-client/ci-artifact/
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false
