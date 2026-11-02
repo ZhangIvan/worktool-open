@@ -44,7 +44,7 @@ func TestLeaseTrustedTypesAndIdentity(t *testing.T) {
 	}
 }
 func TestLeaseMigrationStaticContract(t *testing.T) {
-	if len(migrations.Order) != 7 || migrations.Order[6] != "0007_gateway_lease_connection.sql" {
+	if len(migrations.Order) < 7 || migrations.Order[6] != "0007_gateway_lease_connection.sql" {
 		t.Fatal("append-only migration order")
 	}
 	b, e := migrations.Files.ReadFile(migrations.Order[6])

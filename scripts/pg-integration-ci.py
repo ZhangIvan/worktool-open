@@ -17,7 +17,7 @@ IMAGE = 'postgres@sha256:41a369edc91d9bdd7a58be6bc71ea0f8f7a3f49e82818a9f0829021
 ALLOW = 'isolated-synthetic-schema-only'
 LABEL = 'io.worktool.pg-ci-run'
 SAFE_CODES = frozenset({'EXTRA_PORT', 'VERSION_STRING_MISMATCH', 'STORE_PRIVILEGED', 'GO_TEST_FAILED', 'RESOURCE_LIMIT_MISMATCH', 'PERSISTENT_OR_FOREIGN_MOUNT', 'SUBPROCESS_NONZERO', 'PG_READY_TIMEOUT', 'RUN_DIRECTORY_ALREADY_EXISTS', 'NON_LOOPBACK_PORT', 'STORE_INHERITS_OWNER', 'UNSAFE_SECRET_DIRECTORY', 'CONNECTION_LIMIT_MISMATCH', 'NON_JSON_TEST_OUTPUT', 'SUBPROCESS_FAILED_OR_TIMEOUT', 'DATABASE_TIMEOUT_MISMATCH', 'NAMESPACE_MISMATCH', 'DATA_DIRECTORY_MISMATCH', 'INVALID_RUN_ID', 'MISSING_FAILED_OR_SKIPPED_INTEGRATION_CASE', 'TMPFS_MISMATCH', 'MISSING_ALLOW', 'CLEANUP_NOT_CONFIRMED', 'CLEANUP_IDENTITY_MISMATCH', 'INVALID_PORT', 'HOSTED_CI_ONLY', 'VERSION_MISMATCH', 'IDENTITY_MISMATCH', 'INVALID_TEST_DSN', 'WAL_OUTSIDE_TMPFS', 'ROLE_OR_TARGET_MISMATCH'})
-TESTS = {'TestPGIntegrationSchemaAndDeviceBindings', 'TestPGIntegrationReservationBindings', 'TestPGIntegrationValidMaterializationAndGC', 'TestPGIntegrationInitialInsertForeignKeys'} | {f'TestPGAdmissionATC{i:02d}' for i in range(1, 9)} | {'TestPGAdmissionPayloadStorage', 'TestPGAdmissionPayloadMigrationGuard'} | {f'TestPGLeaseLF{i:02d}' for i in range(1, 9)}
+TESTS = {'TestPGIntegrationSchemaAndDeviceBindings', 'TestPGIntegrationReservationBindings', 'TestPGIntegrationValidMaterializationAndGC', 'TestPGIntegrationInitialInsertForeignKeys'} | {f'TestPGAdmissionATC{i:02d}' for i in range(1, 9)} | {'TestPGAdmissionPayloadStorage', 'TestPGAdmissionPayloadMigrationGuard'} | {f'TestPGLeaseLF{i:02d}' for i in range(1, 9)} | {f'TestPGGatewayGW{i:02d}' for i in range(1, 13)}
 
 
 def require(ok, code):
@@ -198,7 +198,7 @@ def run():
         preflight_env(env)
         private_file(folder / 'test.env', '\n'.join(k + '=' + env[k] for k in ('WORKTOOL_PGTEST_ALLOW', 'WORKTOOL_PGTEST_OWNER_DSN', 'WORKTOOL_PGTEST_STORE_DSN')) + '\n')
         p = invoke(['go', 'test', '-json', '-count=1', '-p', '1', '-timeout', '10m',
-                    './internal/store/pg', '-run', '^TestPG(Integration|Admission(ATC|Payload)|LeaseLF)'], env=env, timeout=620, check=False)
+                    './internal/store/pg', './internal/gateway', '-run', '^TestPG(Integration|Admission(ATC|Payload)|LeaseLF|GatewayGW)'], env=env, timeout=620, check=False)
         # Neither stdout Output records nor stderr are emitted or uploaded.
         diagnostics = test_diagnostics(p.stdout)
         if diagnostics['failedTests'] or diagnostics['sqlstates']:
@@ -235,11 +235,12 @@ def selftest():
             continue
         raise AssertionError('unsafe inspect accepted')
     raw = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS)
-    assert len(result_events(raw)) == 22
+    assert len(result_events(raw)) == 34
     old_four = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if n.startswith('TestPGIntegration'))
     without_payload = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGAdmissionPayload'))
     without_lease = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGLeaseLF'))
-    for bad in [b'', old_four, without_payload, without_lease, raw + b'\n{"Action":"skip"}', raw + b'\n{"Action":"fail"}']:
+    without_gateway = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGGatewayGW'))
+    for bad in [b'', old_four, without_payload, without_lease, without_gateway, raw + b'\n{"Action":"skip"}', raw + b'\n{"Action":"fail"}']:
         try:
             result_events(bad)
         except RuntimeError:

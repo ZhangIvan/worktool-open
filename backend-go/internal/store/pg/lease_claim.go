@@ -119,6 +119,9 @@ func checkAdmissionGraph(ctx context.Context, tx pgx.Tx, h LeaseHandle, c leaseC
 	return expires, nil
 }
 func (s *LeaseStore) ClaimReadyCommand(ctx context.Context, a GatewayAuthority, h LeaseHandle, q ClaimCommandRequest) (ClaimOutcome, error) {
+	return s.claim(ctx, a, h, q, false)
+}
+func (s *LeaseStore) claim(ctx context.Context, a GatewayAuthority, h LeaseHandle, q ClaimCommandRequest, f0 bool) (ClaimOutcome, error) {
 	var out ClaimOutcome
 	if !validHandle(h) || !authorityHandle(a, h) || !asciiIdentifier(q.CommandID) || q.ExpectedCommandVersion < 0 {
 		return out, admissionError("INVALID_INPUT")
@@ -190,6 +193,11 @@ func (s *LeaseStore) ClaimReadyCommand(ctx context.Context, a GatewayAuthority, 
 		if occupied {
 			out.Reason = "DEVICE_RECONCILIATION_REQUIRED"
 			return nil
+		}
+		if f0 {
+			if e = checkF0(ctx, tx, h.Tenant, c.id, false); e != nil {
+				return e
+			}
 		}
 		expires, e := checkAdmissionGraph(ctx, tx, h, c)
 		if e != nil {

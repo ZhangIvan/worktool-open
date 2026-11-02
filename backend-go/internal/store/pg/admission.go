@@ -223,6 +223,15 @@ func freshID(prefix string) (string, error) {
 // AdmitAppText performs one DB-only transaction; quota is internal capacity, not
 // money. Never returns Accepted on rollback or unknown Commit. No auto-retry.
 func (s *AdmissionStore) AdmitAppText(ctx context.Context, a AppAuthority, r AppTextRequest) (Accepted, error) {
+	return s.admitText(ctx, a, r, false)
+}
+
+// AdmitGatewayTextF0 is the narrow HTTP/WS P0 admission path. The existing
+// general ATC method retains F<=4 semantics; this check is inside its transaction.
+func (s *AdmissionStore) AdmitGatewayTextF0(ctx context.Context, a AppAuthority, r AppTextRequest) (Accepted, error) {
+	return s.admitText(ctx, a, r, true)
+}
+func (s *AdmissionStore) admitText(ctx context.Context, a AppAuthority, r AppTextRequest, f0 bool) (Accepted, error) {
 	var accepted Accepted
 	if ctx == nil {
 		return accepted, admissionError("INVALID_INPUT")
@@ -248,6 +257,16 @@ func (s *AdmissionStore) AdmitAppText(ctx context.Context, a AppAuthority, r App
 			return e
 		}
 		if exists {
+			if f0 {
+				var valid bool
+				e = tx.QueryRow(ctx, `SELECT c.subscription_snapshot='[]'::jsonb AND (SELECT count(*) FROM admission_reservations r WHERE r.tenant=c.tenant AND r.command=c.id AND r.kind='result')=1 AND NOT EXISTS(SELECT 1 FROM admission_reservations r WHERE r.tenant=c.tenant AND r.command=c.id AND r.kind='callback') FROM commands c WHERE c.tenant=$1 AND c.id=$2`, a.tenant, original.CommandID).Scan(&valid)
+				if e != nil {
+					return e
+				}
+				if !valid {
+					return admissionError("CAPABILITY_UNAVAILABLE")
+				}
+			}
 			facts, e := authorize(ctx, tx, a)
 			if e != nil {
 				return e
@@ -274,6 +293,9 @@ func (s *AdmissionStore) AdmitAppText(ctx context.Context, a AppAuthority, r App
 		subs, e := subscriptions(ctx, tx, a, false)
 		if e != nil {
 			return e
+		}
+		if f0 && len(subs) != 0 {
+			return admissionError("CAPABILITY_UNAVAILABLE")
 		}
 		if len(subs) > 4 {
 			return admissionError("SUBSCRIPTION_POLICY_UNAVAILABLE")

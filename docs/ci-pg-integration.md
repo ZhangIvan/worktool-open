@@ -108,3 +108,20 @@ candidate additionally requires LF01–08; those lease tests are not yet claimed
 run. Receipt of a DB claim is not a socket-send or device-effect proof. The
 runner rejects logs containing only the previous 14 passes. Resources, image,
 roles, network exposure, cleanup and permission bounds are unchanged.
+
+## Gateway P0 candidate extension (not yet run)
+
+The 22 prior groups passed actual PG CI on source 07fb478. This candidate
+requires all 22 plus GW01–12 in `internal/gateway`; a prior-only log is failure.
+Tests use actual HTTP/WebSocket sockets bound only to ephemeral loopback ports
+and synthetic fake-device journals within this same disposable runner and PG
+suite. No external listener, Android device, production account, callback
+request or additional persistent service is permitted. Tests without the full
+existing explicit integration gate must skip before opening any socket or PG.
+
+The fixed image, owner/store roles, memory/CPU/tmpfs limits, 10-minute test
+deadline, 15-minute job limit and run-scoped cleanup remain unchanged. Socket
+servers must shut down all live/replaced connections before their test-owned PG
+pools close; uncertain shutdown is failure, not cleanup evidence. Successful
+CI would prove only this 1.0 text/F0 internal slice, not browser control, export,
+1.1 fixture support, physical Android interoperability, throughput or production.

@@ -274,6 +274,15 @@ func writeSnapshot(ctx context.Context, tx pgx.Tx, h LeaseHandle) error {
 	return e
 }
 func (s *LeaseStore) AcquireDeviceLease(ctx context.Context, a GatewayAuthority, q AcquireLeaseRequest) (LeaseHandle, error) {
+	return s.acquireDeviceLease(ctx, a, q, "")
+}
+
+// Only the gateway's already-consumed, server-generated physical nonce may use
+// current-fence selection. Public expectedFence semantics are unchanged.
+func (s *LeaseStore) acquireConsumed(ctx context.Context, a GatewayAuthority, nonce string) (LeaseHandle, error) {
+	return s.acquireDeviceLease(ctx, a, AcquireLeaseRequest{ConnectionID: nonce}, nonce)
+}
+func (s *LeaseStore) acquireDeviceLease(ctx context.Context, a GatewayAuthority, q AcquireLeaseRequest, consumedNonce string) (LeaseHandle, error) {
 	var out LeaseHandle
 	if !a.trusted || !asciiIdentifier(q.ConnectionID) || q.ExpectedFence < 0 {
 		return out, admissionError("INVALID_INPUT")
@@ -293,12 +302,34 @@ func (s *LeaseStore) AcquireDeviceLease(ctx context.Context, a GatewayAuthority,
 		if e != nil {
 			return e
 		}
+		if consumedNonce != "" {
+			var consumed bool
+			var nonce string
+			e = tx.QueryRow(ctx, `SELECT ws_consumed,COALESCE(ws_connection_id,'') FROM device_sessions WHERE tenant=$1 AND device=$2 AND id=$3`, a.tenant, a.device, a.session).Scan(&consumed, &nonce)
+			if e != nil {
+				return e
+			}
+			if !consumed || nonce != consumedNonce || nonce != q.ConnectionID {
+				return admissionError("SESSION_NOT_CURRENT")
+			}
+		}
 		now, ms, e := s.now(ctx, tx)
 		if e != nil {
 			return e
 		}
 		if e = liveGateway(f, ms); e != nil {
 			return e
+		}
+		if consumedNonce != "" && old != nil {
+			sameAcquisition := old.SessionID == a.session && old.OwnerInstance == a.runtime.instance && old.ConnectionID == consumedNonce && old.RecoveryEpoch == a.runtime.epoch
+			if sameAcquisition && old.state == "active" && old.LeaseUntil.After(now) {
+				out = old.LeaseHandle
+				return nil
+			}
+			if old.Fence == math.MaxInt64 {
+				return admissionError("FENCE_EXHAUSTED")
+			}
+			q.ExpectedFence = old.Fence
 		}
 		h := LeaseHandle{a.tenant, a.device, a.session, a.runtime.instance, q.ConnectionID, a.runtime.epoch, q.ExpectedFence + 1, deadline(now, f.expires)}
 		if old != nil {
