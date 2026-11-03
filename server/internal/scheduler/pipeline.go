@@ -206,6 +206,16 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 		}
 	}
 
+	// SR-11：外链资源域白名单（fileUrl/fileBase64 中的 URL 域名仅允许显式登记的域，
+	// 默认零白名单=全拒；AUD-G 阻断项修复——docs/09 P5 预演发现）。对全部风险级生效。
+	if err := s.checkFileURLDomains(ctx, req.Payload); err != nil {
+		var ge *GuardError
+		if errors.As(err, &ge) {
+			return s.rejectGuard(ctx, now, ge)
+		}
+		return SubmitResult{}, err
+	}
+
 	// FR-53 冻结：同风险级存在 pending execution_unknown → 拒绝新提交
 	if risk == RiskL1 || risk == RiskL2 {
 		pending, err := s.db.PendingUnknownRisk(ctx)

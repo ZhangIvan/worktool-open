@@ -16,6 +16,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,6 +107,7 @@ const (
 	ErrCodeApprovalMismatch = "APPROVAL_MISMATCH"
 	ErrCodeApproverConflict = "APPROVER_CONFLICT"
 	ErrCodeCircuitOpen      = "CIRCUIT_OPEN"
+	ErrCodeFileDomain       = "FILE_DOMAIN_NOT_ALLOWED"
 )
 
 // guard 为进程内保护状态（限速计数；熔断器独立文件）。
@@ -360,4 +363,37 @@ func (s *Service) SetGuardConfig(cfg GuardConfig) {
 	s.guard.mu.Lock()
 	s.guard.cfg = cfg
 	s.guard.mu.Unlock()
+}
+
+// AddAllowedFileDomain / AllowedFileDomains：SR-11 外链资源域白名单管理面
+// （G11 阻断项修复——默认零白名单=任何含 fileUrl 的指令拒收；admin 面/配置注入登记）。
+func (s *Service) AddAllowedFileDomain(ctx context.Context, domain, by string) error {
+	return s.db.AddAllowedFileDomain(ctx, domain, by, s.Now())
+}
+
+// checkFileURLDomains 校验载荷中全部 fileUrl 值的域名 ∈ 白名单（SR-11；默认零域=全拒）。
+// fileBase64（内嵌内容）不受域约束；仅 URL 形态需过白名单。
+func (s *Service) checkFileURLDomains(ctx context.Context, payload string) error {
+	var probe struct {
+		FileURL string `json:"fileUrl"`
+	}
+	if err := json.Unmarshal([]byte(payload), &probe); err != nil || probe.FileURL == "" {
+		return nil // 无 fileUrl 字段（或非 JSON 对象——静态校验兜底）→ 不适用
+	}
+	u, err := url.Parse(probe.FileURL)
+	if err != nil || u.Host == "" {
+		return &GuardError{Code: ErrCodeFileDomain,
+			Msg: fmt.Sprintf("fileUrl %q 不可解析（SR-11 fail-closed）", probe.FileURL)}
+	}
+	allowed, err := s.db.AllowedFileDomains(ctx)
+	if err != nil {
+		return err
+	}
+	for _, d := range allowed {
+		if u.Host == d || strings.HasSuffix(u.Host, "."+d) {
+			return nil // 精确或子域匹配
+		}
+	}
+	return &GuardError{Code: ErrCodeFileDomain,
+		Msg: fmt.Sprintf("fileUrl 域名 %q 不在 SR-11 白名单（默认拒收，登记后方可放行）", u.Host)}
 }

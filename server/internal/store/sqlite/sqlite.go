@@ -324,6 +324,13 @@ CREATE TABLE IF NOT EXISTS recipient_whitelist (
   PRIMARY KEY (target, recipient)
 );
 
+-- SR-11（迁移 v3）：外链资源域白名单（G11 阻断项修复——默认零行=任何 fileUrl 拒收）。
+CREATE TABLE IF NOT EXISTS allowed_file_domains (
+  domain   TEXT PRIMARY KEY,
+  added_by TEXT NOT NULL DEFAULT '',
+  at_ms    INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
   token_hash   TEXT PRIMARY KEY,
   robot_id     TEXT NOT NULL,
@@ -414,6 +421,12 @@ func (db *DB) migrate() error {
 		}
 		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)`, time.Now().UnixMilli()); err != nil {
 			return fmt.Errorf("sqlite: 登记迁移 v2 失败: %w", err)
+		}
+	}
+	// v3（SR-11/G11）：allowed_file_domains 表（新库 schema 已含列；此处登记版本）。
+	if version < 3 {
+		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?)`, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("sqlite: 登记迁移 v3 失败: %w", err)
 		}
 	}
 	return nil
@@ -1122,6 +1135,33 @@ func (db *DB) InsertAPIToken(ctx context.Context, tokenHash, robotID, tenant str
 INSERT INTO api_tokens(token_hash, robot_id, tenant, status, created_ms) VALUES (?,?,?,'active',?)`,
 		tokenHash, robotID, tenant, at.UnixMilli())
 	return err
+}
+
+// AddAllowedFileDomain 登记外链资源域白名单（SR-11；upsert）。
+func (db *DB) AddAllowedFileDomain(ctx context.Context, domain, addedBy string, at time.Time) error {
+	_, err := db.sql.ExecContext(ctx, `
+INSERT INTO allowed_file_domains(domain, added_by, at_ms) VALUES (?,?,?)
+ON CONFLICT(domain) DO UPDATE SET added_by=excluded.added_by, at_ms=excluded.at_ms`,
+		domain, addedBy, at.UnixMilli())
+	return err
+}
+
+// AllowedFileDomains 返回全部登记的文件域名（空切片 = 未登记任何域 → 任何 fileUrl 拒收）。
+func (db *DB) AllowedFileDomains(ctx context.Context) ([]string, error) {
+	rows, err := db.sql.QueryContext(ctx, `SELECT domain FROM allowed_file_domains ORDER BY at_ms`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // GetAPIToken 按 hash 查询令牌（原始 token 不落库——按 hash 索引查询即比对）。
