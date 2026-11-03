@@ -19,9 +19,9 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
     const response = await fetch(path, { method, headers, credentials: 'include', cache: 'no-store', signal: controller.signal, ...(method !== 'GET' ? {body: JSON.stringify(opts.body ?? {})} : {}) });
     const value = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401 && !path.endsWith('/auth/login') && requestCsrf === csrfToken) window.dispatchEvent(new Event('session-invalid'));
+      if (!controller.signal.aborted && response.status === 401 && !path.endsWith('/auth/login') && requestCsrf === csrfToken) window.dispatchEvent(new Event('session-invalid'));
       const error = value?.error;
-      if (response.status === 403 && method !== 'GET' && requestCsrf === csrfToken) window.dispatchEvent(new CustomEvent('permissions-stale', {detail: String(error?.code ?? 'ROLE_DENIED')}));
+      if (!controller.signal.aborted && response.status === 403 && method !== 'GET' && requestCsrf === csrfToken) window.dispatchEvent(new CustomEvent('permissions-stale', {detail: String(error?.code ?? 'ROLE_DENIED')}));
       throw new ApiError(response.status, String(error?.code ?? 'HTTP_ERROR'), String(error?.message ?? `请求失败 (${response.status})`), error?.requestId);
     }
     if (response.status !== 204) {

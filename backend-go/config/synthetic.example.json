@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "mode": "isolated-synthetic",
+  "listen": "127.0.0.1:3101",
+  "browserOrigin": "http://127.0.0.1:5173",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "name": "wt_test_0123456789abcdef",
+    "user": "wt_store",
+    "schema": "wt_console_0123456789abcdef",
+    "passwordFile": "/REPLACE_WITH_PRIVATE_DIRECTORY/pg-password"
+  },
+  "runtime": {
+    "instanceId": "instance_synthetic",
+    "bootId": "boot_synthetic",
+    "recoveryEpoch": "epoch_synthetic"
+  },
+  "recoveryGateFile": "/REPLACE_WITH_PRIVATE_DIRECTORY/recovery-gate.json"
+}

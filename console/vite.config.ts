@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
-export default defineConfig({
+import { consoleProxy, isGoMode } from './mode.ts';
+export default defineConfig(({ mode }) => ({
   root: fileURLToPath(new URL('.', import.meta.url)),
-  server: { host: '127.0.0.1', port: 5173, strictPort: true, proxy: { '/api': { target: 'http://127.0.0.1:3100', changeOrigin: false, ws: true } } },
+  server: { host: '127.0.0.1', port: 5173, strictPort: true, proxy: { '/api': consoleProxy(mode) } },
   preview: { host: '127.0.0.1', port: 5173, strictPort: true },
-  build: { outDir: 'dist', emptyOutDir: true },
-});
+  build: { outDir: isGoMode(mode) ? 'dist-go' : 'dist', emptyOutDir: true },
+}));

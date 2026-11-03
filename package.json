@@ -10,6 +10,8 @@
   "scripts": {
     "server": "node server/main.ts",
     "console": "vite --config console/vite.config.ts --host 127.0.0.1",
+    "console:go": "vite --config console/vite.config.ts --host 127.0.0.1 --mode go",
+    "build:go": "vite build --config console/vite.config.ts --mode go",
     "test": "node --test tests/*.test.ts server/*.test.ts console/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "vite build --config console/vite.config.ts",
