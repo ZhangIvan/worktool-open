@@ -95,6 +95,9 @@ class ProtocolClientTest {
             tokenVersion = { 1 },
             crypto = null,
             clock = { now },
+            // 服务端计数器已消费 hello（seq=1，python 规范客户端 send_hello 同款
+            // in_seq=1 预置）→ 上报帧期望 seq=2（hello 后帧连续 +1，spec §5.4.2）
+            sequencer = cn.worktool.open.core.protocol.session.SessionSequencer().apply { resetForReconnect(1) },
         )
         val v2 = serverVerifier.verify(transport.sent[1])
         assertTrue("上报帧验签: $v2", v2 is FrameVerifier.Verification.Accepted)
@@ -144,8 +147,70 @@ class ProtocolClientTest {
     }
 
     @Test
-    fun `V2Session-鉴权失败帧触发 onRejected 并断连`() {
+    fun `V2Session-断线重连 flushPending 重放帧按同 eventId 重建`() {
         val transport = FakeTransport()
+        val scheduler = ManualScheduler()
+        val journal = InMemoryJournalStore()
+        var now = 1_793_613_604_000L
+
+        val session = ProtocolClient.V2Session(
+            credentials = credentials,
+            baseUrl = "wss://example.com",
+            sessionCrypto = null,
+            journal = journal,
+            scheduler = scheduler,
+            clock = { now },
+            capabilities = ProtocolClient.Capabilities("0.1.0", 2, listOf(203)),
+            lastEpoch = { journal.appliedEpoch() },
+            lastReceivedSeq = { 0L },
+            onCommand = { _, _, _ -> },
+            onRejected = { },
+            transportFactory = FakeTransport.Factory(transport),
+        )
+        session.start()
+        // hello(seq=1) + 结果回执(seq=2，经 AtLeastOnce 先落盘)
+        assertTrue(session.sendExecResult("cmd-replay", WeworkMessageBean(type = 203, errorCode = 0)))
+        assertEquals(1, journal.entries().size)
+        val original = Json.parseToJsonElement(transport.sent[1]).jsonObject
+        val origMeta = original["meta"]!!.jsonObject
+
+        // 断线 60s（越过 ts±30s 与 nonce 5min 窗口）→ 重连：hello seq 恒 1（计数器
+        // 在构造 hello 前复位），flushPending 重放 = 同 eventId 重建信封（新 nonce/ts/seq
+        // + 重算 HMAC）——原样重发固化帧文本会被 4403/4402/4405+903 拒收（CR T34-01）
+        now += 60_000
+        transport.close(1006, "net-gone")
+        scheduler.advance(10_000) // 退避重连触发（greeting → onConnected → flushPending）
+
+        assertEquals("hello + 原回执 + 重连 hello + 重放帧 = 4 帧", 4, transport.sent.size)
+        val hello2 = Json.parseToJsonElement(transport.sent[2]).jsonObject
+        assertEquals(1L, hello2["meta"]!!.jsonObject["seq"]!!.jsonPrimitive.content.toLong())
+        val rebuilt = Json.parseToJsonElement(transport.sent[3]).jsonObject
+        val rebuiltMeta = rebuilt["meta"]!!.jsonObject
+
+        assertEquals("重放帧 eventId 须与原帧一致（§5.4.3 去重键）", origMeta["eventId"]!!, rebuiltMeta["eventId"]!!)
+        assertEquals("载荷逐值一致（同 payloadDigest）", original["list"]!!, rebuilt["list"]!!)
+        assertTrue(
+            "nonce 须新鲜",
+            origMeta["nonce"]!!.jsonPrimitive.content != rebuiltMeta["nonce"]!!.jsonPrimitive.content,
+        )
+        assertEquals("重放帧 seq = hello(1) 后下一帧序", 2L, rebuiltMeta["seq"]!!.jsonPrimitive.content.toLong())
+        assertTrue(
+            "重放帧 HMAC 按新信封重算",
+            cn.worktool.open.core.protocol.crypto.FrameAuth.verifyHmac(
+                Hex.decode(tokenHex),
+                rebuiltMeta["hmac"]!!.jsonPrimitive.content,
+                "cmd-replay",
+                rebuiltMeta["eventId"]!!.jsonPrimitive.content,
+                2L, now,
+                rebuiltMeta["nonce"]!!.jsonPrimitive.content,
+                cn.worktool.open.core.protocol.crypto.FrameAuth.payloadDigestOfList(rebuilt["list"]),
+            ),
+        )
+        session.stop()
+    }
+
+    @Test
+    fun `V2Session-鉴权失败帧触发 onRejected 并断连`() {        val transport = FakeTransport()
         val scheduler = ManualScheduler()
         val now = 1_793_613_604_000L
         val rejectedRules = mutableListOf<String>()

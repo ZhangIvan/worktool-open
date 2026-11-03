@@ -82,6 +82,32 @@ class DeliveryTest {
     }
 
     @Test
+    fun `flushPending 注入 refresh 时重放帧按同 eventId 重建-首投不重建`() {
+        val store = InMemoryJournalStore()
+        val sink = FakeSink()
+        val queue = AtLeastOnceQueue(store, sink) { eventId, text -> "$text#rebuilt:$eventId" }
+
+        // 首投（enqueue 直发）：帧刚构造即新鲜，不重建（重建只会白耗帧序）
+        queue.enqueue("evt-1", "f1", now = 100L)
+        assertEquals(listOf("f1"), sink.sent)
+
+        // 重放（重连/崩溃恢复）：按同 eventId 重建信封（新 nonce/ts/seq + 重算 HMAC
+        // 由注入方实现；冻结入站规则下原样重发必 4403/4402/4405，CR T34-01）
+        sink.sent.clear()
+        queue.flushPending()
+        assertEquals(listOf("f1#rebuilt:evt-1"), sink.sent)
+
+        // 无 refresh 钩子 = 原样重放（既有语义保持）
+        val store2 = InMemoryJournalStore()
+        val sink2 = FakeSink()
+        AtLeastOnceQueue(store2, sink2).enqueue("evt-2", "f2", now = 100L)
+        sink2.sent.clear()
+        store2.entries().forEach { store2.update(it.eventId, JournalState.PENDING, it.attempts) }
+        AtLeastOnceQueue(store2, sink2).flushPending()
+        assertEquals(listOf("f2"), sink2.sent)
+    }
+
+    @Test
     fun `入向门禁-去重先于副作用-同 commandId 不双执行`() {
         val store = InMemoryJournalStore()
         val executed = mutableListOf<String>()

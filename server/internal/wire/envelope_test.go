@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"cn.worktool.open/server/internal/repo"
@@ -100,7 +101,7 @@ func TestNegativeFixturesRejected(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			switch {
-			case len(name) >= 16 && name[:16] == "command-envelope": // 信封反例
+			case strings.HasPrefix(name, "command-envelope"): // 信封反例
 				env, err := DecodeEnvelope(raw)
 				if err != nil {
 					return // 解码层拒绝同样合格
@@ -117,6 +118,18 @@ func TestNegativeFixturesRejected(t *testing.T) {
 				_ = json.Unmarshal(body["pairingCode"], &code)
 				if PairCodePattern.MatchString(code) {
 					t.Fatalf("反例 pairingCode %q 应不匹配 ^[0-9]{6}$", code)
+				}
+			case strings.HasPrefix(name, "control-payload"): // T3.4 控制载荷反例
+				if _, err := DecodeControlPayload(raw); err == nil {
+					t.Fatalf("反例 %s 被 DecodeControlPayload 放行", name)
+				}
+			case strings.HasPrefix(name, "session-hello-ack"): // T3.4 hello_ack 反例
+				var ack HelloAck
+				if err := json.Unmarshal(raw, &ack); err != nil {
+					t.Fatal(err)
+				}
+				if err := ValidateHelloAckShape(&ack); err == nil {
+					t.Fatalf("反例 %s 被 ValidateHelloAckShape 放行", name)
 				}
 			default:
 				t.Fatalf("未登记的负例夹具 %s（消费契约新增须同步本测试）", name)

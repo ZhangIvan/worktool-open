@@ -9,35 +9,68 @@
 上游开源版停更于 2023 年，其后的闭源版存在数据外送与可中间人攻击等缺陷（**内部审计资料由维护者本地保存，不入公开仓库**）。WorkTool-Open 以行为级重写方式重建全部能力，并做到：
 
 - **数据主权**：默认零遥测、零云依赖；服务端你自己部署，机器人可完全离网运行（本地模式）
-- **安全默认**：TLS 强制校验、无硬编码密钥、出网白名单、更新带签名校验（`docs/01` §2.1 SR-01~11）
-- **开放**：协议、配置、部署全部开源（Apache-2.0），欢迎 issue / PR 共建
+- **安全默认**：TLS 强制校验、无硬编码密钥、逐帧 HMAC 鉴权、出网白名单（`docs/01` §2.1 SR-01~11）
+- **开放**：协议规格（`protocol/`）+ JSON Schema + 金标准测试向量全部开源（Apache-2.0），欢迎 issue / PR 共建
+
+## 快速开始（三步）
+
+> 当前版本 **v0.1.0 未发布**（开发中，里程碑见 [docs/00](docs/00-MASTER-PLAN.md)）。三步中：①服务端部署链已实证可用；③设备配对在产品 APK 上**尚未打通**（协议 v2 控制帧收尾中，任务 T3.4；真机证据口径见 [docs/05](docs/05-SUPPORT-MATRIX.md)——**未经真机执行回执的能力一律不宣称支持**）。
+
+### ① 起 server（docker compose，需 TLS 证书）
+
+```bash
+git clone https://github.com/ZhangIvan/worktool-open.git && cd worktool-open
+mkdir -p infra/certs
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -subj "/CN=worktool-server.local" \
+  -keyout infra/certs/server.key -out infra/certs/server.crt   # 内网自签一例；正式部署用自有证书
+sudo chown -R 1000:1000 infra/certs && sudo chmod 600 infra/certs/server.key  # 容器内非 root（uid 1000）
+docker compose -f infra/compose.yaml up -d --build
+curl -sk https://localhost:8443/healthz        # → {"status":"ok"} 即就绪
+```
+
+细节与可调项（端口 `WT_PORT`、回调、可选 Postgres profile、受限网络 `WT_GOPROXY`）：[infra/compose.yaml](infra/compose.yaml) 文件头与 [infra/README.md](infra/README.md)。
+
+### ② 装 APK（Android 端）
+
+- 发布后：从 GitHub Releases 下载 APK（附 sha256 与签名证书指纹，指纹对照 [docs/ops/CERT-FINGERPRINT.txt](docs/ops/CERT-FINGERPRINT.txt)）；
+- 现在：Actions 构建产物（`app-debug-apk` artifact），或用构建容器自建（`infra/builder/`，JDK17+AGP8.5+Gradle 8.7 已钉版带校验和）；
+- 要求：Android 8.0+（minSdk 26）；开发验证基线为企微 5.0.x（支持范围逐版本见 [docs/05](docs/05-SUPPORT-MATRIX.md)）。
+
+### ③ 配对（App ↔ 你的 server）
+
+App 内进入配对面：填 server 地址（`https://<host>:8443`）+ 6 位配对码。配对码由服务端签发
+（TTL 10 分钟、单次有效）；**管理 Web 面落地前**，配对码以服务端侧工具生成（与
+`server/internal/api` 落库语义一致的引导脚本，见 `test/README.md`）。配对成功后设备与
+server 建立 v2 安全会话（逐帧 HMAC + 可选 AES-256-GCM，规格见 [protocol/spec.md](protocol/spec.md)）。
+
+> 本步在产品 APK 上的贯通受 T3.4（协议 v2 控制帧收尾）影响，当前真机状态如实登记于
+> `docs/05` §备注；期间开发联调走 lab 变体（`assembleLabDebug`）。
 
 ## 仓库结构
 
 | 目录 | 内容 | 状态 |
 |------|------|------|
-| `android/` | Android 端（Kotlin，`cn.worktool.open`） | M1 待启动 |
-| `server/` | 调度后台（Go 单二进制，SQLite/PG） | M1 待启动 |
+| `android/` | Android 端（Kotlin，`cn.worktool.open`；含 gradle wrapper） | M3 集成中 |
+| `server/` | 调度后台（Go 单二进制，SQLite 默认 / PG 预留） | M3 集成中 |
 | `admin/` | 管理 Web（React + TS） | M4 |
-| `protocol/` | 通讯协议规格 + JSON Schema + 测试夹具 | M2 |
-| `infra/` | 构建容器 / compose 部署 | M1 |
-| `test/` | 真机验证与动态分析用例 | M2+ |
-| `docs/` | 计划与规格（00~07）、签名维护说明 | ✅ v2.2 |
+| `protocol/` | 通讯协议规格 + JSON Schema + 测试夹具（权威件） | ✅ v1.1.0 |
+| `infra/` | 构建容器 / compose 部署 | ✅（S1 实证） |
+| `test/` | 跨实现 E2E / 取证工具 | ✅ 入口统一仓库根 |
+| `docs/` | 计划与规格（00~10）、第三方声明、签名维护说明 | ✅ |
 
-## 快速开始
+## 安全
 
-项目处于 **M0→M1 阶段**（规划与审计已完成，实现启动中）。里程碑与任务卡见 [docs/00-MASTER-PLAN.md](docs/00-MASTER-PLAN.md) 与 [docs/03-EXECUTION-PLAN.md](docs/03-EXECUTION-PLAN.md)。
-
-首个可用版本（v0.1.0）目标：App 连接自建 server，收发消息 / 建群 / 加好友 / 定时任务 / 关键词回复可用，apifox 兼容 REST 冒烟 100% 通过。
+安全设计与威胁模型见 [SECURITY.md](SECURITY.md)（报告漏洞请走私有渠道，勿开公开 issue）。
 
 ## 文档
 
 - [00 总体计划](docs/00-MASTER-PLAN.md) · [01 需求规格](docs/01-REQUIREMENTS.md) · [02 系统架构](docs/02-ARCHITECTURE.md) · [03 执行调度](docs/03-EXECUTION-PLAN.md) · [04 审计规程](docs/04-AUDIT-CHECKLIST.md) · [05 支持矩阵](docs/05-SUPPORT-MATRIX.md) · [06 服务端技术决策](docs/06-SERVER-TECH-DECISION.md) · [07 既有代码映射](docs/07-EXISTING-CODE-MAPPING.md)
+- [CHANGELOG.md](CHANGELOG.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)
 
 ## 贡献
 
-- Issue 请关联需求编号（FR-xx / SR-xx，见 `docs/01`）；PR 需通过 `docs/04` 质量门与 CI 门禁（G1~G13）
-- 分支模型：`main` = 集成线（PR 流）；维护者另有固定维护分支（如 `zcode/main`），跨线合并一律走 PR，避免自动化协作互相冲突
+见 [CONTRIBUTING.md](CONTRIBUTING.md)：issue 关联需求编号（FR-xx/SR-xx）、PR 过 `docs/04` 质量门与 CI 门禁（G1~G13）、分支模型（`main` = 集成线，PR 流）。
 
 ## 合规与免责
 

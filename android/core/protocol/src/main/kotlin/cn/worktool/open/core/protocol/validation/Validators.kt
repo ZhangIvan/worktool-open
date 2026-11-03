@@ -180,6 +180,184 @@ object V2FrameValidator {
     }
 }
 
+/**
+ * hello_ack 校验（session-hello-ack.schema.json 全约束，spec §5.7 T3.4 冻结；
+ * 基准 = Go 网关实际产出字节，夹具 session-hello-ack.go-actual.json）。
+ *
+ * 不变式（schema description 冻结）：serverTime == meta.ts；
+ * resumeFromSeq == meta.seq（端侧另须校验 == lastReceivedSeq+1，见 FrameVerifier 控制帧链）。
+ */
+object HelloAckValidator {
+
+    private val ROOT_KEYS = setOf(
+        "type", "serverTime", "resumeFromSeq", "heartbeatIntervalSeconds", "sessionTimeoutSeconds", "meta",
+    )
+    private val META_KEYS = setOf(
+        "ver", "ts", "nonce", "hmac", "seq", "eventId", "commandId", "tokenVersion",
+    )
+
+    /** @param root 已解码的独立控制帧树（顶层 type/meta/字段）。 */
+    fun validate(root: JsonElement): List<SchemaViolation> {
+        val v = mutableListOf<SchemaViolation>()
+        val obj = root as? JsonObject ?: return listOf(SchemaViolation("$", "type:object", "非对象"))
+        obj.keys.filter { it !in ROOT_KEYS }.forEach {
+            v += SchemaViolation(it, "additionalProperties:false", "未知字段")
+        }
+        ROOT_KEYS.forEach { key ->
+            if (obj[key] == null) v += SchemaViolation(key, "required", "缺失")
+        }
+        if ((obj.stringOf("type")) != "hello_ack") {
+            v += SchemaViolation("type", "const:hello_ack", obj.stringOf("type") ?: "?")
+        }
+        obj.longOf("serverTime")?.let { if (it < 0) v += SchemaViolation("serverTime", "minimum:0", "$it") }
+        val resume = obj.longOf("resumeFromSeq")
+        if (resume == null || resume < 1) {
+            v += SchemaViolation("resumeFromSeq", "minimum:1", resume?.toString() ?: "缺失")
+        }
+        // const 15/45 冻结值（与 pair-response 一致，spec §3）
+        obj.intOf("heartbeatIntervalSeconds")?.let {
+            if (it != 15) v += SchemaViolation("heartbeatIntervalSeconds", "const:15", "$it")
+        }
+        obj.intOf("sessionTimeoutSeconds")?.let {
+            if (it != 45) v += SchemaViolation("sessionTimeoutSeconds", "const:45", "$it")
+        }
+        val meta = obj["meta"] as? JsonObject
+        if (meta == null) {
+            v += SchemaViolation("meta", "type:object", "缺失")
+            return v
+        }
+        meta.keys.filter { it !in META_KEYS }.forEach {
+            v += SchemaViolation("meta.$it", "additionalProperties:false", "未知字段")
+        }
+        META_KEYS.forEach { key ->
+            if (meta[key] == null) v += SchemaViolation("meta.$key", "required", "缺失")
+        }
+        meta.intOf("ver")?.let { if (it != 2) v += SchemaViolation("meta.ver", "const:2", "$it") }
+        meta.longOf("ts")?.let { if (it < 0) v += SchemaViolation("meta.ts", "minimum:0", "$it") }
+        meta.longOf("seq")?.let { if (it < 1) v += SchemaViolation("meta.seq", "minimum:1", "$it") }
+        // hello_ack 恒空 commandId（服务端出站首帧无指令绑定）
+        meta.stringOf("commandId")?.let { if (it.isNotEmpty()) v += SchemaViolation("meta.commandId", "const:empty", it) }
+        meta.intOf("tokenVersion")?.let { if (it < 1) v += SchemaViolation("meta.tokenVersion", "minimum:1", "$it") }
+        meta.stringOf("nonce")?.let { if (!Patterns.NONCE.matches(it)) v += SchemaViolation("meta.nonce", "pattern:hex32", it) }
+        meta.stringOf("hmac")?.let { if (!Patterns.HMAC.matches(it)) v += SchemaViolation("meta.hmac", "pattern:hex64", it) }
+        meta.stringOf("eventId")?.let { if (!Patterns.UUID_LOWER.matches(it)) v += SchemaViolation("meta.eventId", "pattern:uuid", it) }
+        // 语义不变式（schema description 冻结；实现校验责任）
+        val serverTime = obj.longOf("serverTime")
+        val ts = meta.longOf("ts")
+        if (serverTime != null && ts != null && serverTime != ts) {
+            v += SchemaViolation("serverTime", "invariant:==meta.ts", "$serverTime != $ts")
+        }
+        val seq = meta.longOf("seq")
+        if (resume != null && seq != null && resume != seq) {
+            v += SchemaViolation("resumeFromSeq", "invariant:==meta.seq", "$resume != $seq")
+        }
+        return v
+    }
+}
+
+/**
+ * 901~904 控制帧载荷校验（control-payload.schema.json 全约束，spec §5.7.2 T3.4 冻结）。
+ * 输入 = socketType=2 信封 list 的单个载荷单元（树形）；WeworkMessageBean 解码面
+ * 的 extras 保留未知字段，此处按 additionalProperties:false 逐变体判拒。
+ */
+object ControlPayloadValidator {
+
+    private val HEX64 = Patterns.HEX64_LOWER
+    private val ENTRY_KEYS = setOf("commandId", "epoch", "started", "outcome", "source")
+    private val OUTCOMES = setOf("", "success", "failure", "never_started")
+    private val SOURCES = setOf("local", "server")
+
+    fun validate(item: JsonObject): List<SchemaViolation> {
+        val v = mutableListOf<SchemaViolation>()
+        val type = item.intOf("type") ?: run {
+            v += SchemaViolation("type", "required,const:901..904", "缺失或非整数")
+            return v
+        }
+        val allowed = when (type) {
+            901 -> setOf("type", "deviceToken", "tokenVersion", "serverX25519PublicKey")
+            902, 903 -> setOf("type")
+            904 -> setOf("type", "entries", "request")
+            else -> {
+                v += SchemaViolation("type", "const:901..904", "$type")
+                return v
+            }
+        }
+        item.keys.filter { it !in allowed }.forEach {
+            v += SchemaViolation(it, "additionalProperties:false", "未知字段")
+        }
+        when (type) {
+            901 -> {
+                val token = item.stringOf("deviceToken")
+                if (token == null) {
+                    v += SchemaViolation("deviceToken", "required", "缺失")
+                } else if (!HEX64.matches(token)) {
+                    v += SchemaViolation("deviceToken", "pattern:hex64", token.take(16) + "…")
+                }
+                val version = item.intOf("tokenVersion")
+                if (version == null) {
+                    v += SchemaViolation("tokenVersion", "required", "缺失")
+                } else if (version < 2) {
+                    v += SchemaViolation("tokenVersion", "minimum:2", "$version")
+                }
+                val serverPub = item.stringOf("serverX25519PublicKey")
+                if (serverPub == null) {
+                    v += SchemaViolation("serverX25519PublicKey", "required", "缺失")
+                } else if (!HEX64.matches(serverPub)) {
+                    v += SchemaViolation("serverX25519PublicKey", "pattern:hex64", serverPub.take(16) + "…")
+                }
+                // 信封级约束（schema 无法表达，实现责任）：901 必须 encryptType=2（spec §5.5.1）
+            }
+            904 -> {
+                val entries = item["entries"] as? kotlinx.serialization.json.JsonArray
+                val request = item.stringOf("request")
+                if (entries == null && request == null) {
+                    // 既非补报（entries）也非请求（request）→ 两种合法变体均不满足
+                    v += SchemaViolation("entries|request", "oneOf:journalReplay|journalRequest", "两者均缺失")
+                }
+                if (entries != null && request != null) {
+                    v += SchemaViolation("entries|request", "oneOf:journalReplay|journalRequest", "两者并存")
+                }
+                if (request != null && request != "journal_replay") {
+                    v += SchemaViolation("request", "const:journal_replay", request)
+                }
+                if (entries != null) {
+                    if (entries.isEmpty()) v += SchemaViolation("entries", "minItems:1", "空数组")
+                    entries.forEachIndexed { i, el ->
+                        val e = el as? JsonObject ?: run {
+                            v += SchemaViolation("entries[$i]", "type:object", "非对象")
+                            return@forEachIndexed
+                        }
+                        e.keys.filter { it !in ENTRY_KEYS }.forEach {
+                            v += SchemaViolation("entries[$i].$it", "additionalProperties:false", "未知字段")
+                        }
+                        ENTRY_KEYS.forEach { key ->
+                            if (e[key] == null) v += SchemaViolation("entries[$i].$key", "required", "缺失")
+                        }
+                        e.stringOf("commandId")?.let {
+                            if (!Patterns.UUID_LOWER.matches(it)) {
+                                v += SchemaViolation("entries[$i].commandId", "pattern:uuid", it)
+                            }
+                        }
+                        e.longOf("epoch")?.let { if (it < 0) v += SchemaViolation("entries[$i].epoch", "minimum:0", "$it") }
+                        (e["started"] as? JsonPrimitive)?.let {
+                            if (it.isString) v += SchemaViolation("entries[$i].started", "type:boolean", it.content)
+                        }
+                        e.stringOf("outcome")?.let {
+                            if (it !in OUTCOMES) v += SchemaViolation("entries[$i].outcome", "enum:…", it)
+                        }
+                        e.stringOf("source")?.let {
+                            if (it !in SOURCES) v += SchemaViolation("entries[$i].source", "enum:local,server", it)
+                        }
+                    }
+                }
+            }
+            // 902/903：载荷仅 type（additionalProperties:false 已在上方判拒）
+            else -> Unit
+        }
+        return v
+    }
+}
+
 /** 会话 hello 校验（session-hello.schema.json；树形操作以覆盖 additionalProperties:false）。 */
 object SessionHelloValidator {
 
@@ -208,23 +386,27 @@ object SessionHelloValidator {
         }
         obj.longOf("lastEpoch")?.let { if (it < 0) v += SchemaViolation("lastEpoch", "minimum:0", "$it") }
         obj.longOf("lastReceivedSeq")?.let { if (it < 0) v += SchemaViolation("lastReceivedSeq", "minimum:0", "$it") }
-        (obj["capabilities"] as? JsonObject)?.let { caps ->
-            caps.keys.filter { it !in CAP_KEYS }.forEach {
-                v += SchemaViolation("capabilities.$it", "additionalProperties:false", "未知字段")
-            }
-            val cv = caps.stringOf("clientVersion")
-            if (cv == null || cv.isEmpty() || cv.length > 32) {
-                v += SchemaViolation("capabilities.clientVersion", "length:1..32", cv ?: "缺失")
-            }
-            caps.intOf("encryptTypeMax")?.let {
-                if (it !in setOf(0, 2)) v += SchemaViolation("capabilities.encryptTypeMax", "enum:0,2", "$it")
-            }
-            (caps["commands"] as? kotlinx.serialization.json.JsonArray)?.forEachIndexed { i, c ->
-                val t = (c as? JsonPrimitive)?.intOrNull
-                if (t == null || t < 11 || t > 999) {
-                    v += SchemaViolation("capabilities.commands[$i]", "range:11..999", t?.toString() ?: "?")
+        when (val capsEl = obj["capabilities"]) {
+            null -> Unit // 可选字段（schema 非 required）→ 缺失不拒
+            is JsonObject -> {
+                capsEl.keys.filter { it !in CAP_KEYS }.forEach {
+                    v += SchemaViolation("capabilities.$it", "additionalProperties:false", "未知字段")
+                }
+                val cv = capsEl.stringOf("clientVersion")
+                if (cv == null || cv.isEmpty() || cv.length > 32) {
+                    v += SchemaViolation("capabilities.clientVersion", "length:1..32", cv ?: "缺失")
+                }
+                capsEl.intOf("encryptTypeMax")?.let {
+                    if (it !in setOf(0, 2)) v += SchemaViolation("capabilities.encryptTypeMax", "enum:0,2", "$it")
+                }
+                (capsEl["commands"] as? kotlinx.serialization.json.JsonArray)?.forEachIndexed { i, c ->
+                    val t = (c as? JsonPrimitive)?.intOrNull
+                    if (t == null || t < 11 || t > 999) {
+                        v += SchemaViolation("capabilities.commands[$i]", "range:11..999", t?.toString() ?: "?")
+                    }
                 }
             }
+            else -> v += SchemaViolation("capabilities", "type:object", "非对象")
         }
         val meta = obj["meta"] as? JsonObject
         if (meta == null) {

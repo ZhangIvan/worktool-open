@@ -16,12 +16,18 @@ interface OutboundSink {
  * 1. journal.append(PENDING)——**副作用发生前必须已持久**；
  * 2. 尝试发送（失败/发送前崩溃都不丢：条目仍在 journal）。
  *
- * 对端去重 = eventId（重复 eventId 同 payloadDigest 幂等回执原确认，spec §5.4.3），
- * 因此重放/重发天然安全——帧文本（含 eventId/seq/hmac）在 append 时固化，重发不重算。
+ * 对端去重 = eventId（重复 eventId 同 payloadDigest 幂等回执原确认，spec §5.4.3）。
+ * 帧文本（含 eventId/载荷）在 append 时固化；**重放**（flushPending）时若注入
+ * [refreshForResend] 则以「同 eventId + 新 nonce/ts/seq + 重算 HMAC」重建信封——
+ * 原样重发固化文本会被冻结入站规则拒收（ts±30s → 4403；nonce 5min → 4402；
+ * seq 严格递增 → 4405+903，CR T34-01 复核项）。首次投递（enqueue 直发）不重建
+ * （帧刚构造即新鲜，重建只会白耗帧序）。
  */
 class AtLeastOnceQueue(
     private val store: JournalStore,
     private val sink: OutboundSink,
+    /** 重放帧刷新钩子（eventId + 固化帧文本 → 重建帧文本）；null = 原样重放。 */
+    private val refreshForResend: ((eventId: String, frameText: String) -> String)? = null,
 ) {
 
     /** 当前未完成（非 DONE）条目数。 */
@@ -41,24 +47,25 @@ class AtLeastOnceQueue(
                 attempts = 0,
             ),
         ) // ① 先落盘（副作用前置条件）
-        tryDeliver(eventId) // ② 后副作用
+        tryDeliver(eventId, refresh = false) // ② 后副作用（首投不重建：帧即新鲜）
         return store.entries().first { it.eventId == eventId }
     }
 
     /** 尝试投递单条（attempts 递增；sink 异常/不可发送时条目留待 flushPending 重放）。 */
-    private fun tryDeliver(eventId: String) {
+    private fun tryDeliver(eventId: String, refresh: Boolean) {
         val entry = store.entries().firstOrNull { it.eventId == eventId } ?: return
         store.update(eventId, JournalState.INFLIGHT, entry.attempts + 1)
+        val frameText = if (refresh) refreshForResend?.invoke(eventId, entry.frameText) ?: entry.frameText else entry.frameText
         try {
-            sink.send(entry.frameText)
+            sink.send(frameText)
         } catch (_: Exception) {
             // 传输异常不丢条目：journal 已持久，重连后 flushPending 重放
         }
     }
 
-    /** 重放所有未完成条目（连接建立/崩溃恢复时调用）。 */
+    /** 重放所有未完成条目（连接建立/崩溃恢复时调用；注入 [refreshForResend] 时按同 eventId 重建信封）。 */
     fun flushPending() {
-        store.entries().filter { it.state != JournalState.DONE }.forEach { tryDeliver(it.eventId) }
+        store.entries().filter { it.state != JournalState.DONE }.forEach { tryDeliver(it.eventId, refresh = true) }
     }
 
     /** 服务端确认（收到对应 eventId 的 ack/回执）：条目完成。 */

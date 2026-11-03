@@ -5,6 +5,7 @@ package cn.worktool.open.core.protocol
 
 import cn.worktool.open.core.protocol.delivery.AtLeastOnceQueue
 import cn.worktool.open.core.protocol.delivery.JournalStore
+import cn.worktool.open.core.protocol.ControlFrame
 import cn.worktool.open.core.protocol.session.FrameBuilder
 import cn.worktool.open.core.protocol.session.FrameVerifier
 import cn.worktool.open.core.protocol.session.SendSequencer
@@ -86,6 +87,8 @@ object ProtocolClient {
         private val lastReceivedSeq: () -> Long = { 0L },
         onCommand: (V2Frame, JsonElement, duplicateReAck: Boolean) -> Unit,
         onRejected: (FrameVerifier.Verification.Rejected) -> Unit,
+        /** hello_ack 通过全链校验后的回调（T3.4，spec §5.7：会话建立信号；resumeFromSeq/serverTime 可读）。 */
+        onHelloAck: ((ControlFrame) -> Unit)? = null,
         httpClient: okhttp3.OkHttpClient = OkHttpWsTransport.defaultClient(),
         transportFactory: cn.worktool.open.core.protocol.transport.WsTransport.Factory? = null,
     ) {
@@ -109,7 +112,7 @@ object ProtocolClient {
 
         /** 出向 AtLeastOnce 队列（journal 为 null 时退化为直接发送）。 */
         private val queue: AtLeastOnceQueue? = journal?.let {
-            AtLeastOnceQueue(it, OutboundSinkWs())
+            AtLeastOnceQueue(it, OutboundSinkWs(), refreshForResend = ::rebuildForResend)
         }
 
         private val ws = ReconnectingWsClient(
@@ -119,6 +122,11 @@ object ProtocolClient {
                     ?: baseUrl.trimEnd('/') + "/api/v2/device-sessions/" + credentials.sessionId
             },
             greeting = {
+                // 出向计数器在构造 hello **前**复位（spec §5.4.1/§5.4.2：hello seq 恒 1，
+                // 后续帧自 2 连续 +1；服务端每连接从 1 起算消费 seq）。此前复位点在
+                // onConnected（hello 之后）——首连 hello 之后的帧会重发 seq=1、重连时
+                // hello 会带着旧计数（>1），两种形态都会被网关 4405 拒收（CR T34-01）。
+                sendSequencer.reset()
                 builder.buildHello(
                     deviceId = credentials.deviceId,
                     lastEpoch = lastEpoch(),
@@ -128,7 +136,7 @@ object ProtocolClient {
                     commands = capabilities.commands,
                 )
             },
-            onServerMessage = { text -> handleInbound(text, onCommand, onRejected) },
+            onServerMessage = { text -> handleInbound(text, onCommand, onRejected, onHelloAck) },
             heartbeatFrame = { builder.buildHeartbeat().text },
             heartbeatIntervalMillis = (credentials.heartbeatIntervalSeconds * 1000).toLong(),
             inactivityTimeoutMillis = (credentials.sessionTimeoutSeconds * 1000).toLong(),
@@ -136,8 +144,10 @@ object ProtocolClient {
             scheduler = scheduler,
             clock = clock,
             onConnected = {
-                sendSequencer.reset()
-                verifier.resetForReconnect()
+                // 出向计数复位已移至 greeting 构造处（hello=1 后帧连续 +1，见上）。
+                // spec §5.4.2 v1.2.0：端侧接收计数器以持久确认点预置（期望服务端
+                // 首帧 = lastReceivedSeq+1，即 hello_ack.seq）
+                verifier.resetForReconnect(lastReceivedSeq())
                 queue?.flushPending()
             },
         )
@@ -169,6 +179,7 @@ object ProtocolClient {
         /** 发送指令执行结果回执（socketType=3，回填 commandId）。 */
         fun sendExecResult(commandId: String, vararg beans: WeworkMessageBean): Boolean {
             val built = builder.buildExecResult(commandId, *beans)
+            rememberResult(commandId, built.eventId, beans.toList())
             val q = queue
             return if (q != null) {
                 q.enqueue(built.eventId, built.text, clock())
@@ -178,13 +189,81 @@ object ProtocolClient {
             }
         }
 
+        /**
+         * 幂等重发结果回执（spec §5.4.3 + 冻结入站规则 §5.2.4，CR T34-01）：
+         * 重复下发（重复 eventId 同内容 / journal commandId 去重命中）→ 以
+         * **同 eventId + 载荷逐值一致（同 payloadDigest）** 重建回执帧——新 nonce、
+         * 当前 ts、下一 seq、重算 HMAC。原样重发旧帧文本必被网关拒收：
+         * nonce 5min 窗口（4402）、ts ±30s（4403）、seq 严格 == InSeq+1（4405+903，
+         * 幂等重发帧同样消费帧序）。对齐 python 规范客户端重放形态
+         * （run_cross_e2e.py send_exec_result 同 eventId 新 seq）。
+         *
+         * @return false = 无原回执可重放（首次执行前崩溃等；静默，journal 重放兜底）
+         */
+        fun resendExecResult(commandId: String): Boolean {
+            val record = synchronized(lastResults) { lastResults[commandId] } ?: return false
+            val built = builder.build(
+                socketType = MessageTypes.SOCKET_RAW_CONFIRM,
+                commandId = commandId,
+                apiSend = 1,
+                list = record.beans,
+                replayEventId = record.eventId,
+            )
+            return ws.send(built.text)
+        }
+
+        /** 最近一次结果回执（commandId → eventId + 载荷；幂等重建源）。 */
+        private data class ResultRecord(val eventId: String, val beans: List<WeworkMessageBean>)
+
+        private val lastResults = LinkedHashMap<String, ResultRecord>()
+
+        private fun rememberResult(commandId: String, eventId: String, beans: List<WeworkMessageBean>) {
+            synchronized(lastResults) {
+                lastResults[commandId] = ResultRecord(eventId, beans)
+                if (lastResults.size > 256) { // 有界（崩溃恢复兜底 = journal 重放）
+                    val it = lastResults.entries.iterator()
+                    it.next(); it.remove()
+                }
+            }
+        }
+
+        /** 幂等回执源（诊断/测试面）：commandId → 原回执 eventId。 */
+        fun lastResultEventId(commandId: String): String? =
+            synchronized(lastResults) { lastResults[commandId]?.eventId }
+
+        /**
+         * 出向重放帧重建（AtLeastOnce flushPending 路径的 [AtLeastOnceQueue] 刷新钩子）：
+         * 解析 journal 固化的帧文本 → 同 eventId + 同载荷（bean 往返保真 → JCS 摘要不变）
+         * + 新 nonce/ts/seq + 重算 HMAC。原样重发会被 ts±30s/nonce 窗口/seq 严格递增拒收
+         * （>30s 重连窗口必 4403，见 CR T34-01 复核项）。
+         *
+         * 边界（如实登记）：仅明文帧可重建——加密帧 payloadDigest 覆盖密文字节
+         * （spec §5.2.2），而密文经 AAD(seq,ts) 绑定帧序，重加密必变异 digest
+         * （同 eventId 异内容 → 4405 冲突）。加密帧在冻结规则下无「同 eventId 刷新信封」
+         * 的安全重发形态，保持原样投递（投递失败由重连/对账收敛）——**规格层待议项**，
+         * 需 spec 明确加密帧重放口径（如：重放帧换新 eventId + 端侧去重）后方可实装。
+         */
+        private fun rebuildForResend(eventId: String, frameText: String): String {
+            val frame = (codec.decode(frameText) as? WireMessage.V2)?.frame ?: return frameText
+            if (frame.meta.eventId != eventId || frame.encryptType == 2) return frameText
+            return builder.build(
+                socketType = frame.socketType,
+                commandId = frame.meta.commandId,
+                apiSend = frame.apiSend,
+                list = frame.list,
+                replayEventId = eventId,
+            ).text
+        }
+
         private fun handleInbound(
             text: String,
             onCommand: (V2Frame, JsonElement, Boolean) -> Unit,
             onRejected: (FrameVerifier.Verification.Rejected) -> Unit,
+            onHelloAck: ((ControlFrame) -> Unit)?,
         ) {
             when (val v = verifier.verify(text)) {
                 is FrameVerifier.Verification.Accepted -> onCommand(v.frame, v.payload, v.duplicateReAck)
+                is FrameVerifier.Verification.AcceptedControl -> onHelloAck?.invoke(v.control)
                 is FrameVerifier.Verification.Rejected -> {
                     onRejected(v)
                     if (v.shouldClose) {

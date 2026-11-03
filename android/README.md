@@ -50,6 +50,13 @@ CI 必跑（`.github/workflows/android.yml`：`assembleDebug test` + `:core:prot
 - **CI**（主要途径）：`.github/workflows/android.yml`（paths 触发 `android/**` 与 `protocol/**`〔协议权威件变更触发端侧单测复核，AUD-03 C-8〕；push/pull_request 统一分支过滤 main/zcode/main；JDK17 temurin + gradle/actions/setup-gradle；`assembleDebug` + `test` + 协议覆盖率门禁；debug APK 与覆盖率报告以 artifact 上传）。本仓库不要求本机安装 Android SDK。
 - **本地**：JDK17 + Gradle 8.7 + Android SDK（platform 34）。Release 签名经环境变量 `WORKTOOL_STORE_FILE/STORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD` 注入（见 `docs/ops/SIGNING.md` §2；四项齐备才签名，缺失产出 unsigned / CI 跳过）。
 - 单测：`gradle test`（JVM；协议层夹具按仓库根相对路径 `protocol/fixtures/**` 引用，spec §7）。
+- **wrapper 供应链钉版（审计登记）**：`gradle/wrapper/gradle-wrapper.properties` 钉
+  `distributionSha256Sum=544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d`
+  （与 `infra/builder/Dockerfile` `GRADLE_SHA256` 同值，2026-11-03 本地对
+  `gradle-8.7-bin.zip` 实测核对）；入库二进制 `gradle/wrapper/gradle-wrapper.jar`（43KB，
+  Gradle 8.7 wrapper 生成）sha256 =
+  `cb0da6751c2b753a16ac168bb354870ebb1e162e9083f116729cec9c781156b8`
+  （变更该文件须同步更新此值）。
 
 ## T2.2 deferred（真机联调 = T2.5，RIG 通道未通）
 

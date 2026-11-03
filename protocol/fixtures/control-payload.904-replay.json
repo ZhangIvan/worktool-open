@@ -1,0 +1,19 @@
+{
+  "type": 904,
+  "entries": [
+    {
+      "commandId": "0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+      "epoch": 3,
+      "started": true,
+      "outcome": "success",
+      "source": "local"
+    },
+    {
+      "commandId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e",
+      "epoch": 4,
+      "started": false,
+      "outcome": "never_started",
+      "source": "local"
+    }
+  ]
+}

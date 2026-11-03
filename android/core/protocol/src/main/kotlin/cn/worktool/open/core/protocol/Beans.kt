@@ -232,6 +232,28 @@ sealed interface WireMessage {
 
     /** v1 建连首帧 `{"td":<Unix毫秒>}`（上游还原，spec §3）。 */
     data class ConnectionHello(val td: Long) : WireMessage
+
+    /**
+     * 独立控制帧（spec §5.7.1 T3.4 冻结）：顶层 `type` 为**字符串**且携带 meta 对象的
+     * 形态（hello / hello_ack），**不承载于信封**（无 socketType/messageId）——
+     * W-M3R 拒收根因即此形态此前未被解码器识别（按信封 schema 4400 拒）。
+     */
+    data class Control(val control: ControlFrame) : WireMessage
+}
+
+/**
+ * 独立控制帧模型（schema = session-hello / session-hello-ack）。
+ * [fields] 保留 type/meta 之外的全部顶层字段（hello 的 deviceId/lastEpoch/…、
+ * hello_ack 的 serverTime/resumeFromSeq/heartbeatIntervalSeconds/sessionTimeoutSeconds）。
+ */
+data class ControlFrame(
+    val type: String,
+    val meta: FrameMeta,
+    val fields: Map<String, JsonElement>,
+) {
+    fun field(name: String): JsonElement? = fields[name]
+    fun longField(name: String): Long? = (fields[name] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
+    fun intField(name: String): Int? = (fields[name] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
 }
 
 // ---- JsonElement 取值工具（类型不符返回 null，由校验器统一报格式错误）----

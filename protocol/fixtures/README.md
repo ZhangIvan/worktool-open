@@ -17,6 +17,12 @@
 | `command-envelope.heartbeat.json` | 同上 | v2 心跳（空载荷：payloadDigest=SHA-256(空)） |
 | `command-envelope.exec-result.json` | 同上 | v2 指令结果回执（socketType=3，回填 commandId） |
 | `exec-callback.success.json` | `../schema/exec-callback.schema.json` | ExecCallbackBean 单体（errorCode=0） |
+| `session-hello-ack.go-actual.json` | `../schema/session-hello-ack.schema.json` | **T3.4 冻结基准**：Go 网关实际产出的 hello_ack（2026-11-03 本地实服务原样抓帧；token=本地一次性测试实例签发，TEST-ONLY）。不变式：serverTime==meta.ts、resumeFromSeq==meta.seq==lastReceivedSeq+1（此处 lastReceivedSeq=0）。Kotlin『接受 Go 实际 hello_ack 字节』DoD 用例输入（token 以字面量内嵌 L1 测试，见 spec §5.7） |
+| `control-payload.901-rotate.json` | `../schema/control-payload.schema.json` | 901 载荷（tokenVersion=2；密钥为伪造测试值；生产承载须 encryptType=2） |
+| `control-payload.902-revoked.json` | 同上 | 902 载荷（撤销后版本在 meta.tokenVersion，载荷仅 type） |
+| `control-payload.903-resync.json` | 同上 | 903 载荷（Go sendResync 现产形态基准） |
+| `control-payload.904-replay.json` | 同上 | 904 端→云 journal 补报（entries 形状 = Go scheduler.JournalEntry） |
+| `control-payload.904-request.json` | 同上 | 904 云→端补报请求（Go sendJournalRequest 现产形态基准） |
 | `hmac-vector.json` | —（数据文件） | **金标准向量**：deviceTokenTest（伪造）+ 每帧 seq/inputString/payloadDigest/期望 hmac（输入式 `commandId\|eventId\|seq\|ts\|nonce\|payloadDigest`，AUD-03 C-9）；`negative[]` 为篡改 seq 必败反例。L1/L2 实现须逐字节复算一致 |
 
 ## 反例清单（必须被拒绝）
@@ -26,6 +32,11 @@
 | `negative/pair-request.invalid-code.json` | pair-request schema 拒绝（pairingCode 非 6 位数字） |
 | `negative/command-envelope.missing-hmac.json` | command-envelope schema 拒绝（meta 缺 hmac → G8 鉴权失败路径） |
 | `negative/command-envelope.encrypt-mismatch.json` | command-envelope schema 拒绝（encryptType=2 却携带明文 list 且缺 encryptedList） |
+| `negative/session-hello-ack.bad-frozen.json` | session-hello-ack schema 拒绝（heartbeatIntervalSeconds=30/sessionTimeoutSeconds=90 违反 const 15/45 冻结值） |
+| `negative/session-hello-ack.envelope-wrapped.json` | session-hello-ack schema 拒绝（resumeFromSeq=0 <1 且 meta.commandId 非空——hello_ack 恒空 commandId） |
+| `negative/control-payload.901-bad-token.json` | control-payload schema 拒绝（deviceToken 非 hex64；tokenVersion=1 <2） |
+| `negative/control-payload.903-extra-field.json` | control-payload schema 拒绝（903 additionalProperties:false） |
+| `negative/control-payload.904-empty.json` | control-payload schema 拒绝（904 既无 entries（补报）也无 request（请求），两种合法变体均不满足） |
 
 语义级反例（schema 无法表达，单测必须覆盖，G8）：错 HMAC（4401）、**篡改 seq**（HMAC 失配 4401，金标准反例见 hmac-vector.json `negative[tamper_seq]`，AUD-03 C-9）、nonce 重放（4402）、ts 超差 ±30s（4403）、tokenVersion 落后（4404）、eventId 同 ID 异内容（4405）、seq 回退（真实签名乱序→4405+903 重同步）。
 

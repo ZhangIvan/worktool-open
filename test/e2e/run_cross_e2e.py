@@ -13,12 +13,20 @@ JCS(RFC 8785) payloadDigest、AES-256-GCM 会话加密（spec §5.3，X25519+HKD
      服务端代行、绝不下发设备）→ 收结果（RAW_CONFIRM）→ 真实下发链（GCM 解密互操作）→
      结果回执 → 墓碑重放同 eventId 幂等（§5.4.3）→ 篡改 seq 必拒（C-9 → 4401）→
      （时钟注入）ACK TTL 到期 E17 对账路径存在性断言（禁止超时定性成败）。
+  ①' T3.4 控制帧冻结三方断言（spec §5.7）：hello/hello_ack/result 三关键帧 +
+     901~904 全部夹具正反例过 jsonschema（python 第三方消费面）；服务端实际产出
+     hello_ack **字节级比对**冻结基准 fixtures/session-hello-ack.go-actual.json
+     （紧凑形/字段序/掩蔽动态字段后 JCS 规范形三层）；python 生产面出帧自校验
+     （hello 过 session-hello.schema、结果回执过 exec-callback.schema）；
+     dispatch 载荷携带 epoch；真实签名乱序 seq → 903 RESYNC 帧后 4405 关闭；
+     execution_unknown 重连 → 904 journal_replay 请求 → 持久证据补报 → E12 离出
+     + 墓碑 + 补报幂等。
   ② apifox 兼容面冒烟：/openapi/v1 203/206 干跑全链 + RAW_CONFIRM 查询（含 404）+
      幂等键正/负例（§5.6.1）+ 60QPM 限流负例（NFR §2.2）。
   ③ 服务清理：进程退出断言。
 
-测试引导（bootstrap，非协议行为）——控制台/admin 面（server/internal/admin/doc.go:8 占位）
-尚无 HTTP 端点，以下三行由本脚本直接写 SQLite（与 Go 侧写入逐字段一致，分别为
+测试引导（bootstrap，非协议行为）——admin HTTP 面（POST /api/v1/admin/pairing-codes）
+已交付；本脚本为保持自包含/不依赖 admin token 仍选择直写 SQLite（与 Go 侧写入逐字段一致，分别为
 api/pair.go:165 CreatePairingCode、api/openapi_registry.go:140 IssueOpenAPIToken、
 api/openapi_registry.go:178 resolveTarget 所需的 robot_id 绑定）：
   - pairing_codes 行（6 位码 + SHA-256 hash + 10min TTL，单次有效由服务端原子消费）
@@ -69,6 +77,12 @@ try:
     import websocket  # websocket-client：仅作 RFC 6455 传输层，协议逻辑全部本脚本实现
 except ImportError as e:  # pragma: no cover
     print(f"[env] websocket-client 不可用: {e}", file=sys.stderr)
+    sys.exit(2)
+
+try:
+    import jsonschema  # T3.4：控制帧冻结 schema 的第三方（python）消费面
+except ImportError as e:  # pragma: no cover
+    print(f"[env] jsonschema 库不可用: {e}", file=sys.stderr)
     sys.exit(2)
 
 # ---- 冻结常量（protocol/spec.md / state-policy.json 权威值） ----
@@ -342,8 +356,9 @@ def db_exec(db_path, sql, args=()):
 # python 规范客户端（v2 安全会话）
 # =====================================================================
 class SpecClient:
-    def __init__(self, host, port, db_path, checks: Checks):
+    def __init__(self, host, port, db_path, checks: Checks, repo: Path):
         self.host, self.port, self.db_path, self.checks = host, port, db_path, checks
+        self.repo = repo  # protocol/ 权威件根（生产面出帧 schema 自校验用）
         self.base = f"http://{host}:{port}"
         self.ed_priv = Ed25519PrivateKey.generate()
         self.x_priv = X25519PrivateKey.generate()
@@ -351,6 +366,7 @@ class SpecClient:
         self.token_hex = None
         self.token_version = 1
         self.ws = None
+        self._exec_items = {}    # event_id → 已发结果回执 item（幂等重放逐字节复用）
         self.in_seq = 0          # 设备→服务端 seq（hello=1 起严格递增）
         self.last_server_seq = 0  # 已收到的最高服务端→设备 seq
 
@@ -400,6 +416,14 @@ class SpecClient:
             data = data.decode("utf-8", "replace")
         return json.loads(data)
 
+    def recv_raw_json(self, timeout=10):
+        """读一帧返回 (原始文本, 解析对象)。字节级比对输入 = 实收原文
+        （严格 UTF-8 解码：字节损坏即抛错，不做 replace 掩盖）。"""
+        self.ws.settimeout(timeout)
+        data = self.ws.recv()
+        raw = data.decode("utf-8") if isinstance(data, bytes) else data
+        return raw, json.loads(raw)
+
     def server_close(self, timeout=8):
         """读至 OP_CLOSE（control=False 透传控制帧），返回 (关闭码, 原因文本)。
 
@@ -422,7 +446,7 @@ class SpecClient:
                 return None, "close 帧无载荷"
         return None, "timeout: 未收到关闭帧"
 
-    def send_hello(self, last_epoch=0, last_received_seq=0):
+    def send_hello(self, last_epoch=0, last_received_seq=0, label="hello"):
         digest = EMPTY_SHA256  # hello 为空载荷帧（spec §5.4.1）
         meta = build_meta(self.token_hex, "", 1, digest, self.token_version)
         hello = {
@@ -435,6 +459,10 @@ class SpecClient:
                              "encryptTypeMax": 2, "commands": [203]},
             "meta": meta,
         }
+        # 生产面自校验（三方一致之 python 分量）：出帧即过冻结 schema（spec §5.7）
+        err = validate_schema(hello, self.repo / "protocol" / "schema"
+                              / "session-hello.schema.json")
+        self.checks.check(f"{label}.sent_schema_conform", err is None, err or "")
         self.in_seq = 1
         self.send_json(hello)
         return hello
@@ -455,19 +483,31 @@ class SpecClient:
         return meta
 
     def send_exec_result(self, command_id: str, event_id: str, cmd_type: int,
-                         error_code: int, target_room: str, seq: int):
+                         error_code: int, target_room: str, seq: int,
+                         label="execresult"):
         """socketType=3 结果回执（ExecCallbackBean，spec §4.3）。event_id 复用时
-        载荷必须逐值一致（同 payloadDigest → §5.4.3 幂等回执）。"""
-        item = {
-            "type": cmd_type,
-            "errorCode": error_code,
-            "errorReason": "" if error_code == 0 else "e2e-injected-failure",
-            "runTime": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "timeCost": 831,
-            "successList": [target_room] if error_code == 0 else [],
-            "failList": [] if error_code == 0 else [target_room],
-            "metaJson": json.dumps({"dispatchId": command_id}),
-        }
+        载荷必须逐值一致（同 payloadDigest → §5.4.3 幂等回执）——item 按 event_id
+        缓存复用（runTime 等时变字段不得在重放时重新生成：跨秒边界 → digest 漂移
+        → 服务端按「同 ID 异内容」4405 冲突关闭，§5.4.3/v2.go:443）。"""
+        cached = self._exec_items.get(event_id)
+        if cached is not None:
+            item = cached  # 幂等重放：逐字节同载荷（同 payloadDigest）
+        else:
+            item = {
+                "type": cmd_type,
+                "errorCode": error_code,
+                "errorReason": "" if error_code == 0 else "e2e-injected-failure",
+                "runTime": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "timeCost": 831,
+                "successList": [target_room] if error_code == 0 else [],
+                "failList": [] if error_code == 0 else [target_room],
+                "metaJson": json.dumps({"dispatchId": command_id}),
+            }
+            self._exec_items[event_id] = item
+        # 生产面自校验：result/ack 载荷过冻结 schema（exec-callback，spec §5.7.2）
+        err = validate_schema(item, self.repo / "protocol" / "schema"
+                              / "exec-callback.schema.json")
+        self.checks.check(f"{label}.sent_schema_conform", err is None, err or "")
         digest = payload_digest(0, [item], "")
         meta = build_meta(self.token_hex, command_id, seq, digest, self.token_version)
         meta["eventId"] = event_id  # 重放：同 eventId
@@ -524,6 +564,57 @@ class SpecClient:
             except Exception:
                 return False  # 连接异常 ≠ 静默
         return True
+
+
+# =====================================================================
+# Phase 0.5：控制帧冻结夹具三方断言（T3.4，spec §5.7）
+# python（独立第三方）以 jsonschema 直接消费 protocol/ 机器件：
+# 正例全部通过、反例全部被拒——与 Go wire/control_test.go、Kotlin
+# ControlFrameTest 构成三实现一致性（Go 产 / python 收 / Kotlin 收）。
+# =====================================================================
+CONTROL_FIXTURES_POSITIVE = [
+    ("session-hello-ack.go-actual.json", "session-hello-ack.schema.json"),
+    ("control-payload.901-rotate.json", "control-payload.schema.json"),
+    ("control-payload.902-revoked.json", "control-payload.schema.json"),
+    ("control-payload.903-resync.json", "control-payload.schema.json"),
+    ("control-payload.904-replay.json", "control-payload.schema.json"),
+    ("control-payload.904-request.json", "control-payload.schema.json"),
+]
+CONTROL_FIXTURES_NEGATIVE = [
+    ("session-hello-ack.bad-frozen.json", "session-hello-ack.schema.json"),
+    ("session-hello-ack.envelope-wrapped.json", "session-hello-ack.schema.json"),
+    ("control-payload.901-bad-token.json", "control-payload.schema.json"),
+    ("control-payload.903-extra-field.json", "control-payload.schema.json"),
+    ("control-payload.904-empty.json", "control-payload.schema.json"),
+]
+
+
+def validate_schema(instance, schema_path: Path):
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    try:
+        jsonschema.Draft7Validator(schema).validate(instance)
+        return None
+    except jsonschema.ValidationError as e:
+        return str(e.message)[:120]
+
+
+def phase0_control_frame_fixtures(repo: Path, ck: Checks):
+    print("\n== Phase 0.5: 控制帧冻结夹具（T3.4 spec §5.7）jsonschema 三方断言 ==")
+    for name, schema_name in CONTROL_FIXTURES_POSITIVE:
+        data = json.loads((repo / "protocol" / "fixtures" / name).read_text(encoding="utf-8"))
+        err = validate_schema(data, repo / "protocol" / "schema" / schema_name)
+        ck.check(f"ctl.fixture.positive.{name}", err is None, err or "")
+    for name, schema_name in CONTROL_FIXTURES_NEGATIVE:
+        data = json.loads((repo / "protocol" / "fixtures" / "negative" / name).read_text(encoding="utf-8"))
+        err = validate_schema(data, repo / "protocol" / "schema" / schema_name)
+        ck.check(f"ctl.fixture.negative.{name}", err is not None,
+                 "反例被 schema 放行" if err is None else "")
+    # go-actual 基准夹具不变式（spec §5.7.2：serverTime==meta.ts；resumeFromSeq==meta.seq）
+    ack = json.loads((repo / "protocol" / "fixtures" / "session-hello-ack.go-actual.json")
+                     .read_text(encoding="utf-8"))
+    ck.check("ctl.fixture.go_actual_invariants",
+             ack["serverTime"] == ack["meta"]["ts"] and ack["resumeFromSeq"] == ack["meta"]["seq"],
+             f"{ack['serverTime']}/{ack['meta']['ts']} {ack['resumeFromSeq']}/{ack['meta']['seq']}")
 
 
 # =====================================================================
@@ -616,6 +707,7 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
     con = None
     try:
         phase0_golden_vectors(repo, ck)
+        phase0_control_frame_fixtures(repo, ck)
 
         # ---------------- Phase 1: 构建 + 引导 + 拉起 ----------------
         print("== Phase 1: go build + bootstrap + 启动 ==")
@@ -656,7 +748,7 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
 
         # ---------------- Phase 2①: python 规范客户端 ----------------
         print("\n== Phase 2①: 规范客户端 配对→hello→SEND_TEXT→结果→幂等→篡改→TTL ==")
-        dev = SpecClient("127.0.0.1", port, str(db_path), ck)
+        dev = SpecClient("127.0.0.1", port, str(db_path), ck, repo)
 
         # 2.1 配对负例：无效配对码 → 403 PAIRING_CODE_INVALID（spec §5.1.2）
         st, body = dev.post_pair("000000")
@@ -700,7 +792,7 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
         session_key = dev.session_key(sr["serverX25519PublicKey"], session_id)
         dev.dial(sr["wsPath"])
         dev.send_hello(last_epoch=0, last_received_seq=0)
-        ack = dev.recv_json(timeout=10)
+        ack_raw, ack = dev.recv_raw_json(timeout=10)  # ack_raw = 实收原始字节（非再序列化）
         ck.check("hello.ack_type", ack.get("type") == "hello_ack", f"ack={ack}")
         ck.check("hello.ack_frozen",
                  ack.get("heartbeatIntervalSeconds") == HEARTBEAT_SECS
@@ -708,6 +800,44 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
                  f"{ack}")
         ck.check("hello.resume_from_seq", ack.get("resumeFromSeq") == 1,
                  f"resumeFromSeq={ack.get('resumeFromSeq')}（lastReceivedSeq=0 → 1）")
+        # T3.4（spec §5.7）：Go 活体 hello_ack 字节直接过冻结 schema（三方对齐 python 分量）
+        ck.check("hello.ack_schema_conform_live",
+                 validate_schema(ack, repo / "protocol" / "schema" / "session-hello-ack.schema.json") is None,
+                 f"活体 hello_ack 违反冻结 schema: {ack}")
+        ck.check("hello.ack_invariants_live",
+                 ack.get("serverTime") == ack["meta"]["ts"]
+                 and ack.get("resumeFromSeq") == ack["meta"]["seq"],
+                 f"{ack}")
+        # T3.4 字节级比对：活体 hello_ack vs 冻结基准 fixtures/session-hello-ack.go-actual.json
+        # （Go mustJSON=json.Marshal → 紧凑、结构体字段序确定性；基准夹具即此形态采集）
+        baseline = json.loads((repo / "protocol" / "fixtures"
+                               / "session-hello-ack.go-actual.json").read_text(encoding="utf-8"))
+        ck.check("hello.ack_raw_compact_bytes",
+                 ack_raw == json.dumps(ack, separators=(",", ":"), ensure_ascii=False),
+                 f"活体字节非紧凑确定性形态（含空白/重排）: {ack_raw[:96]!r}")
+        ck.check("hello.ack_field_order_baseline",
+                 list(ack.keys()) == list(baseline.keys())
+                 and list(ack["meta"].keys()) == list(baseline["meta"].keys()),
+                 f"live={list(ack.keys())}|{list(ack['meta'].keys())} "
+                 f"baseline={list(baseline.keys())}|{list(baseline['meta'].keys())}")
+        # 掩蔽会话动态字段（serverTime/meta.ts/nonce/hmac/eventId/seq/resumeFromSeq/
+        # tokenVersion）后 JCS 规范形逐字节相等 → 字段全集与冻结常量与基准零漂移
+        _mask_paths = [("serverTime",), ("resumeFromSeq",), ("meta", "ts"),
+                       ("meta", "nonce"), ("meta", "hmac"), ("meta", "eventId"),
+                       ("meta", "seq"), ("meta", "tokenVersion")]
+
+        def _masked(obj):
+            out = json.loads(json.dumps(obj))  # deep copy（不动原对象）
+            for path in _mask_paths:
+                cur = out
+                for k in path[:-1]:
+                    cur = cur[k]
+                cur[path[-1]] = "<DYNAMIC>"
+            return out
+
+        ck.check("hello.ack_masked_canonical_baseline",
+                 canonical_json(_masked(ack)) == canonical_json(_masked(baseline)),
+                 "掩蔽动态字段后 JCS 规范形与冻结基准不一致（字段全集/冻结常量漂移）")
         dev.verify_server_frame_meta("hello_ack", ack["meta"], EMPTY_SHA256)
         dev.last_server_seq = ack["meta"]["seq"]
 
@@ -781,6 +911,10 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
                  isinstance(plain_list, list) and plain_list[0].get("type") == 203
                  and plain_list[0].get("targetRoom") == target_room,
                  f"plain={plain_list}")
+        # T3.4（spec §5.7.2 v1.2.0）：dispatch 载荷携带 epoch（端侧拒旧水位的线缆输入）
+        ck.check("real203.dispatch_epoch_present",
+                 isinstance(plain_list[0].get("epoch"), int) and plain_list[0]["epoch"] >= 1,
+                 f"epoch={plain_list[0].get('epoch')}")
         ck.check("real203.frame_seq_increment", meta["seq"] == dev.last_server_seq,
                  f"seq={meta['seq']}")
 
@@ -816,7 +950,8 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
             str(db_path),
             "SELECT COUNT(*) FROM outbox WHERE command_id=? AND kind='exec_result'",
             (cmd_real,))[0]
-        dev.send_exec_result(cmd_real, result_event, 203, 0, target_room, seq=3)
+        dev.send_exec_result(cmd_real, result_event, 203, 0, target_room, seq=3,
+                             label="execresult_replay")
         time.sleep(1.5)
         outbox_after = db_query_one(
             str(db_path),
@@ -862,7 +997,8 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
         session_id2 = sr2["sessionId"]
         session_key2 = dev.session_key(sr2["serverX25519PublicKey"], session_id2)
         dev.dial(sr2["wsPath"])
-        dev.send_hello(last_epoch=0, last_received_seq=dev.last_server_seq)
+        dev.send_hello(last_epoch=0, last_received_seq=dev.last_server_seq,
+                       label="hello_reconn_ttl")
         ack2 = dev.recv_json(timeout=10)
         ck.check("ttl.hello_ack_resume",
                  ack2.get("type") == "hello_ack"
@@ -912,6 +1048,162 @@ def run_e2e(repo: Path, keep: bool, verbose: bool) -> int:
                               "SELECT COUNT(*) FROM tombstones WHERE command_id=?", (cmd_ttl,))[0]
             ck.check("ttl.no_tombstone_before_terminal", tb == 0,
                      f"非终态出现墓碑 ×{tb}")
+
+        # ---------------- 2.13: 903 RESYNC 真往返（T3.4 控制帧冻结） ----------------
+        # 真实签名乱序 seq（跳号）→ 服务端先发 [{type:903}] 载荷帧、随后 4405 关闭
+        # （spec §5.4.2/§5.4.4；Go sendResync 现产形态 = 冻结基准）。
+        print("\n== Phase 2.13: 903 RESYNC_REQUEST 真往返 ==")
+        skip_seq = dev.in_seq + 2  # 期望 in_seq+1，实际发 in_seq+2（跳号）
+        skip_meta = build_meta(dev.token_hex, "", skip_seq, EMPTY_SHA256, dev.token_version)
+        skip_frame = {"socketType": 0, "messageId": build_message_id(now_ms()),
+                      "meta": skip_meta, "apiSend": 0, "encryptType": 0, "list": []}
+        frames_before_close = []
+        close_after_903 = None
+        dev.send_json(skip_frame)
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                opcode, data = dev.ws.recv_data(control_frame=False)
+            except Exception as e:
+                close_after_903 = getattr(dev.ws, "close_status", None) or f"recv: {e}"
+                break
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                close_after_903 = int.from_bytes(data[:2], "big") if len(data) >= 2 else None
+                break
+            if opcode == websocket.ABNF.OPCODE_TEXT:
+                frames_before_close.append(json.loads(data.decode("utf-8", "replace")))
+        ctl_903 = None
+        ctl_903_item = None  # 活体 903 载荷元素（schema 校验输入 = 实收字节，非字面量）
+        for f in frames_before_close:
+            if "meta" not in f:
+                continue
+            items = f.get("list") or []
+            if f.get("encryptType") == 2:
+                items = dev.decrypt_frame_list(f, session_key2)
+            hit = next((i for i in items if isinstance(i, dict) and i.get("type") == 903), None)
+            if hit is not None:
+                ctl_903 = f
+                ctl_903_item = hit
+                dev.last_server_seq = max(dev.last_server_seq, f["meta"]["seq"])
+        ck.check("ctl903.frame_received_before_close", ctl_903 is not None,
+                 f"关闭前帧={[list(f.keys()) for f in frames_before_close]}")
+        if ctl_903 is not None:
+            ck.check("ctl903.schema_conform",
+                     validate_schema(ctl_903_item,
+                                     repo / "protocol" / "schema" / "control-payload.schema.json") is None,
+                     "903 活体载荷违反冻结 schema")
+            ck.check("ctl903.frozen_form_deep_equal",
+                     ctl_903_item == {"type": 903},
+                     f"Go 现产 903 载荷漂移于冻结基准 {{type:903}}: {ctl_903_item!r}")
+            digest903 = payload_digest(2, None, ctl_903.get("encryptedList", "")) \
+                if ctl_903.get("encryptType") == 2 else EMPTY_SHA256
+            dev.verify_server_frame_meta("ctl903", ctl_903["meta"], digest903)
+        ck.check("ctl903.close_4405_after_resync", close_after_903 == 4405,
+                 f"close={close_after_903}（期望 4405）")
+        try:
+            dev.ws.close()
+        except Exception:
+            pass
+
+        # ---------------- 2.14: 904 JOURNAL_REPLAY 真往返（T3.4） ----------------
+        # 存在 pending execution_unknown 时重连 → 服务端 hello_ack 后下发
+        # [{type:904,request:"journal_replay"}]（Go sendJournalRequest 现产形态）；
+        # python 以 cmd_ttl 的持久证据补报（outcome=success）→ E12 对账离出 → succeeded + 墓碑。
+        print("\n== Phase 2.14: 904 JOURNAL_REPLAY 真往返 ==")
+        st, sr3 = dev.post_device_session()
+        ck.check("ctl904.reconnect_session", st == 201, f"status={st} body={sr3}")
+        if st != 201:
+            return 1
+        session_id3 = sr3["sessionId"]
+        session_key3 = dev.session_key(sr3["serverX25519PublicKey"], session_id3)
+        dev.dial(sr3["wsPath"])
+        dev.send_hello(last_epoch=0, last_received_seq=dev.last_server_seq,
+                       label="hello_reconn_904")
+        ack3 = dev.recv_json(timeout=10)
+        ck.check("ctl904.hello_ack_resume_continuous",
+                 ack3.get("type") == "hello_ack"
+                 and ack3.get("resumeFromSeq") == dev.last_server_seq + 1,
+                 f"ack={ack3}（服务端出向 seq 跨连接连续，spec §5.4.2 v1.2.0）")
+        dev.last_server_seq = ack3["meta"]["seq"]
+
+        # 读至 904-request 帧（hello_ack 后紧随；无 queued 指令时无其他业务帧）
+        ctl_904req = None
+        ctl_904req_item = None  # 活体 904-request 载荷元素（schema 校验输入 = 实收字节，非字面量）
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                frame = dev.recv_json(timeout=max(1, deadline - time.time()))
+            except websocket.WebSocketTimeoutException:
+                break
+            except Exception:
+                break
+            if not isinstance(frame, dict) or "meta" not in frame:
+                continue
+            items = frame.get("list") or []
+            if frame.get("encryptType") == 2:
+                items = dev.decrypt_frame_list(frame, session_key3)
+            dev.last_server_seq = max(dev.last_server_seq, frame["meta"]["seq"])
+            hit = next((i for i in items if isinstance(i, dict) and i.get("type") == 904
+                        and i.get("request") == "journal_replay"), None)
+            if hit is not None:
+                ctl_904req = frame
+                ctl_904req_item = hit
+                break
+        ck.check("ctl904.request_received", ctl_904req is not None,
+                 "重连后未收到 904 journal_replay 请求（PendingUnknownRisk 应非空）")
+        if ctl_904req is not None:
+            ck.check("ctl904.request_schema_conform",
+                     validate_schema(ctl_904req_item,
+                                     repo / "protocol" / "schema" / "control-payload.schema.json") is None,
+                     "904-request 活体载荷违反冻结 schema")
+            ck.check("ctl904.request_frozen_form_deep_equal",
+                     ctl_904req_item == {"type": 904, "request": "journal_replay"},
+                     f"Go 现产 904-request 载荷漂移于冻结基准: {ctl_904req_item!r}")
+
+        # 端侧补报：cmd_ttl 持久证据（epoch 取服务端 commands.epoch，outcome=success）
+        row = db_query_one(str(db_path), "SELECT epoch FROM commands WHERE command_id=?", (cmd_ttl,))
+        cmd_ttl_epoch = row[0] if row and row[0] else 0
+        replay_entry = {"commandId": cmd_ttl, "epoch": cmd_ttl_epoch,
+                        "started": True, "outcome": "success", "source": "local"}
+        ck.check("ctl904.replay_entry_schema_conform",
+                 validate_schema({"type": 904, "entries": [replay_entry]},
+                                 repo / "protocol" / "schema" / "control-payload.schema.json") is None,
+                 "904 补报载荷违反冻结 schema")
+        replay_item = {"type": 904, "entries": [replay_entry]}
+        digest904 = payload_digest(0, [replay_item], "")
+        dev.send_json({"socketType": 2, "messageId": build_message_id(now_ms()),
+                       "meta": dev.next_meta("", digest904),
+                       "apiSend": 0, "encryptType": 0, "list": [replay_item]})
+
+        reconciled = {}
+        for _ in range(20):
+            st, q = openapi_get("127.0.0.1", port, robot_main, token_main, cmd_ttl)
+            reconciled = (q or {}).get("data") or {}
+            if reconciled.get("terminal"):
+                break
+            time.sleep(0.5)
+        ck.check("ctl904.e12_reconciled_succeeded",
+                 reconciled.get("finalState") == "succeeded" and reconciled.get("errorCode") == 0,
+                 f"q={reconciled}（execution_unknown → E12 证据·成功）")
+        e12 = db_query_one(str(db_path),
+                           "SELECT COUNT(*) FROM command_events WHERE command_id=? AND edge_id='E12'",
+                           (cmd_ttl,))[0]
+        ck.check("ctl904.e12_edge_logged", e12 == 1, f"E12 留痕 ×{e12}")
+        tb904 = db_query_one(str(db_path),
+                             "SELECT COUNT(*) FROM tombstones WHERE command_id=?", (cmd_ttl,))[0]
+        ck.check("ctl904.tombstone_after_reconcile", tb904 == 1, f"墓碑 ×{tb904}")
+        # 904 幂等：同 commandId 重发补报 → 不重复副作用（E12 仍 1 条）
+        digest904b = payload_digest(0, [replay_item], "")
+        replay2 = {"type": 904, "entries": [replay_entry]}
+        meta904b = build_meta(dev.token_hex, "", dev.in_seq + 1, digest904b, dev.token_version)
+        dev.send_json({"socketType": 2, "messageId": build_message_id(now_ms()),
+                       "meta": meta904b, "apiSend": 0, "encryptType": 0, "list": [replay2]})
+        dev.in_seq += 1
+        time.sleep(1.5)
+        e12b = db_query_one(str(db_path),
+                            "SELECT COUNT(*) FROM command_events WHERE command_id=? AND edge_id='E12'",
+                            (cmd_ttl,))[0]
+        ck.check("ctl904.replay_idempotent", e12b == 1, f"E12 ×{e12b}（重放不得重复迁移）")
 
         # ---------------- Phase 3②: apifox 兼容面冒烟 ----------------
         print("\n== Phase 3②: /openapi/v1 apifox 冒烟 ==")

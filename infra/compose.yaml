@@ -1,0 +1,90 @@
+# WorkTool-Open 服务端编排（W-M4 / G-5「compose 一键起」；docs/09 §C）。
+#
+# 用法（仓库根执行；详见 README「快速开始」三步）：
+#   1) 准备 TLS 证书到 infra/certs/（server.crt + server.key，PEM）：
+#        # 内网自签一例（正式部署请用自有 CA/证书）：
+#        openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+#          -subj "/CN=worktool-server.local" \
+#          -keyout infra/certs/server.key -out infra/certs/server.crt
+#        # 容器内进程非 root（uid/gid 1000）——证书须对其可读：
+#        sudo chown -R 1000:1000 infra/certs && sudo chmod 600 infra/certs/server.key
+#   2) docker compose -f infra/compose.yaml up -d --build
+#      （受限网络叠加：WT_GOPROXY=https://goproxy.cn,direct；改宿主端口：WT_PORT=18443）
+#   3) 健康检查通过后即完成：https://<host>:${WT_PORT:-8443}/healthz
+#
+# 环境变量（均可 .env / shell 覆盖，默认值见各处 ${...:-default}）：
+#   WT_PORT        宿主暴露端口（默认 8443）
+#   WT_CALLBACK_URL / WT_CALLBACK_SECRET / WT_ALLOW_NONLOOPBACK_CALLBACK
+#                  回调分发（默认禁外网；仅 loopback 接收器，server/README.md）
+#
+# ⚠️ Postgres（profiles: pg）为预留位：服务端 PG 后端按 server/README.md 归 T3.x
+#    尚未落地——当前 server 只消费 SQLite（WT_DB，容器内 /data）。`--profile pg`
+#    只会多起一个 PG 容器，不会切换 server 存储后端；等 T3.x 落地后在此补
+#    WT_DB_DSN 注入即可，编排形状不变。
+
+name: worktool-open
+
+services:
+  server:
+    build:
+      context: ..                 # 仓库根（Dockerfile 只消费 server/）
+      dockerfile: infra/server.Dockerfile
+      args:
+        # 受限网络可覆盖（例：WT_GOPROXY=https://goproxy.cn,direct）——
+        # 依赖完整性由 go.sum 哈希校验保证，proxy 只换传输不降门槛
+        GOPROXY: ${WT_GOPROXY:-https://proxy.golang.org,direct}
+    image: worktool-open-server:latest
+    container_name: worktool-open-server
+    restart: unless-stopped
+    ports:
+      - "${WT_PORT:-8443}:8443"
+    environment:
+      # 回调分发（默认空 = 禁投递；SR-09：非 loopback 回调须显式放行）
+      WT_CALLBACK_URL: ${WT_CALLBACK_URL:-}
+      WT_CALLBACK_SECRET: ${WT_CALLBACK_SECRET:-}
+      WT_ALLOW_NONLOOPBACK_CALLBACK: ${WT_ALLOW_NONLOOPBACK_CALLBACK:-}
+    volumes:
+      - wt-data:/data                                  # SQLite 库文件（持久化）
+      - ./certs:/certs:ro                              # TLS 证书（只读挂载）
+    healthcheck:
+      # 容器内自检：TLS 端点（自签证书 → 不校验链，进程存活+HTTP 200 即健康）
+      test: ["CMD", "wget", "--no-check-certificate", "-qO", "/dev/null", "https://127.0.0.1:8443/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 可选 Postgres（预留，见文件头 ⚠️）──────────────────────────────
+  postgres:
+    profiles: ["pg"]
+    image: postgres:16-alpine
+    container_name: worktool-open-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: worktool
+      # 空→postgres 官方镜像启动即拒绝（Database is uninitialized and superuser
+      # password is not specified）——天然 fail-closed，不用 :? 是因为 compose 对
+      # 非激活 profile 的服务同样做插值校验，:? 会让默认 `config`/`up` 直接报错。
+      POSTGRES_PASSWORD: ${WT_PG_PASSWORD:-}
+      POSTGRES_DB: worktool
+    volumes:
+      - wt-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worktool -d worktool"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wt-data:
+  wt-pg-data:

@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:control-payload:1.0.0",
+  "title": "WorkTool-Open v2 控制帧载荷（901~904，spec §5.7 T3.4 冻结）",
+  "description": "901~904 控制帧载荷单元：作为 socketType=2 信封（command-envelope.schema.json）list 的一个元素承载（与业务指令同信封、同逐帧鉴权 meta）。Go 网关现有产出形态为基准：903=[{\"type\":903}]（server/internal/gateway/v2.go sendResync）、904 请求=[{\"type\":904,\"request\":\"journal_replay\"}]（sendJournalRequest）、904 补报 entries 形状 = scheduler.JournalEntry。901/902 尚无生产触发路径（凭据轮换/撤销归 admin 面，W-M4 后），schema 先行冻结防漂移。",
+  "oneOf": [
+    {"$ref": "#/definitions/credentialRotate"},
+    {"$ref": "#/definitions/credentialRevoked"},
+    {"$ref": "#/definitions/resyncRequest"},
+    {"$ref": "#/definitions/journalReplay"},
+    {"$ref": "#/definitions/journalRequest"}
+  ],
+  "definitions": {
+    "credentialRotate": {
+      "title": "901 CREDENTIAL_ROTATE（云→端，spec §5.5.1）",
+      "description": "承载约束：所在信封必须 encryptType=2（走当前已鉴权加密会话，spec §5.5.1；schema 无法表达信封级约束，由实现校验）。设备确认切换 = 以新凭据发首帧（meta.tokenVersion=新值）。",
+      "type": "object",
+      "required": ["type", "deviceToken", "tokenVersion", "serverX25519PublicKey"],
+      "properties": {
+        "type": {"const": 901},
+        "deviceToken": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "新逐帧 HMAC 密钥（256-bit hex）；旧 token 在设备确认切换后立即失效"},
+        "tokenVersion": {"type": "integer", "minimum": 2, "description": "轮换后版本（当前版本 +1，≥2）"},
+        "serverX25519PublicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "服务端新 X25519 临时公钥（每次轮换新生成）"}
+      },
+      "additionalProperties": false
+    },
+    "credentialRevoked": {
+      "title": "902 CREDENTIAL_REVOKED（云→端，spec §5.5.2）",
+      "description": "撤销广播：meta.tokenVersion 携带撤销后版本。设备收到即停止使用当前凭据；离线设备重连时 4404 且无重协商资格 → 强制重新配对（新配对码走 §5.1）。",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"const": 902}
+      },
+      "additionalProperties": false
+    },
+    "resyncRequest": {
+      "title": "903 RESYNC_REQUEST（双向，spec §5.4.4）",
+      "description": "seq 乱序 / eventId 冲突 / 恢复后区间不连续时触发：关闭当前流 → 以持久确认点为基线重放（服务端自 lastReceivedSeq+1 重放未确认事件；端侧重发 journal 904）。Go 实现形态（基准）：[{\"type\":903}]。",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"const": 903}
+      },
+      "additionalProperties": false
+    },
+    "journalReplay": {
+      "title": "904 JOURNAL_REPLAY（端→云补报，spec §5.4.5）",
+      "description": "端侧持久 journal 补报（离线已执行事件 / 崩溃恢复重放）。服务端按 commandId 幂等消费（E09 已执行去重）并驱动 E12/E13/E14 对账离出边（execution_unknown 三原则①：只凭持久证据）。entries 形状 = Go scheduler.JournalEntry（基准）。",
+      "type": "object",
+      "required": ["type", "entries"],
+      "properties": {
+        "type": {"const": 904},
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["commandId", "epoch", "started", "outcome", "source"],
+            "properties": {
+              "commandId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+              "epoch": {"type": "integer", "minimum": 0},
+              "started": {"type": "boolean", "description": "端侧是否已开始执行（E09 启动留痕）"},
+              "outcome": {"type": "string", "enum": ["", "success", "failure", "never_started"], "description": "空串 = 进行中（仅 started=true 且未终态）"},
+              "source": {"type": "string", "enum": ["local", "server"], "description": "local = 离线合并补报（spec §5.4.5）"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "journalRequest": {
+      "title": "904 JOURNAL_REPLAY 请求（云→端，spec §5.4.5 / §5.6.3）",
+      "description": "服务端请求端侧补报 journal（重连触发对账：存在 pending execution_unknown 时，服务端不凭超时定性成败，三原则①）。端侧应答 = journalReplay 变体。Go 实现形态（基准）：[{\"type\":904,\"request\":\"journal_replay\"}]。",
+      "type": "object",
+      "required": ["type", "request"],
+      "properties": {
+        "type": {"const": 904},
+        "request": {"const": "journal_replay"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

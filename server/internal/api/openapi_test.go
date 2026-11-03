@@ -232,6 +232,40 @@ func TestOpenAPIAuth(t *testing.T) {
 	if status != http.StatusForbidden || int(env["code"].(float64)) != 501011 {
 		t.Fatalf("robot 不匹配应 403/501011，实际 %d %v", status, env)
 	}
+
+	// 保留名 admin（CR ADM-1）：签发侧硬拒——不得为名叫 admin 的 v1 robot 铸出
+	// 第二个 admin-scope 令牌
+	if _, err := f.api.IssueOpenAPIToken(context.Background(), sqlite.ReservedAdminScopeRobotID, "tenant-a"); err == nil {
+		t.Fatal("为保留名 admin 签发兼容面令牌必须失败")
+	}
+
+	// 鉴权侧硬拒：admin scope 令牌 + robotId=admin 寻址（t.RobotID == 路径恰好
+	// 匹配，非「寻址不匹配」）→ 403，不得经 resolveTarget 进入业务管线
+	adminScopeTok := mustAdminScopeToken(t, f)
+	reqAdmin, _ := http.NewRequest(http.MethodPost,
+		f.srv.URL+"/openapi/v1/robots/"+sqlite.ReservedAdminScopeRobotID+"/commands",
+		strings.NewReader(body))
+	reqAdmin.Header.Set("Authorization", "Bearer "+adminScopeTok)
+	reqAdmin.Header.Set("Idempotency-Key", "k-admin")
+	respAdmin, err := http.DefaultClient.Do(reqAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respAdmin.Body.Close()
+	if respAdmin.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin 令牌打兼容面应 403（保留名硬拒），实际 %d", respAdmin.StatusCode)
+	}
+}
+
+// mustAdminScopeToken 直插一行 admin scope 令牌（IssueOpenAPIToken 拒签后，
+// admin 令牌的现实来源 = 管理面签发/运维 SQL 落 hash——以等价直插模拟）。
+func mustAdminScopeToken(t *testing.T, f *openapiFixture) string {
+	t.Helper()
+	raw := "e2e-admin-scope-token-raw-value"
+	if err := f.db.InsertAPIToken(context.Background(), sha256Hex(raw), sqlite.ReservedAdminScopeRobotID, "default", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func (f *openapiFixture) postWithToken(t *testing.T, body, auth, idem string) (int, map[string]any) {

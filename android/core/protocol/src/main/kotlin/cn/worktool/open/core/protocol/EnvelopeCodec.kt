@@ -58,8 +58,31 @@ class EnvelopeCodec(
                     ?: throw EnvelopeDecodeException("td 建连帧必须是 Unix 毫秒整数")
                 WireMessage.ConnectionHello(td)
             }
+            // 独立控制帧（spec §5.7.1 T3.4 冻结）：type 为字符串 + meta 对象
+            //（hello/hello_ack；不承载于信封，无 socketType/messageId）。
+            isControlShape(obj) -> decodeControl(obj)
             else -> decodeEnvelope(obj)
         }
+    }
+
+    /** 独立控制帧判别：顶层 type 为字符串且 meta 为对象（spec §5.7.1）。 */
+    private fun isControlShape(obj: JsonObject): Boolean {
+        val t = obj["type"] as? JsonPrimitive ?: return false
+        return t.isString && obj["meta"] is JsonObject
+    }
+
+    private fun decodeControl(obj: JsonObject): WireMessage {
+        val type = (obj["type"] as JsonPrimitive).content
+        val metaEl = obj["meta"] as JsonObject
+        val fields = obj.entries.filter { it.key != "type" && it.key != "meta" }
+            .associate { it.key to it.value }
+        return WireMessage.Control(
+            ControlFrame(
+                type = type,
+                meta = decodeMeta(metaEl),
+                fields = fields,
+            ),
+        )
     }
 
     private fun decodeEnvelope(obj: JsonObject): WireMessage {
@@ -192,18 +215,7 @@ class EnvelopeCodec(
         val out = LinkedHashMap<String, JsonElement>()
         out["socketType"] = JsonPrimitive(frame.socketType)
         out["messageId"] = JsonPrimitive(frame.messageId)
-        out["meta"] = JsonObject(
-            linkedMapOf(
-                "ver" to JsonPrimitive(frame.meta.ver),
-                "ts" to JsonPrimitive(frame.meta.ts),
-                "nonce" to JsonPrimitive(frame.meta.nonce),
-                "hmac" to JsonPrimitive(frame.meta.hmac),
-                "seq" to JsonPrimitive(frame.meta.seq),
-                "eventId" to JsonPrimitive(frame.meta.eventId),
-                "commandId" to JsonPrimitive(frame.meta.commandId),
-                "tokenVersion" to JsonPrimitive(frame.meta.tokenVersion),
-            ),
-        )
+        out["meta"] = metaElement(frame.meta)
         frame.apiSend?.let { out["apiSend"] = JsonPrimitive(it) }
         if (frame.listPresent || frame.list.isNotEmpty() || frame.encryptedList == null) {
             out["list"] = listElement(frame.list)
@@ -214,8 +226,29 @@ class EnvelopeCodec(
         return JsonObject(out)
     }
 
+    /** frameMeta 树形（frameMeta 字段序冻结；独立控制帧校验复用）。 */
+    fun metaElement(meta: FrameMeta): JsonObject = JsonObject(
+        linkedMapOf(
+            "ver" to JsonPrimitive(meta.ver),
+            "ts" to JsonPrimitive(meta.ts),
+            "nonce" to JsonPrimitive(meta.nonce),
+            "hmac" to JsonPrimitive(meta.hmac),
+            "seq" to JsonPrimitive(meta.seq),
+            "eventId" to JsonPrimitive(meta.eventId),
+            "commandId" to JsonPrimitive(meta.commandId),
+            "tokenVersion" to JsonPrimitive(meta.tokenVersion),
+        ),
+    )
+
     fun listElement(list: List<WeworkMessageBean>): JsonArray =
         json.encodeToJsonElement(beanListSerializer, list) as JsonArray
+
+    /**
+     * 解析已验帧载荷树（list JsonArray）为载荷单元列表（T3.4 执行回路接线消费入口：
+     * onCommand 的 payload JsonElement → 强类型 bean；含 901~904 控制载荷——
+     * 控制字段在 extras 保留，约束校验见 validation/ControlPayloadValidator）。
+     */
+    fun beans(payload: JsonElement): List<WeworkMessageBean> = decodeList(payload)
 
     // ---- 构造器 ----
 

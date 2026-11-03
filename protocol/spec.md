@@ -1,6 +1,6 @@
 # WorkTool-Open 通讯协议规格 v1.0（T2.1）
 
-- 版本：1.1.0（2026-11-02，T2.1 交付 1.0.0 后同日修订：AUD-03 C-9 seq 纳入 HMAC 防篡改 + C-10 ACK TTL 离出边；变更明细见 §10 变更记录）
+- 版本：1.2.0（2026-11-03，T3.4：901~904 控制帧 + hello_ack schema 冻结（§5.7）+ §5.4.2 服务端出向 seq 重连语义澄清；变更明细见 §10 变更记录）
 - 权威声明：本目录（`protocol/`）是协议**唯一权威**（ADR-08）。机器可读权威件：`schema/*.schema.json`（报文）、`state-transitions.csv`（状态机边集）、`state-policy.json`（终态与策略）。本文与机器件冲突时，以机器件为准并登记 AUD 复核。
 - 字段语义来源：v1 兼容面 = 上游开源仓库 v2.8.1 还原（证据 `local-private/audit/02` §A，仅字段名/指令号/枚举值/行为语义入库，涉密值一律不录入）；v2 增量 = `docs/02-ARCHITECTURE.md` §5（2026-11-02 用户审阅意见精确规格）。
 - 消费方：L1 `android core:protocol`（T2.2）、L2 `server internal/gateway|scheduler|api`（T2.3/T3.2/T3.4）。夹具与金标准向量见 `fixtures/`（§7 消费契约）。
@@ -230,12 +230,14 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 - `lastEpoch`：端侧 journal 已应用的最小命令 epoch——服务端不得下发更小 epoch（端侧拒旧，docs/02 §5.1）。
 - `lastReceivedSeq`：端侧持久确认的最高入向 seq——服务端从此值 +1 补发（不丢不重）。
 - hello 为空载荷帧（payloadDigest=空串哈希）。
-- 服务端应答 `hello_ack`：`{type:"hello_ack", serverTime, resumeFromSeq, heartbeatIntervalSeconds, sessionTimeoutSeconds, meta{…}}`（形状在此冻结，schema 随 T3.4 实现）。
+- 服务端应答 `hello_ack`：`{type:"hello_ack", serverTime, resumeFromSeq, heartbeatIntervalSeconds, sessionTimeoutSeconds, meta{…}}`（**T3.4 已冻结**：schema = `session-hello-ack.schema.json`，字段全集见 §5.7；以 Go 网关实际产出字节为基准三方对齐，基准夹具 `fixtures/session-hello-ack.go-actual.json`。不变式：`serverTime==meta.ts`；`resumeFromSeq==meta.seq==lastReceivedSeq+1`）。
 
 #### 5.4.2 seq（每会话每方向严格递增，从 1 起）
 - seq 已纳入 §5.2.2 HMAC 输入（C-9）：篡改 seq 在 HMAC 步失败（4401）。
 - 乱序/回退 → 拒帧 + 关闭 4405 + 发起 903 重新同步（服务端自 `lastReceivedSeq+1` 重放未确认事件）。
-- 重连不重置计数语义：新连接 seq 重新从 1 起，但补发内容以持久确认点为准（journal/outbox）。
+- 重连的 seq 起点**按方向区分**（v1.2.0 澄清，修 W-M3R 暴露的三方歧义——原文"新连接 seq 重新从 1 起"仅适用设备→服务端方向）：
+  - **设备→服务端**：新连接重新从 1 起（hello `meta.seq` 恒 1，schema 冻结）；
+  - **服务端→设备**：跨连接**自持久确认点连续**——`hello_ack.meta.seq = resumeFromSeq = hello.lastReceivedSeq + 1`，后续帧连续 +1；端侧接收计数器重连后以 `lastReceivedSeq` 预置（期望首帧 = `lastReceivedSeq+1`）。跨进程重启时端侧计数复位为 0，由服务端自 1 补发 + 端侧 eventId/commandId 去重（§5.4.3/§5.4.5）兜底不重不丢。
 
 #### 5.4.3 eventId 去重
 - 重复 `eventId`：**同 payloadDigest**（同内容重复）→ 幂等回执原确认（不得重复副作用）；**异 payloadDigest**（同 ID 异内容）→ 冲突，关闭 4405。
@@ -276,6 +278,39 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 3. **L1/L2 危险指令存在 unknown 待核时，冻结同类新指令**（FR-53 联动）。
 - 进入边：E06/E07/E08（服务端重启/会话丢失/失联）+ E17/E18（300s ACK TTL 到期且无持久传输证据，AUD-03 C-10）；离出边：E12（证据·成功）/E13（unstarted）/E14（证据·失败）/E15（人工裁决，审计留痕）。
 
+### 5.7 控制帧与关键帧 schema 冻结（T3.4，2026-11-03）
+
+W-M3R 真机回归暴露的三方不一致（Go 产 hello_ack / python 收 / Kotlin 按 v2 信封规则拒 → 执行层未装配，AUD-06）在本节关闭：**控制帧与关键帧的字段全集以机器件为权威**，Go/python/Kotlin 三方一致消费。
+
+#### 5.7.1 承载形态（两种，判别规则冻结）
+
+| 形态 | 帧 | 判别 |
+|---|---|---|
+| **独立控制帧**（不承载于信封，无 `socketType`/`messageId` 字段） | hello、hello_ack | 顶层 `type` 为**字符串**且携带 `meta` 对象 |
+| **信封载荷单元**（`socketType=2` 信封 `list` 的一个元素，与业务指令同信封同逐帧鉴权） | 901~904 | 载荷 `type` 为整数（§4.2 全表） |
+
+- v2 会话实现不得以 v1/v2 信封 schema（`socketType` 必含）校验独立控制帧——此即 W-M3R 拒收根因。
+- 901 所在信封**必须 encryptType=2**（§5.5.1，schema 无法表达信封级约束，由实现校验）。
+
+#### 5.7.2 字段全集（schema 权威，此处为索引）
+
+| 帧/schema | 文件 | 关键冻结点 |
+|---|---|---|
+| hello | `session-hello.schema.json`（既有） | seq 恒 1、空载荷帧 |
+| hello_ack | `session-hello-ack.schema.json`（**新**） | `serverTime==meta.ts`；`resumeFromSeq==meta.seq==lastReceivedSeq+1`；heartbeat=15/sessionTimeout=45 const；`meta.commandId` 空。基准夹具 = `fixtures/session-hello-ack.go-actual.json`（本地实服务采集字节） |
+| 901 CREDENTIAL_ROTATE | `control-payload.schema.json#/definitions/credentialRotate`（**新**） | `{type:901, deviceToken(hex64), tokenVersion(≥2), serverX25519PublicKey(hex64)}`，additionalProperties:false |
+| 902 CREDENTIAL_REVOKED | `…/credentialRevoked`（**新**） | `{type:902}`，撤销后版本由 `meta.tokenVersion` 承载 |
+| 903 RESYNC_REQUEST | `…/resyncRequest`（**新**） | `{type:903}`（Go 现产形态为基准） |
+| 904 JOURNAL_REPLAY 补报（端→云） | `…/journalReplay`（**新**） | `{type:904, entries:[{commandId(uuid), epoch(≥0), started(bool), outcome("" \| success \| failure \| never_started), source(local \| server)}]}` |
+| 904 JOURNAL_REPLAY 请求（云→端） | `…/journalRequest`（**新**） | `{type:904, request:"journal_replay"}`（Go 现产形态为基准） |
+| 指令下发（command） | `command-envelope.schema.json`（既有）+ 本节增量：**下发载荷单元携带 `epoch`（int ≥1）字段**（v1.2.0 冻结；载荷 additionalProperties:true 容纳，端侧 `InboundCommandGate` 拒旧水位的线缆输入；服务端 dispatch 时注入） |
+| 结果回执（result/ack，socketType=3） | `exec-callback.schema.json`（既有） | 无变更（T3.2 已冻结）；`metaJson.dispatchId` 回填 commandId |
+
+#### 5.7.3 消费一致性（三方）
+- Go（产）：hello_ack/903/904-request 按本节产出（网关既有实现即基准）；dispatch 载荷注入 `epoch`。
+- python（独立第三方，test/e2e）：活体帧按 schema 校验 + 全部正反例夹具过 `jsonschema`。
+- Kotlin（收）：`EnvelopeCodec` 识别独立控制帧形态 → `FrameVerifier` 按 §5.2.4 顺序验 hello_ack（含 HMAC 与 `seq==resumeFromSeq==lastReceivedSeq+1`）→ 会话建立；901~904 按 §5.7.2 载荷 schema 校验。
+
 ## 6. 执行状态机
 
 - **唯一权威边集 = `state-transitions.csv`**（种子 18 条 = T2.1 16 条 + E17/E18 ACK TTL 到期对账边【AUD-03 C-10】，表驱动；docs/02 §5.1：计划文档禁止复述边表防漂移，本文不复述）。终态判定与策略参数 = `state-policy.json`。
@@ -309,10 +344,21 @@ K_session = HKDF-SHA256(ikm=shared, salt=UTF-8(sessionId), info="worktool-open/v
 |---|---|---|---|
 | Q1 | 指令正文/目标会话字段名（候选 receivedContent/targetRoom） | v1 兼容面载荷互通 | T3.2 apifox 冒烟 |
 | Q2 | 错误码完整表（已知值见 §4.3） | 结果回执映射 | T3.2 |
-| Q3 | hello_ack / 901~904 控制帧 schema 化 | v2 实现期校验 | T3.4 |
+| Q3 | hello_ack / 901~904 控制帧 schema 化 | v2 实现期校验 | ✅ 已关闭（T3.4，v1.2.0：§5.7 + `session-hello-ack.schema.json` + `control-payload.schema.json`） |
 | Q4 | 231/232 我方语义（自动拒接 FR-51 vs 禁用） | FR-51 落位 | T3.1 |
 
 ## 10. 变更记录（下游车道消费点，字段级）
+
+### 1.2.0（2026-11-03，T3.4 控制帧 schema 冻结——修 W-M3R 暴露的三方不一致规格缺陷）
+
+**背景**：W-M3R 真机回归（AUD-06）：Go 产出 hello_ack 为独立控制帧（无 `socketType`），Kotlin FrameVerifier 按信封 schema 拒收（4400 format）→ 会话关闭 → 后续补投帧 seq_gap 连锁 → 执行层未装配。Go 产/python 收/Kotlin 拒 = 三方不一致 → 规格缺陷（hello_ack/901~904 形态未冻结），本版修 spec 而非单侧迁就。
+
+- **§5.7 新增**：控制帧与关键帧 schema 冻结总表。新机器件：`schema/session-hello-ack.schema.json`（hello_ack 独立控制帧，以 Go 实际产出字节为基准，基准夹具 `fixtures/session-hello-ack.go-actual.json`）、`schema/control-payload.schema.json`（901~904 载荷单元五种变体）。
+- **承载形态判别冻结（§5.7.1）**：`type` 为字符串且携带 `meta` 对象 = 独立控制帧（hello/hello_ack），**不得**按信封 schema（socketType 必含）校验；901~904 = socketType=2 信封载荷单元。
+- **§5.4.2 语义澄清（破坏性语义修正，消除三方歧义）**：重连 seq 起点按方向区分——设备→服务端重新从 1 起（hello seq 恒 1）；服务端→设备**跨连接自持久确认点连续**（`hello_ack.meta.seq = resumeFromSeq = lastReceivedSeq+1`；端侧接收计数器重连后以 lastReceivedSeq 预置）。原文"新连接 seq 重新从 1 起"仅适用设备→服务端方向；Go 实现与 e2e 断言（`ttl.hello_ack_resume`）即此语义。
+- **指令下发载荷增量（§5.7.2）**：dispatch 载荷单元携带 `epoch`（int ≥1，服务端注入）；端侧拒旧（`InboundCommandGate`）的线缆输入。
+- **夹具增量**：正例 `session-hello-ack.go-actual.json`、`control-payload.901-rotate/902-revoked/903-resync/904-replay/904-request.json`；反例 `negative/session-hello-ack.bad-frozen、session-hello-ack.envelope-wrapped、control-payload.901-bad-token、control-payload.903-extra-field、control-payload.904-empty.json`。
+- **L1/L2 消费点**：L1 Kotlin 解码器须识别独立控制帧形态并按 §5.2.4 验 hello_ack（W-M4 T3.4 已落地）；L2 Go dispatch 载荷注入 epoch（已落地）；e2e 三方一致性断言扩展（已落地）。
 
 ### 1.1.0（2026-11-02，AUD-03 C-9/C-10 裁决修订）
 

@@ -1,0 +1,17 @@
+{
+  "type": "hello_ack",
+  "serverTime": 1793659572338,
+  "resumeFromSeq": 1,
+  "heartbeatIntervalSeconds": 15,
+  "sessionTimeoutSeconds": 45,
+  "meta": {
+    "ver": 2,
+    "ts": 1793659572338,
+    "nonce": "2e3b98e90a47796c8e86633fddac8d88",
+    "hmac": "d2b8b30f8b7e3b8de528ee91e6386a5022afceb4ef1c81509a1795ba66db7ddd",
+    "seq": 1,
+    "eventId": "1d97397d-67ef-4e01-a6ee-400e16e22f00",
+    "commandId": "",
+    "tokenVersion": 1
+  }
+}

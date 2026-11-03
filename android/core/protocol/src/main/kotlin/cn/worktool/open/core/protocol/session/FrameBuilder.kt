@@ -41,15 +41,24 @@ class FrameBuilder(
         val eventId: String,
     )
 
-    /** 通用帧构造（心跳 socketType=0 / 上报 socketType=2 / 结果回执 socketType=3）。 */
+    /**
+     * 通用帧构造（心跳 socketType=0 / 上报 socketType=2 / 结果回执 socketType=3）。
+     *
+     * @param replayEventId 幂等重放形态（spec §5.4.3 + 冻结入站规则 §5.2.4）：指定 =
+     *   **同 eventId 重建帧**（载荷逐值一致 → 同 payloadDigest；新 nonce/ts/seq +
+     *   重算 HMAC）。原样重发旧帧文本会被网关 ts±30s（4403）/nonce 5min（4402）/
+     *   seq 严格递增（4405+903）拒收；python 规范客户端重放即此形态
+     *   （test/e2e/run_cross_e2e.py send_exec_result）。null = 新帧新 eventId。
+     */
     fun build(
         socketType: Int,
         commandId: String = "",
         apiSend: Int? = null,
         list: List<WeworkMessageBean> = emptyList(),
         encrypt: Boolean = false,
+        replayEventId: String? = null,
     ): BuiltFrame {
-        val eventId = UUID.randomUUID().toString()
+        val eventId = replayEventId ?: UUID.randomUUID().toString()
         val seq = sequencer.next()
         val ts = clock()
         val nonce = newNonce()

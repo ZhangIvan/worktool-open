@@ -21,6 +21,12 @@ import (
 	_ "modernc.org/sqlite" // driver: sqlite（纯 Go，免 CGO）
 )
 
+// ReservedAdminScopeRobotID 为 api_tokens.robot_id 的保留值（admin scope 编码，
+// server/internal/admin）。跨包共享单一常量：签发侧（api.IssueOpenAPIToken）与
+// 鉴权侧（api.authenticate）都以它硬拒保留名，防止为名叫 admin 的 v1 robot 签发
+// 令牌而静默铸出第二个 admin-scope 令牌（CR ADM-1）。W-M5 RBAC 落 scope 列后收编。
+const ReservedAdminScopeRobotID = "admin"
+
 // Device 为设备注册行（v2 deviceId 主键；v1 兼容路径以 robot_id 桥接）。
 type Device struct {
 	DeviceID           string

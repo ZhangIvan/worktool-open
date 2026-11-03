@@ -130,6 +130,12 @@ func (l *openapiLimiter) allow(robotID string, now time.Time) bool {
 // IssueOpenAPIToken 为 robot 签发兼容面令牌（原始值仅此一次返回；admin 面随
 // T3.x RBAC 落地，本方法供运维联调与测试消费）。
 func (s *Server) IssueOpenAPIToken(ctx context.Context, robotID, tenant string) (string, error) {
+	// 保留名硬拒（CR ADM-1）：robot_id='admin' 编码 admin scope——若允许为名叫
+	// admin 的 v1 robot 签发兼容面令牌，将静默铸出第二个 admin-scope 令牌
+	//（持有者可打全部管理面端点）。
+	if robotID == sqlite.ReservedAdminScopeRobotID {
+		return "", fmt.Errorf("robot_id %q 为管理面保留名（admin scope），不得签发兼容面令牌", robotID)
+	}
 	if tenant == "" {
 		tenant = "default"
 	}
@@ -154,6 +160,14 @@ func (s *Server) RevokeOpenAPIToken(ctx context.Context, rawToken string) error 
 // authenticate 校验 Bearer token 并核对 robotId 寻址一致（旧面 robotId 即身份
 // 的缺陷在此修复：token 与路径 robotId 须同时匹配）。成功返回令牌行（含租户）。
 func (s *Server) authenticate(ctx context.Context, r *http.Request, robotID string) (sqlite.APIToken, *apiError) {
+	// 保留名硬拒（CR ADM-1）：对 robotId=admin 寻址恰好命中 admin 令牌的
+	// t.RobotID == robotID 校验（非「寻址不匹配无意义」）——admin 令牌由此可
+	// 经 resolveTarget（v1:admin 或 devices.robot_id='admin' 绑定）进入业务管线。
+	// 此处先于一切校验硬拒，admin scope 只能走 /api/v1/admin/* 管理面。
+	if robotID == sqlite.ReservedAdminScopeRobotID {
+		return sqlite.APIToken{}, &apiError{http.StatusForbidden, "ROBOT_MISMATCH",
+			"robotId=admin 为管理面保留名：admin 令牌不得用于 /openapi/v1 兼容面寻址"}
+	}
 	auth := r.Header.Get("Authorization")
 	raw, ok := strings.CutPrefix(auth, "Bearer ")
 	if !ok || strings.TrimSpace(raw) == "" {

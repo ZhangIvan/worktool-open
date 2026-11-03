@@ -5,6 +5,10 @@ import java.io.File
  * 包名 cn.worktool.open（ADR-04，docs/00 §ADR）。
  * Release 签名按 docs/ops/SIGNING.md §2 从环境变量注入（WORKTOOL_* 四项齐备才启用，
  * 缺失则产 unsigned APK / CI 跳过 assembleRelease）——密钥文件绝不入库（G13）。
+ * C-7 修复（docs/04 §8，W-M4）：WORKTOOL_STORE_FILE 解析规则 = 绝对路径按原样；
+ * 相对路径按【仓库根】（android/ 的上一级）解析——SIGNING.md §2 的
+ * `secrets/worktool-open.jks` 即仓库根相对形态。旧实现 rootProject.file() 相对
+ * android/ 解析成 android/secrets/（不存在）→ 签名构建必然失败。
  */
 plugins {
     alias(libs.plugins.android.application)
@@ -31,9 +35,21 @@ android {
     }
 
     if (hasReleaseSigning) {
+        // C-7：绝对路径按原样；相对路径按仓库根（android/ 上一级）解析。
+        // 文件不存在 = 响亮失败（旧实现会在配置/执行期报晦涩错误，且永远找不到
+        // android/secrets/ 下的文件——密钥实际在仓库根 secrets/ 或 CI 临时目录）。
+        val storeFileResolved: File = File(wtStoreFile!!).let {
+            if (it.isAbsolute) it else rootProject.projectDir.parentFile.resolve(it)
+        }
+        if (!storeFileResolved.isFile) {
+            throw GradleException(
+                "WORKTOOL_STORE_FILE 解析为 ${storeFileResolved.absolutePath} 但文件不存在" +
+                    "（C-7：绝对路径按原样，相对路径按仓库根解析；见 docs/ops/SIGNING.md §2）"
+            )
+        }
         signingConfigs {
             create("release") {
-                storeFile = rootProject.file(wtStoreFile!!)
+                storeFile = storeFileResolved
                 storePassword = wtStorePassword
                 keyAlias = wtKeyAlias
                 keyPassword = wtKeyPassword

@@ -1,0 +1,6 @@
+{
+  "type": 901,
+  "deviceToken": "not-hex-token",
+  "tokenVersion": 1,
+  "serverX25519PublicKey": "4e1d2b3c4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b2a3f4e5d6c7b8a9f0e1d2c"
+}

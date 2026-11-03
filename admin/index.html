@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>WorkTool-Open 管理台 v0.1</title>
+<style>
+  :root { --bg:#101418; --panel:#1a2027; --line:#2a323c; --fg:#dfe6ee; --dim:#8b98a5;
+          --acc:#4da3ff; --ok:#3fbf7f; --warn:#e0a93f; --err:#e06c5f; --mono:ui-monospace,Consolas,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between;
+           padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header h1 small { color:var(--dim); font-weight:400; margin-left:8px; }
+  #authbar { display:flex; gap:8px; align-items:center; }
+  #authbar input { width:280px; }
+  input, select, button { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:5px 10px; font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#08131f; font-weight:600; }
+  button.ok { background:transparent; border-color:var(--ok); color:var(--ok); }
+  button.no { background:transparent; border-color:var(--err); color:var(--err); }
+  main { max-width:1100px; margin:0 auto; padding:16px 20px 60px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:14px 16px; margin:16px 0; }
+  section h2 { font-size:14px; margin:0 0 10px; color:var(--acc); font-weight:600; }
+  section h2 .hint { color:var(--dim); font-weight:400; font-size:12px; margin-left:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; white-space:nowrap; }
+  td.mono, .mono { font-family:var(--mono); font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+  .pill.on { color:var(--ok); border-color:var(--ok); }
+  .pill.off { color:var(--dim); }
+  .pill.dry { color:var(--warn); border-color:var(--warn); }
+  .pill.L2 { color:var(--err); border-color:var(--err); }
+  .pill.L1 { color:var(--warn); border-color:var(--warn); }
+  .pill.L0 { color:var(--dim); }
+  .pill.st-succeeded { color:var(--ok); border-color:var(--ok); }
+  .pill.st-failed, .pill.st-execution_unknown { color:var(--err); border-color:var(--err); }
+  .pill.st-queued, .pill.st-dispatched, .pill.st-acked, .pill.st-running { color:var(--acc); border-color:var(--acc); }
+  #code-result { display:flex; gap:18px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  #code-big { font:700 34px/1 var(--mono); letter-spacing:8px; color:var(--ok);
+              background:#0d1117; border:1px dashed var(--ok); border-radius:8px; padding:12px 18px; }
+  .dim { color:var(--dim); }
+  .err-banner { background:#3a1512; border:1px solid var(--err); color:#ffb3aa;
+                border-radius:8px; padding:8px 12px; margin:10px 0; display:none; }
+  .row-actions { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  .ap-cell input { width:150px; }
+  #foot { color:var(--dim); font-size:12px; margin-top:24px; }
+  .empty { color:var(--dim); padding:8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WorkTool-Open 管理台 <small>v0.1 最小面 · Go 直接伺服 · 零构建链</small></h1>
+  <div id="authbar">
+    <input id="token" type="password" placeholder="管理面 Bearer Token" autocomplete="off">
+    <button id="save-token" class="primary">保存</button>
+    <button id="clear-token">清除</button>
+  </div>
+</header>
+
+<div class="err-banner" id="banner"></div>
+
+<main>
+  <section>
+    <h2>配对码签发 <span class="hint">POST /api/v1/admin/pairing-codes · 6 位数字 · TTL 10 分钟 · 单次有效（spec §5.1.1）</span></h2>
+    <div class="row-actions">
+      <button id="issue-code" class="primary">签发配对码</button>
+      <span class="dim" id="code-note">签发后把 6 位码填入 App 配对面；一次成功配对即作废。</span>
+    </div>
+    <div id="code-result" hidden>
+      <div id="code-big">000000</div>
+      <div>
+        <div>有效期至 <span id="code-exp" class="mono"></span></div>
+        <div id="code-countdown" class="dim mono"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>设备与在线状态 <span class="hint">GET /api/v1/admin/devices</span></h2>
+    <div class="row-actions">
+      <button id="refresh-devices">刷新</button>
+      <label><input type="checkbox" id="auto-devices"> 每 5s 自动刷新</label>
+      <span class="dim">robotId 为空 = 配对面未绑定 / 被重配对清空（W-M3R 运维注意），如实展示。</span>
+    </div>
+    <table>
+      <thead><tr><th>deviceId</th><th>robotId</th><th>名称</th><th>状态</th><th>tokenVer</th><th>epoch</th><th>配对时间</th><th>在线</th></tr></thead>
+      <tbody id="devices-body"><tr><td colspan="8" class="empty">尚未加载</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>指令审计流 <span class="hint">GET /api/v1/admin/commands · 「干跑」= FR-54 dryRun：绝不下发设备</span></h2>
+    <div class="row-actions">
+      <button id="refresh-commands">刷新</button>
+      <label>条数 <select id="cmd-limit"><option>50</option><option>100</option><option>200</option><option>500</option></select></label>
+      <label>状态 <select id="cmd-state">
+        <option value="">全部</option><option>queued</option><option>dispatched</option><option>acked</option>
+        <option>running</option><option>succeeded</option><option>failed</option><option>cancelled</option>
+        <option>execution_unknown</option>
+      </select></label>
+      <label><input type="checkbox" id="auto-commands"> 每 5s 自动刷新</label>
+    </div>
+    <table>
+      <thead><tr><th>时间</th><th>commandId</th><th>目标</th><th>类型</th><th>状态</th><th>风险</th><th>干跑</th></tr></thead>
+      <tbody id="commands-body"><tr><td colspan="7" class="empty">尚未加载</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>L2 审批 <span class="hint">GET /api/v1/admin/approvals + POST …/decision · approver 必须独立（自批拒绝，FR-53）</span></h2>
+    <div class="row-actions">
+      <button id="refresh-approvals">刷新</button>
+      <label>决议人 <input id="approver" placeholder="approver（≠申请人）" size="16"></label>
+      <label>理由 <input id="ap-reason" placeholder="决议理由（可选）" size="24"></label>
+      <span class="dim">决议人名会记住在本浏览器（localStorage）。</span>
+    </div>
+    <table>
+      <thead><tr><th>approvalId</th><th>申请人</th><th>目标</th><th>类型</th><th>理由</th><th>登记时间</th><th>决议</th></tr></thead>
+      <tbody id="approvals-body"><tr><td colspan="7" class="empty">尚未加载</td></tr></tbody>
+    </table>
+  </section>
+
+  <div id="foot">
+    数据全部来自本服务（无第三方资源）· 指令正文不入本面（审计流仅元数据）·
+    管理面令牌仅存 SHA-256 hash · TLS 部署下使用（SR-01/09）。
+  </div>
+</main>
+
+<script>
+"use strict";
+// —— 令牌管理：localStorage 持久；支持 #token= 深链吸收（吸收后立即从地址栏抹除，
+//    防止随链接二次泄露；仍不建议分享带 token 的 URL）。
+var TOKEN_KEY = "wt_admin_token", APPROVER_KEY = "wt_admin_approver";
+var token = localStorage.getItem(TOKEN_KEY) || "";
+(function absorbHash() {
+  var m = location.hash.match(/^#token=(.+)$/);
+  if (m) {
+    token = decodeURIComponent(m[1]);
+    localStorage.setItem(TOKEN_KEY, token);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+})();
+var $ = function (id) { return document.getElementById(id); };
+function banner(msg) {
+  var b = $("banner");
+  b.textContent = msg; b.style.display = msg ? "block" : "none";
+}
+function fmtMs(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toISOString().replace("T", " ").replace(".000Z", "Z");
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
+// api()：统一 Bearer 鉴权 + 401 统一提示。
+function api(method, path, body) {
+  var opt = { method: method, headers: { "Authorization": "Bearer " + token } };
+  if (body !== undefined) {
+    opt.headers["Content-Type"] = "application/json";
+    opt.body = JSON.stringify(body);
+  }
+  return fetch(path, opt).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (j) {
+      if (r.status === 401) { banner("鉴权失败（401）：请检查管理面 Token 后点「保存」。"); throw new Error("401"); }
+      if (!r.ok) { banner("请求失败（" + r.status + "）：" + (j.message || r.statusText)); throw new Error(String(r.status)); }
+      banner("");
+      return j;
+    });
+  });
+}
+
+// —— 配对码 ——
+var codeTimer = null;
+$("issue-code").onclick = function () {
+  api("POST", "/api/v1/admin/pairing-codes", {}).then(function (j) {
+    $("code-result").hidden = false;
+    $("code-big").textContent = j.pairingCode;
+    $("code-exp").textContent = fmtMs(j.expiresAt);
+    var deadline = j.expiresAt;
+    if (codeTimer) clearInterval(codeTimer);
+    codeTimer = setInterval(function () {
+      var left = Math.floor((deadline - Date.now()) / 1000);
+      $("code-countdown").textContent = left > 0
+        ? "剩余 " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
+        : "已过期（未使用即作废）";
+      if (left <= 0) clearInterval(codeTimer);
+    }, 500);
+  }).catch(function () {});
+};
+
+// —— 设备列表 ——
+function loadDevices() {
+  api("GET", "/api/v1/admin/devices").then(function (j) {
+    var rows = (j.devices || []).map(function (d) {
+      return "<tr><td class='mono'>" + esc(d.deviceId) + "</td>" +
+        "<td class='mono'>" + esc(d.robotId || "—") + "</td>" +
+        "<td>" + esc(d.deviceName || "—") + "</td>" +
+        "<td>" + esc(d.status) + "</td>" +
+        "<td>" + d.tokenVersion + "</td><td>" + d.epoch + "</td>" +
+        "<td class='mono'>" + fmtMs(d.pairedAtMs) + "</td>" +
+        "<td><span class='pill " + (d.online ? "on" : "off") + "'>" + (d.online ? "在线" : "离线") + "</span></td></tr>";
+    });
+    $("devices-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>无已配对设备</td></tr>";
+  }).catch(function () {});
+}
+
+// —— 指令审计流 ——
+function loadCommands() {
+  var q = "?limit=" + $("cmd-limit").value;
+  if ($("cmd-state").value) q += "&state=" + encodeURIComponent($("cmd-state").value);
+  api("GET", "/api/v1/admin/commands" + q).then(function (j) {
+    var rows = (j.commands || []).map(function (c) {
+      return "<tr><td class='mono'>" + fmtMs(c.createdAtMs) + "</td>" +
+        "<td class='mono'>" + esc(c.commandId.slice(0, 13)) + "…</td>" +
+        "<td class='mono'>" + esc(c.target) + "</td>" +
+        "<td>" + c.type + "</td>" +
+        "<td><span class='pill st-" + esc(c.state) + "'>" + esc(c.state) + "</span></td>" +
+        "<td><span class='pill " + esc(c.riskClass) + "'>" + esc(c.riskClass) + "</span></td>" +
+        "<td>" + (c.dryRun ? "<span class='pill dry'>干跑</span>" : "<span class='dim'>—</span>") + "</td></tr>";
+    });
+    $("commands-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>无指令记录</td></tr>";
+  }).catch(function () {});
+}
+
+// —— 审批 ——
+function decide(id, decision) {
+  var approver = $("approver").value.trim();
+  if (!approver) { banner("请先填写决议人（approver）；与申请人相同会被自批拒绝。"); return; }
+  api("POST", "/api/v1/admin/approvals/" + encodeURIComponent(id) + "/decision", {
+    approver: approver, decision: decision, reason: $("ap-reason").value.trim()
+  }).then(function () {
+    $("ap-reason").value = "";
+    loadApprovals();
+  }).catch(function () {});
+}
+function loadApprovals() {
+  api("GET", "/api/v1/admin/approvals?status=pending").then(function (j) {
+    var rows = (j.approvals || []).map(function (a) {
+      return "<tr><td class='mono'>" + esc(a.approvalId.slice(0, 13)) + "…</td>" +
+        "<td>" + esc(a.actor) + "</td>" +
+        "<td class='mono'>" + esc(a.target) + "</td>" +
+        "<td>" + a.type + (a.recurring ? "（常设）" : "") + "</td>" +
+        "<td>" + esc(a.reason || "—") + "</td>" +
+        "<td class='mono'>" + fmtMs(a.createdAtMs) + "</td>" +
+        "<td class='ap-cell'><button class='ok' data-approve='" + esc(a.approvalId) + "'>通过</button> " +
+        "<button class='no' data-reject='" + esc(a.approvalId) + "'>拒绝</button></td></tr>";
+    });
+    $("approvals-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>无待决议审批</td></tr>";
+    Array.prototype.forEach.call(document.querySelectorAll("[data-approve]"), function (b) {
+      b.onclick = function () { decide(b.getAttribute("data-approve"), "approve"); };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-reject]"), function (b) {
+      b.onclick = function () { decide(b.getAttribute("data-reject"), "reject"); };
+    });
+  }).catch(function () {});
+}
+
+// —— 事件与自动刷新 ——
+$("save-token").onclick = function () {
+  token = $("token").value.trim();
+  localStorage.setItem(TOKEN_KEY, token);
+  loadDevices(); loadCommands(); loadApprovals();
+};
+$("clear-token").onclick = function () {
+  token = ""; localStorage.removeItem(TOKEN_KEY); $("token").value = "";
+};
+$("token").value = token;
+$("approver").value = localStorage.getItem(APPROVER_KEY) || "";
+$("approver").addEventListener("change", function () {
+  localStorage.setItem(APPROVER_KEY, $("approver").value.trim());
+});
+$("refresh-devices").onclick = loadDevices;
+$("refresh-commands").onclick = loadCommands;
+$("refresh-approvals").onclick = loadApprovals;
+$("cmd-limit").onchange = loadCommands;
+$("cmd-state").onchange = loadCommands;
+function bindAuto(boxId, fn) {
+  var h = null;
+  $(boxId).addEventListener("change", function () {
+    if (h) { clearInterval(h); h = null; }
+    if ($(boxId).checked) { fn(); h = setInterval(fn, 5000); }
+  });
+}
+bindAuto("auto-devices", loadDevices);
+bindAuto("auto-commands", loadCommands);
+if (token) { loadDevices(); loadCommands(); loadApprovals(); }
+</script>
+</body>
+</html>

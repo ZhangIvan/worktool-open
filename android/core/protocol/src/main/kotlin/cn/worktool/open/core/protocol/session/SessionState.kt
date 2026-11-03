@@ -38,9 +38,15 @@ class SessionSequencer {
         else -> Verdict.Gap(seq, lastReceived + 1)
     }
 
-    /** 重连后新连接 seq 重新从 1 起（spec §5.4.2：重连不重置持久确认语义，仅计数复位）。 */
-    fun resetForReconnect() {
-        lastReceived = 0
+    /**
+     * 重连后计数复位（spec §5.4.2 v1.2.0 按方向澄清）：
+     * - 设备→服务端方向（服务端侧计数器）：恒从 1 起（hello seq 恒 1）→ seed=0；
+     * - 服务端→设备方向（端侧计数器）：以持久确认点 lastReceivedSeq 预置
+     *   （期望首帧 = lastReceivedSeq+1，即 hello_ack.seq，服务端出向跨连接连续）。
+     */
+    fun resetForReconnect(seed: Long = 0L) {
+        require(seed >= 0) { "seq 预置须 ≥0" }
+        lastReceived = seed
     }
 
     fun lastReceived(): Long = lastReceived

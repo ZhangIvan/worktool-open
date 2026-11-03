@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -579,7 +580,10 @@ func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		frame, meta, err := s.buildSignedFrame(h, wire.SocketMessageList, json.RawMessage(`[`+cmd.Payload+`]`), cmd.CommandID)
+		// 下发载荷注入 epoch（spec §5.7.2 v1.2.0 冻结：端侧 InboundCommandGate
+		// 拒旧水位的线缆输入；载荷 additionalProperties:true 容纳该字段）
+		list := json.RawMessage(`[` + string(withEpoch(cmd.Payload, epoch)) + `]`)
+		frame, meta, err := s.buildSignedFrame(h, wire.SocketMessageList, list, cmd.CommandID)
 		if err != nil {
 			return n, err
 		}
@@ -592,6 +596,21 @@ func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
 		n++
 	}
 	return n, nil
+}
+
+// withEpoch 把 dispatch 载荷单元（JSON 对象）注入 "epoch": <n>（已存在则覆盖为本次分配值）。
+// 载荷非对象（畸形）时原样返回——后续 schema/门禁按缺 epoch 处理，fail-closed。
+func withEpoch(payload string, epoch int64) []byte {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &obj); err != nil || obj == nil {
+		return []byte(payload)
+	}
+	obj["epoch"] = json.RawMessage(strconv.FormatInt(epoch, 10))
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return []byte(payload)
+	}
+	return out
 }
 
 func (s *v2Session) closeLocal() {

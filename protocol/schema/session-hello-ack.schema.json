@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:worktool-open:protocol:session-hello-ack:1.0.0",
+  "title": "WorkTool-Open v2 会话 hello_ack（WS 第二帧，服务端→设备）",
+  "description": "服务端对 hello 的应答（protocol/spec.md §5.4.1/§5.7）。T3.4 冻结：以 Go 网关实际产出字节为基准（fixtures/session-hello-ack.go-actual.json，2026-11-03 本地实服务采集）三方对齐（Go 产 / python 收并验签 / Kotlin 验）。独立控制帧形态：不承载于 v1/v2 信封（无 socketType/messageId 字段，W-M3R 拒收根因即此形态此前未冻结）。语义不变式（实现必须校验）：serverTime == meta.ts；resumeFromSeq == meta.seq == hello.lastReceivedSeq + 1（服务端→设备 seq 跨连接自持久确认点连续，spec §5.4.2）。",
+  "type": "object",
+  "required": ["type", "serverTime", "resumeFromSeq", "heartbeatIntervalSeconds", "sessionTimeoutSeconds", "meta"],
+  "properties": {
+    "type": {"const": "hello_ack"},
+    "serverTime": {"type": "integer", "minimum": 0, "description": "服务端当前 Unix 毫秒（== meta.ts，会话时钟参考）"},
+    "resumeFromSeq": {"type": "integer", "minimum": 1, "description": "服务端出向补发起点 = 本帧 meta.seq = hello.lastReceivedSeq + 1；端侧接收计数器以此预置"},
+    "heartbeatIntervalSeconds": {"const": 15, "description": "spec §3 冻结值（与 pair-response 一致）"},
+    "sessionTimeoutSeconds": {"const": 45, "description": "spec §3 冻结值（与 pair-response 一致）"},
+    "meta": {
+      "type": "object",
+      "required": ["ver", "ts", "nonce", "hmac", "seq", "eventId", "commandId", "tokenVersion"],
+      "properties": {
+        "ver": {"const": 2},
+        "ts": {"type": "integer", "minimum": 0},
+        "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "hmac": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "hello_ack 为空载荷帧：payloadDigest = SHA-256(空字节串)，commandId 输入为空串（spec §5.2.2）"},
+        "seq": {"type": "integer", "minimum": 1, "description": "== resumeFromSeq（服务端出向本连接首帧，自持久确认点 +1）"},
+        "eventId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "commandId": {"const": ""},
+        "tokenVersion": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -143,15 +143,23 @@ class FixtureSuiteTest {
     @Test
     fun `夹具清单与冻结清单一致`() {
         val names = FixtureFiles.allFixtureNames()
+        // T3.4（spec v1.2.0 变更记录）新增控制帧夹具：session-hello-ack.go-actual +
+        // control-payload.901~904 五件（正例）/ 五件反例
         val expected = setOf(
             "command-envelope.encrypted.json",
             "command-envelope.exec-result.json",
             "command-envelope.heartbeat.json",
             "command-envelope.plain.json",
+            "control-payload.901-rotate.json",
+            "control-payload.902-revoked.json",
+            "control-payload.903-resync.json",
+            "control-payload.904-replay.json",
+            "control-payload.904-request.json",
             "exec-callback.success.json",
             "hmac-vector.json",
             "pair-request.valid.json",
             "pair-response.valid.json",
+            "session-hello-ack.go-actual.json",
             "session-hello.valid.json",
             "wire-v1-envelope.command-203.json",
             "wire-v1-envelope.heartbeat.json",
@@ -164,7 +172,12 @@ class FixtureSuiteTest {
             setOf(
                 "command-envelope.encrypt-mismatch.json",
                 "command-envelope.missing-hmac.json",
+                "control-payload.901-bad-token.json",
+                "control-payload.903-extra-field.json",
+                "control-payload.904-empty.json",
                 "pair-request.invalid-code.json",
+                "session-hello-ack.bad-frozen.json",
+                "session-hello-ack.envelope-wrapped.json",
             ),
             negativeNames,
         )

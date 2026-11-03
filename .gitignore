@@ -24,6 +24,8 @@ secrets/
 *.pem
 *.p12
 *.p8
+# compose 部署的 TLS 证书/私钥挂载位（infra/compose.yaml）；私钥绝不入库
+infra/certs/
 
 # 杂项
 *.log

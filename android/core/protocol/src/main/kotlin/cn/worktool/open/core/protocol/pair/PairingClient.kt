@@ -4,6 +4,7 @@
 package cn.worktool.open.core.protocol.pair
 
 import cn.worktool.open.core.protocol.crypto.Ed25519
+import cn.worktool.open.core.protocol.crypto.Ed25519Keys
 import cn.worktool.open.core.protocol.transport.EndpointPolicy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -63,12 +64,38 @@ class PairingClient(
     /**
      * 凭据重协商（离线错过轮换后 hello 4404 的恢复路径，spec §5.5.1）。
      * 签名串 = `deviceId|ts|nonce`（Ed25519，64 字节 hex）。
+     *
+     * JCA 路径重载（API 33+ / 宿主 JVM）；API 24~32 设备用
+     * [renegotiate(deviceId, signingKey: Ed25519Keys.SigningKey)][renegotiate]
+     * 双路径重载（T2.6）。
      */
     fun renegotiate(deviceId: String, signingKey: PrivateKey): PairResponse {
         val ts = clock()
-        val nonceBytes = ByteArray(16).also { random.nextBytes(it) }
-        val nonce = cn.worktool.open.core.protocol.crypto.Hex.encode(nonceBytes)
+        val nonce = newNonce()
         val signature = Ed25519.sign(signingKey, "$deviceId|$ts|$nonce".toByteArray(Charsets.UTF_8))
+        return postRenegotiate(deviceId, ts, nonce, signature)
+    }
+
+    /**
+     * 凭据重协商·双路径重载（T2.6）：签名实现随 [Ed25519Keys.SigningKey.origin]
+     * 路由（设备 JCA / 纯 JVM 回退），两路径行为等价（RFC 8032 官方向量 + 交叉
+     * 验签互认，`Ed25519T26DualPathTest`）。EXTERNAL_PUBLIC_ONLY（lab 裁决 B
+     * 注入公钥）不可签名 → [require] 响亮失败（该场景重协商 NOT_RUN）。
+     */
+    fun renegotiate(deviceId: String, signingKey: Ed25519Keys.SigningKey): PairResponse {
+        require(signingKey.signCapable) { "签名密钥不可签名（origin=${signingKey.origin}）" }
+        val ts = clock()
+        val nonce = newNonce()
+        val signature = Ed25519Keys.sign(signingKey, "$deviceId|$ts|$nonce".toByteArray(Charsets.UTF_8))
+        return postRenegotiate(deviceId, ts, nonce, signature)
+    }
+
+    private fun newNonce(): String {
+        val nonceBytes = ByteArray(16).also { random.nextBytes(it) }
+        return cn.worktool.open.core.protocol.crypto.Hex.encode(nonceBytes)
+    }
+
+    private fun postRenegotiate(deviceId: String, ts: Long, nonce: String, signature: ByteArray): PairResponse {
         val body = buildJsonObject {
             put("deviceId", deviceId)
             put("ts", ts)

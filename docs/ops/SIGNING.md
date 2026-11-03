@@ -18,14 +18,24 @@
 
 ## 2. 日常使用
 
+- **路径解析规则（C-7 修复，W-M4）**：`WORKTOOL_STORE_FILE` 为绝对路径时按原样使用；
+  为相对路径时按**仓库根**（`android/` 的上一级）解析。文件不存在时 Gradle 配置期
+  响亮失败（不再出现旧实现"相对 `android/` 解析成 `android/secrets/` 永远找不到"
+  的缺陷，docs/04 §8 C-7）。
 - 本地构建：通过 Gradle 环境变量注入，禁止写进任何受版本控制的文件：
   ```bash
-  export WORKTOOL_STORE_FILE=secrets/worktool-open.jks
+  export WORKTOOL_STORE_FILE=secrets/worktool-open.jks     # 仓库根相对（或绝对路径）
   export WORKTOOL_STORE_PASSWORD=$(cat secrets/keystore-pass.txt)
   export WORKTOOL_KEY_ALIAS=worktool-open
   export WORKTOOL_KEY_PASSWORD=$(cat secrets/keystore-pass.txt)
   ```
-- CI 发布签名（后续）：口令放 GitHub Actions Secrets（仅 `zcode/*` 触发的 release 工作流），密钥文件按需上传为加密 secret 或仅在 S1 构建机本地签名后上传产物。
+- **CI 发布签名（C-7 落地形态）**：GitHub Actions Secrets 配置四项——
+  `WORKTOOL_KEYSTORE_B64`（keystore 文件 base64：`base64 -w0 secrets/worktool-open.jks`）、
+  `WORKTOOL_STORE_PASSWORD`、`WORKTOOL_KEY_ALIAS`、`WORKTOOL_KEY_PASSWORD`。
+  android.yml 的"签名密钥落盘"步骤把 B64 解码到 `$RUNNER_TEMP/worktool-open.jks`
+  并以绝对路径写入 `WORKTOOL_STORE_FILE`（GITHUB_ENV）；文件只存在于当轮 runner
+  临时目录，不入库、不回显日志、不上传 artifact，job 结束随 runner 销毁。
+  四项任一缺失则自动跳过 `assembleRelease`（debug 签名先行）。
 - 验签：`keytool -printcert -jarfile app.apk` 应与 `docs/ops/CERT-FINGERPRINT.txt` 一致；v2/v3 签名方案由 AGP 默认启用。
 
 ## 3. 备份与保管
