@@ -63,6 +63,7 @@ const (
 	outboxKindEventCallback = "event_callback" // 101~105 被动事件
 	outboxKindQueryResult   = "query_result"   // 511/512/513/515 查询结果推送
 	outboxKindImageCallback = "image_callback" // 图片 fileBase64 回调
+	outboxKindMessagePush   = "message_push"   // type=11 文本消息推送（T3.6 K4）
 )
 
 // settingsKeyEventCallbacks 为事件回调开关 KV 键（admin_settings 表单一事实源；
@@ -355,6 +356,118 @@ func (s *Server) HandleImageMessage(ctx context.Context, target string, msg Devi
 		"textType": 2, "fileBase64": msg.FileBase64,
 	}
 	return s.enqueueEventCallback(ctx, outboxKindImageCallback, target, target, body)
+}
+
+// ---- ③b 文本消息推送（type=11 spoken/rawSpoken；T3.6 K4） ----
+
+// HandleTextMessagePush 处理 receiveMessageList 项的文本消息推送（docs/15 破坏级
+// #4：QA 面核心——文本消息收不到）。公开入口，供网关车道在
+// gateway/v2.go TypeReceiveMessageList 分支旁路一行接线（车道边界登记，同 T3.5
+// HandleEventFrameItems 先例；本文件不动 gateway 包）。
+//
+// 入向宽容（设备帧 item 直接携带消息字段；spoken/rawSpoken/groupRemark 缺省空、
+// atMe 字符串/布尔双形态归一）；出向 body 严格 doc-861677 全集（spoken/rawSpoken/
+// receivedName/groupName/groupRemark/roomType(1..4)/atMe("true"/"false" 字符串)/
+// textType(0~18)，messageId 设备帧携带时透传）。
+//
+// 分流：textType=2 或携 fileBase64 → 复用既有 HandleImageMessage（pushImage
+// 独立门默认关）；其余文本族走本入口（pushEventCallback 总门）。隐私口径
+// （§6.1 对冲）：只外推不落消息历史库；outbox 行持久 body 与 image_callback
+// （fileBase64）先例同型，审计仍仅元数据（enqueueEventCallback 审计不含正文）。
+//
+// 返回 enqueued=true 表示已旁路 enqueue（outbox 行 kind=message_push，CommandID=
+// 管线目标键，callbackURLFor 路由 per-robot type=11 绑定）；false=非文本消息/
+// 开关关/载荷不合法（后者落审计 kind=event_callback_invalid，不撕裂调用方管线）。
+func (s *Server) HandleTextMessagePush(ctx context.Context, target string, item json.RawMessage) (bool, error) {
+	var raw struct {
+		Spoken       string          `json:"spoken"`
+		RawSpoken    string          `json:"rawSpoken"`
+		ReceivedName string          `json:"receivedName"`
+		GroupName    string          `json:"groupName"`
+		GroupRemark  string          `json:"groupRemark"`
+		RoomType     *int            `json:"roomType"`
+		AtMe         json.RawMessage `json:"atMe"` // "true"/"false" 字符串；布尔入向归一
+		TextType     *int            `json:"textType"`
+		FileBase64   string          `json:"fileBase64"`
+		MessageID    string          `json:"messageId"`
+	}
+	if err := json.Unmarshal(item, &raw); err != nil {
+		return false, nil // 非 JSON 对象：交回调用方既有路径
+	}
+	textType := 1 // 缺省按文本（doc textType=1）
+	if raw.TextType != nil {
+		textType = *raw.TextType
+	}
+	// 图片族复用既有图片回调门（pushImage 默认关；fileBase64 校验/上限同源）
+	if textType == 2 || raw.FileBase64 != "" {
+		img := DeviceImageMessage{
+			ReceivedName: raw.ReceivedName, GroupName: raw.GroupName, GroupRemark: raw.GroupRemark,
+			RoomType: derefInt(raw.RoomType, 1), AtMe: normalizeAtMe(raw.AtMe),
+			TextType: textType, FileBase64: raw.FileBase64,
+		}
+		return s.HandleImageMessage(ctx, target, img)
+	}
+	if textType < 0 || textType > 18 {
+		return false, s.auditInvalidEvent(ctx, target, textType,
+			fmt.Sprintf("textType=%d 不在枚举 0~18（doc-861677）", textType))
+	}
+	if raw.ReceivedName == "" {
+		return false, s.auditInvalidEvent(ctx, target, textType, "缺 receivedName（提问者名称）")
+	}
+	roomType := derefInt(raw.RoomType, 1)
+	if roomType < 1 || roomType > 4 {
+		return false, s.auditInvalidEvent(ctx, target, textType,
+			fmt.Sprintf("roomType=%d 不在四值枚举 1..4", roomType))
+	}
+	cfg := s.eventCallbackSettings(ctx)
+	if !cfg.PushEventCallback {
+		return false, nil // 总门关（上游缺省开；管理面可关）——不分发不审计
+	}
+	body := map[string]any{
+		"spoken": raw.Spoken, "rawSpoken": raw.RawSpoken,
+		"receivedName": raw.ReceivedName,
+		"groupName":    raw.GroupName, "groupRemark": raw.GroupRemark,
+		"roomType": roomType, "atMe": normalizeAtMe(raw.AtMe), "textType": textType,
+	}
+	if raw.MessageID != "" {
+		body["messageId"] = raw.MessageID // 保留字段（去重用；设备帧携带才透传）
+	}
+	return s.enqueueEventCallback(ctx, outboxKindMessagePush, target, target, body)
+}
+
+// derefInt 解引用可选 int（nil → def）。
+func derefInt(p *int, def int) int {
+	if p != nil {
+		return *p
+	}
+	return def
+}
+
+// normalizeAtMe 把 atMe 入向双形态（"true"/"false" 字符串契约值；布尔宽容）
+// 归一为契约字符串形态（doc-861677「勿按布尔解析」防坑登记——出向恒字符串）。
+func normalizeAtMe(raw json.RawMessage) string {
+	if len(raw) > 0 {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			switch s {
+			case "true", "false":
+				return s
+			case "1", "True":
+				return "true"
+			case "", "0", "False":
+				return "false"
+			}
+		} else {
+			var b bool
+			if json.Unmarshal(raw, &b) == nil {
+				if b {
+					return "true"
+				}
+				return "false"
+			}
+		}
+	}
+	return "false"
 }
 
 // ---- ④ 事件帧旁路分发（gateway 接线入口） ----

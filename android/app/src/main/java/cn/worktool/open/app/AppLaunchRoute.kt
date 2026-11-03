@@ -30,11 +30,23 @@ object AppLaunchRoute {
         MAIN,
     }
 
-    fun decide(paired: Boolean, accessibilityAuthorized: Boolean): Route = when {
-        !accessibilityAuthorized -> Route.SETUP_GUIDE
-        !paired -> Route.PAIRING
-        else -> Route.MAIN
-    }
+    fun decide(paired: Boolean, accessibilityAuthorized: Boolean): Route =
+        decide(paired, accessibilityAuthorized, skipAccessibilityGuide = false)
+
+    /**
+     * U7「不再询问」扩参（docs/16）：无障碍未授权**且**用户已记「不再询问」→
+     * 不再强制 [Route.SETUP_GUIDE]（降级按配对态走 PAIRING/MAIN）。
+     *
+     * 安全边界：skip 只影响**路由强制**——主界面状态卡的无障碍警示行（CR UI-02）
+     * 与指令执行失败提示不受影响（用户没开无障碍时指令必然失败，持续可见的警示
+     * 承接「误关后失明」风险）；卡内实时检测同理保留。
+     */
+    fun decide(paired: Boolean, accessibilityAuthorized: Boolean, skipAccessibilityGuide: Boolean): Route =
+        when {
+            !accessibilityAuthorized && !skipAccessibilityGuide -> Route.SETUP_GUIDE
+            !paired -> Route.PAIRING
+            else -> Route.MAIN
+        }
 
     /**
      * 引导页「完成」按钮去向（SP-3）：三卡全绿后——已配对 → 主界面（无需重复配对）；

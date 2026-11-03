@@ -73,6 +73,15 @@
                     android:text="@string/guide_card_a11y_off"
                     android:textColor="@color/status_offline"
                     android:textSize="12sp" />
+
+                <!-- U7 不再询问（docs/16）：只影响启动路由强制，不影响卡内检测与主界面警示 -->
+                <CheckBox
+                    android:id="@+id/guide_a11y_skip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/guide_skip_checkbox"
+                    android:textSize="12sp" />
             </LinearLayout>
 
             <Button
@@ -123,6 +132,14 @@
                     android:text="@string/guide_card_battery_desc"
                     android:textColor="@color/status_offline"
                     android:textSize="12sp" />
+
+                <CheckBox
+                    android:id="@+id/guide_battery_skip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/guide_skip_checkbox"
+                    android:textSize="12sp" />
             </LinearLayout>
 
             <Button
@@ -172,6 +189,14 @@
                     android:layout_marginTop="2dp"
                     android:text="@string/guide_card_miui_desc"
                     android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <CheckBox
+                    android:id="@+id/guide_miui_skip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/guide_skip_checkbox"
                     android:textSize="12sp" />
             </LinearLayout>
 

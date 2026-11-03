@@ -55,6 +55,70 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(K_LOG_REPORT, true)
         set(value) = prefs.edit().putBoolean(K_LOG_REPORT, value).apply()
 
+    /**
+     * U1 运行时段总开关（docs/16；默认关 = 不拦截）。开启后非时段内机器人休眠
+     * （PauseManager 联动，FR-52 同级安全语义：在线指令只入队不执行）。
+     */
+    var runtimeWindowEnabled: Boolean
+        get() = prefs.getBoolean(K_RUNTIME_WINDOW_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(K_RUNTIME_WINDOW_ENABLED, value).apply()
+
+    /** U1 运行时段起点（当日分钟数，默认 8:00=480；跨零点窗口支持）。 */
+    var runtimeWindowStartMinute: Int
+        get() = prefs.getInt(K_RUNTIME_WINDOW_START, 8 * 60)
+        set(value) = prefs.edit().putInt(K_RUNTIME_WINDOW_START, value).apply()
+
+    /** U1 运行时段终点（当日分钟数，默认 22:00=1320）。 */
+    var runtimeWindowEndMinute: Int
+        get() = prefs.getInt(K_RUNTIME_WINDOW_END, 22 * 60)
+        set(value) = prefs.edit().putInt(K_RUNTIME_WINDOW_END, value).apply()
+
+    /**
+     * U2 悬浮窗开关（FR-50 最小集：暂停/恢复两钮；默认关）。
+     * 开 = FloatControlService 常驻气泡（需 SYSTEM_ALERT_WINDOW 授权）。
+     */
+    var floatWindowEnabled: Boolean
+        get() = prefs.getBoolean(K_FLOAT_WINDOW, false)
+        set(value) = prefs.edit().putBoolean(K_FLOAT_WINDOW, value).apply()
+
+    /**
+     * U4 跳过过期指令开关（默认开，docs/16 U4；对齐 APK skipExpiredQueueCommand
+     * 默认语义）。关 = 过期指令照常执行（旧行为）。
+     */
+    var skipExpiredEnabled: Boolean
+        get() = prefs.getBoolean(K_SKIP_EXPIRED, true)
+        set(value) = prefs.edit().putBoolean(K_SKIP_EXPIRED, value).apply()
+
+    /** U4 过期判定 TTL 小时数（默认 2h；对齐 APK「过期指令小时数」默认值）。 */
+    var expiredTtlHours: Int
+        get() = prefs.getInt(K_EXPIRED_TTL_HOURS, 2)
+        set(value) = prefs.edit().putInt(K_EXPIRED_TTL_HOURS, value).apply()
+
+    /**
+     * 采纳项（docs/16 优化-采纳 #12）：执行失败重试次数（默认 0 = 保持引擎
+     * 「首错即停」语义；可配 0~5，对齐 APK customOperationRetryCount 可配面）。
+     */
+    var retryCount: Int
+        get() = prefs.getInt(K_RETRY_COUNT, 0)
+        set(value) = prefs.edit().putInt(K_RETRY_COUNT, value).apply()
+
+    /**
+     * U7 引导「不再询问」三卡各自记忆（docs/16；默认 false）。
+     * skip 只影响**启动路由强制**（AppLaunchRoute），不影响卡内实时检测与
+     * 主界面状态卡警示（防误关后失明）。
+     */
+    var guideSkipAccessibility: Boolean
+        get() = prefs.getBoolean(K_GUIDE_SKIP_A11Y, false)
+        set(value) = prefs.edit().putBoolean(K_GUIDE_SKIP_A11Y, value).apply()
+
+    var guideSkipBattery: Boolean
+        get() = prefs.getBoolean(K_GUIDE_SKIP_BATTERY, false)
+        set(value) = prefs.edit().putBoolean(K_GUIDE_SKIP_BATTERY, value).apply()
+
+    var guideSkipMiui: Boolean
+        get() = prefs.getBoolean(K_GUIDE_SKIP_MIUI, false)
+        set(value) = prefs.edit().putBoolean(K_GUIDE_SKIP_MIUI, value).apply()
+
     private companion object {
         const val PREFS = "worktool_app_settings"
         const val K_SERVER = "server_address"
@@ -62,5 +126,15 @@ class AppSettings(context: Context) {
         const val K_DRY_RUN = "dry_run_enabled"
         const val K_SUPPRESS_NOTICE = "suppress_notice_enabled"
         const val K_LOG_REPORT = "log_report_enabled"
+        const val K_RUNTIME_WINDOW_ENABLED = "runtime_window_enabled"
+        const val K_RUNTIME_WINDOW_START = "runtime_window_start_min"
+        const val K_RUNTIME_WINDOW_END = "runtime_window_end_min"
+        const val K_FLOAT_WINDOW = "float_window_enabled"
+        const val K_SKIP_EXPIRED = "skip_expired_enabled"
+        const val K_EXPIRED_TTL_HOURS = "expired_ttl_hours"
+        const val K_RETRY_COUNT = "retry_count"
+        const val K_GUIDE_SKIP_A11Y = "guide_skip_accessibility"
+        const val K_GUIDE_SKIP_BATTERY = "guide_skip_battery"
+        const val K_GUIDE_SKIP_MIUI = "guide_skip_miui"
     }
 }

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"cn.worktool.open/server/internal/api/compat"
 	"cn.worktool.open/server/internal/gateway"
 	"cn.worktool.open/server/internal/scheduler"
 	"cn.worktool.open/server/internal/statemachine"
@@ -142,7 +143,49 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/results", s.HandleOpenAPIHistoryResults)
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/callbacks", s.HandleOpenAPIHistoryCallbacks)
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/messages", s.HandleOpenAPIHistoryMessages)
+	// T3.6 apifox 兼容适配层（docs/15）：K1/K2/K6 提交面挂载 + K3/K5 回调面
+	// 能力装配（双面并存——既有 /openapi/v1 面零改动）。
+	compat.Mount(mux, s.compatDeps())
+	s.wireOutboxCompat()
 	return mux
+}
+
+// compatDeps 为兼容适配层（T3.6）构造最小依赖桥：鉴权/目标解析/per-robot 限流
+// 复用既有私有实现（compat 子包不反向依赖本包——避免 import cycle；错误经
+// compat.Err 映射，码族与 openapiHTTPCode 同源）。
+func (s *Server) compatDeps() compat.Deps {
+	return compat.Deps{
+		DB: s.DB, Pipeline: s.Pipeline, Now: s.Now, Log: s.Log,
+		RateLimitPerMinute: s.openapiCfg.RateLimitPerMinute,
+		RateWindow:         s.openapiCfg.RateWindow,
+		Authn: func(ctx context.Context, r *http.Request, robotID string) (string, *compat.Err) {
+			t, ae := s.authenticate(ctx, r, robotID)
+			if ae != nil {
+				return "", &compat.Err{Status: ae.Status, Code: openapiHTTPCode(ae), Message: ae.Message}
+			}
+			return t.Tenant, nil
+		},
+		ResolveTarget: func(ctx context.Context, robotID string) (string, *compat.Err) {
+			target, ae := s.resolveTarget(ctx, robotID)
+			if ae != nil {
+				return "", &compat.Err{Status: ae.Status, Code: openapiHTTPCode(ae), Message: ae.Message}
+			}
+			return target, nil
+		},
+		RobotRateAllow: func(robotID string, now time.Time) bool {
+			return s.openapiLimiter.allow(robotID, now) // 闭包动态取用（SetOpenAPIConfig 重建限流器后仍生效）
+		},
+		OpenAPIIntent: OpenAPIIntent,
+	}
+}
+
+// wireOutboxCompat 装配 K5 代回复管线引用（worker 已挂时注入；装配序约定 =
+// main 先 srv.Outbox = worker 再 NewServeMux——cmd/server/main.go 现序满足，
+// 测试直接构造 worker 时可显式 SetReplyPipeline）。
+func (s *Server) wireOutboxCompat() {
+	if s.Outbox != nil {
+		s.Outbox.SetReplyPipeline(s.Pipeline)
+	}
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

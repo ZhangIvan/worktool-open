@@ -58,6 +58,22 @@ object RobotStatusComputer {
             ageMillis < 3_600_000 -> "${ageMillis / 60_000}m 前"
             else -> "${ageMillis / 3_600_000}h 前"
         }
+
+    /**
+     * RTT 彩条分档（docs/16 优化-采纳 #8，对齐上游 Ping 彩条阈值）：
+     * <100ms 绿 / <999ms 黄 / 其余红；null = 无样本（灰）。
+     */
+    enum class RttBand { GREEN, YELLOW, RED, UNKNOWN }
+
+    const val RTT_GREEN_MS = 100L
+    const val RTT_YELLOW_MS = 999L
+
+    fun rttBand(rttMillis: Long?): RttBand = when {
+        rttMillis == null || rttMillis < 0 -> RttBand.UNKNOWN
+        rttMillis < RTT_GREEN_MS -> RttBand.GREEN
+        rttMillis < RTT_YELLOW_MS -> RttBand.YELLOW
+        else -> RttBand.RED
+    }
 }
 
 /**
@@ -78,6 +94,13 @@ class SessionStatusTracker {
         val connectedAtMillis: Long?,
         /** 最近一次断连时间戳；null = 未断过。 */
         val disconnectedAtMillis: Long?,
+        /**
+         * 最近一次「写出→收到」往返时延采样（毫秒；采纳项 #8 RTT 彩条数据源）；
+         * null = 尚无成对样本。观测口径如实登记：WS 无应用层 ping-pong 回显，
+         * 此值 = 最近一次出向帧（稳态=心跳）到下一个入向帧的间隔——**上界近似**
+         * （服务端心跳响应/事件推送才推进），只用于彩条分档不承诺精确 RTT。
+         */
+        val lastRttMillis: Long? = null,
     )
 
     private val lock = Any()
@@ -87,6 +110,8 @@ class SessionStatusTracker {
     private var lastInbound: Long? = null
     private var connectedAt: Long? = null
     private var disconnectedAt: Long? = null
+    private var lastSentAt: Long? = null
+    private var lastRtt: Long? = null
 
     fun onSessionStarted() = synchronized(lock) { started = true }
 
@@ -98,6 +123,7 @@ class SessionStatusTracker {
     fun onConnected(atMillis: Long) = synchronized(lock) {
         open = true
         connectedAt = atMillis
+        lastSentAt = null // 新连接：旧出向时间戳不作 RTT 配对
     }
 
     fun onDisconnected(atMillis: Long) = synchronized(lock) {
@@ -105,11 +131,21 @@ class SessionStatusTracker {
         disconnectedAt = atMillis
     }
 
-    fun onFrameSent(atMillis: Long) = synchronized(lock) { lastHeartbeat = atMillis }
+    fun onFrameSent(atMillis: Long) = synchronized(lock) {
+        lastHeartbeat = atMillis
+        if (lastSentAt == null) lastSentAt = atMillis // 只配对首个出向帧（多帧连发不重复计时）
+    }
 
-    fun onFrameReceived(atMillis: Long) = synchronized(lock) { lastInbound = atMillis }
+    fun onFrameReceived(atMillis: Long) = synchronized(lock) {
+        lastInbound = atMillis
+        val sent = lastSentAt
+        if (sent != null && atMillis >= sent) {
+            lastRtt = atMillis - sent
+            lastSentAt = null // 配对完成，等待下一出向帧
+        }
+    }
 
     fun snapshot(): Snapshot = synchronized(lock) {
-        Snapshot(started, open, lastHeartbeat, lastInbound, connectedAt, disconnectedAt)
+        Snapshot(started, open, lastHeartbeat, lastInbound, connectedAt, disconnectedAt, lastRtt)
     }
 }

@@ -88,7 +88,7 @@ class PauseManager(
 
     /** 审计事件（SR-12；payload 仅元数据，不含消息正文）。 */
     data class AuditEvent(
-        val type: String, // paused / resume_requested / resume_confirmed / resume_cancelled / command_deferred / execution_interrupted
+        val type: String, // paused / resume_requested / resume_confirmed / resume_cancelled / command_deferred / deferred_discarded / execution_interrupted
         val at: Long,
         val actor: String? = null,
         val reason: String? = null,
@@ -185,6 +185,25 @@ class PauseManager(
 
     /** 暂存指令快照（悬浮窗/控制台展示，FR-50/52 暂停态一致性）。 */
     fun deferred(): List<DeferredCommand> = synchronized(lock) { deferredCommands.toList() }
+
+    /**
+     * 丢弃全部暂存指令（docs/16 U3：待执行队列「清空」，FR-37 设备侧面）。
+     *
+     * - 返回被丢弃的指令清单（FIFO，交调用方逐条落 SKIPPED 回执/展示）；
+     * - 丢弃**不改变暂停态**（清空队列 ≠ 恢复执行，恢复仍走两步确认）；
+     * - 全量落审计（SR-12）：type=deferred_discarded，commandCount=丢弃条数，
+     *   reason 记调用方语义（如 "user-clear" / "runtime-window-expired"）。
+     * - 任意暂停态可调；RUNNING 态队列本应为空（返回空清单，幂等无害）。
+     */
+    fun discardDeferred(reason: String? = null, actor: String? = null, now: Long = clock()): List<DeferredCommand> =
+        synchronized(lock) {
+            val discarded = deferredCommands.toList()
+            deferredCommands.clear()
+            val e = AuditEvent("deferred_discarded", now, actor, reason, commandCount = discarded.size)
+            auditLog.add(e)
+            audit(e)
+            discarded
+        }
 
     /** 审计留痕快照（SR-12）。 */
     fun auditTrail(): List<AuditEvent> = synchronized(lock) { auditLog.toList() }

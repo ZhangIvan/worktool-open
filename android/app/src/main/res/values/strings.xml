@@ -141,4 +141,69 @@
     <string name="guide_card_miui_na">非 MIUI 设备，无需此设置 ✓</string>
     <string name="guide_done">完成，去配对</string>
     <string name="guide_done_to_main">完成，进入主界面</string>
+
+    <!-- ==================== docs/16 UI 交互对等（T4.9：U1~U7 + 采纳项） ==================== -->
+
+    <!-- U1 运行时段（防打扰） -->
+    <string name="main_window_sleeping">机器人休眠中（运行时段外），您可在设置页修改工作时段</string>
+    <string name="settings_window_title">运行时段（防打扰）</string>
+    <string name="settings_window_switch">启用运行时段</string>
+    <string name="settings_window_start">开始 %1$s</string>
+    <string name="settings_window_end">结束 %1$s</string>
+    <string name="settings_window_summary_on">已启用：%1$s–%2$s（跨零点窗口支持；时段外机器人休眠，在线指令只入队不执行）</string>
+    <string name="settings_window_summary_off">未启用（默认 8:00–22:00 备用）</string>
+
+    <!-- U2 悬浮窗（FR-50 最小集：暂停/恢复两钮） -->
+    <string name="settings_float_switch">悬浮窗控制（任意界面暂停/恢复）</string>
+    <string name="float_resume">恢复</string>
+    <string name="float_resume_confirm">确认恢复？</string>
+    <string name="float_paused_toast">主功能暂停~</string>
+    <string name="float_resumed_toast">主功能继续~</string>
+    <string name="float_resume_ask_toast">3 秒内再次点击确认恢复</string>
+    <string name="float_no_permission">缺少悬浮窗权限，请在设置中允许「显示在其他应用上层」</string>
+
+    <!-- U3 待执行队列视图 + 清空（FR-37 设备侧面） -->
+    <string name="main_cmd_seg_catalog">目录</string>
+    <string name="main_cmd_seg_queue">待执行</string>
+    <string name="main_queue_summary">设备侧待执行：%1$d 条（暂停期间只入队不执行，恢复执行时按序冲刷；服务端暂存队列请在服务端管理页清空）</string>
+    <string name="main_queue_item">%1$s · type=%2$d</string>
+    <string name="main_queue_clear">清空待执行队列</string>
+    <string name="main_queue_clear_title">清空待执行队列</string>
+    <string name="main_queue_clear_message">将丢弃全部 %1$d 条暂存指令（服务端可重发）。确定清空？</string>
+    <string name="main_queue_clear_confirm">清空</string>
+    <string name="main_queue_cleared_toast">待执行消息队列已清空！</string>
+
+    <!-- U4 跳过过期指令 -->
+    <string name="settings_skip_expired_switch">跳过过期指令（默认开）</string>
+    <string name="settings_ttl_button">过期阈值：%1$d 小时（超时指令记 SKIPPED 不执行）</string>
+    <string name="settings_ttl_title">过期阈值（小时）</string>
+
+    <!-- U6 企微版本检测（docs/05 兼容矩阵） -->
+    <string name="main_wecom_compatible">企微 %1$s · 兼容 ✓</string>
+    <string name="main_wecom_unverified">企微 %1$s · 矩阵内未验证（无用户确认基线）</string>
+    <string name="main_wecom_incompatible">企微 %1$s · 当前企微版本不在兼容范围，功能可能异常（兼容矩阵见 docs/05）</string>
+    <string name="main_wecom_not_installed">未检测到企业微信</string>
+    <string name="main_wecom_unknown">企微已安装，版本无法解析（%1$s）</string>
+
+    <!-- 采纳项 #8 RTT 彩条 -->
+    <string name="main_status_rtt">延迟：%1$d ms</string>
+    <!-- 采纳项 #14 离线重连文案 -->
+    <string name="main_status_reconnecting">机器人离线 · 重连中（第 %1$d 次）</string>
+    <!-- 采纳项 #11 停止会话（不用 System.exit） -->
+    <string name="settings_stop_session">停止会话</string>
+    <string name="session_stopped_toast">会话已停止（重新打开 App 或重启设备将按凭据自动恢复）</string>
+    <!-- 采纳项 #12 重试次数可配 -->
+    <string name="settings_retry_button">执行失败重试次数：%1$d（0 = 首错即停）</string>
+    <string name="settings_retry_title">执行失败重试次数</string>
+
+    <!-- U7 引导「不再询问」 -->
+    <string name="guide_skip_checkbox">不再询问</string>
+    <string name="guide_skip_note">已选「不再询问」：启动不再强制进本页（主界面状态卡仍会持续警示，不会失明）</string>
+
+    <!-- U5 配对页「测试连接」探针 -->
+    <string name="pair_probe_button">测试连接</string>
+    <string name="pair_probe_running">探测中…</string>
+    <string name="pair_probe_title">连接测试结果</string>
+    <string name="pair_probe_overall_ok">三层探测通过 ✓</string>
+    <string name="pair_probe_overall_fail">探测未通过（失败层：%1$s）</string>
 </resources>

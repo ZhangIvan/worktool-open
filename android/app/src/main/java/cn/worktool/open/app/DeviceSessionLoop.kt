@@ -98,6 +98,27 @@ class DeviceSessionLoop(
      * （server scheduler pipeline，FR-54）互不冲突——服务端干跑指令不会到达本门。
      */
     private val dryRunGate: (() -> Boolean)? = null,
+    /**
+     * 暂停拦截指令的入队观察口（docs/16 U1/U3）：执行器暂停门拦截的在线指令经此
+     * 上抛（commandId/type/接收时间），由 SessionRuntime 接 task-engine
+     * PauseManager.enqueue（FR-52 只入队不执行）——待执行队列视图（U3）与运行
+     * 时段休眠（U1）共用同一数据源。null = 不上报（历史行为）。
+     */
+    private val onDeferred: ((commandId: String, commandType: Int, receivedAtMillis: Long) -> Unit)? = null,
+    /**
+     * U4 过期跳过门（docs/16：TTL 积压门）：提供者返回 >0 毫秒 = 启用。指令接收
+     * 时间（dispatch 帧 meta.ts）距今超 TTL → 不下发执行器，直接回执 SKIPPED(过期)；
+     * 回放/重复投递同 commandId → journal 去重命中幂等回执（防重放旧指令复活）。
+     * 缺省恒 null = 不启用（历史行为）。
+     */
+    private val expiredTtlMillis: (() -> Long?)? = null,
+    /**
+     * 采纳项（docs/16 优化-采纳 #12）：执行失败重试次数提供者（AppSettings.retryCount
+     * → app 装配层策略注入；0/null = 引擎「首错即停」历史语义）。重试在 app 层
+     * 整单重跑（feature:executor CommandRunner 不动，计划归属表口径），每次重试
+     * 照常过暂停门（暂停优先于重试）。上限钳制 0~5。
+     */
+    private val retryCountProvider: (() -> Int)? = null,
 ) {
 
     private val codec = EnvelopeCodec()
@@ -115,9 +136,15 @@ class DeviceSessionLoop(
     /** 入向准入上下文（admit → gate.apply → execute 的传参桥，单线程会话回调内使用）。 */
     private var pendingBean: WeworkMessageBean? = null
     private var pendingEpoch: Long = 0L
+    private var pendingReceivedAt: Long = -1L
 
-    /** 入向命令门禁（journal 持久化先于副作用，E09 guard）。 */
-    private val gate = InboundCommandGate(journal) { command -> executeCommand(command.commandId, command.type) }
+    /** 入向命令门禁（journal 持久化先于副作用，E09 guard；U4 TTL 门注入）。 */
+    private val gate = InboundCommandGate(
+        store = journal,
+        effect = { command -> executeCommand(command.commandId, command.type) },
+        clock = clock,
+        expiredTtlMillis = { expiredTtlMillis?.invoke() },
+    )
 
     private val session: ProtocolClient.V2Session = ProtocolClient.V2Session(
         credentials = credentials,
@@ -205,7 +232,7 @@ class DeviceSessionLoop(
         }
     }
 
-    /** E09 门禁：持久化 + commandId 去重 + epoch 拒旧，先于副作用。 */
+    /** E09 门禁：持久化 + commandId 去重 + epoch 拒旧 + U4 TTL 过期跳过，先于副作用。 */
     private fun admitCommand(frame: V2Frame, bean: WeworkMessageBean) {
         val commandId = frame.meta.commandId
         if (commandId.isEmpty()) {
@@ -214,7 +241,15 @@ class DeviceSessionLoop(
         }
         pendingBean = bean
         pendingEpoch = epochOf(bean)
-        val decision = gate.apply(InboundCommandGate.InboundCommand(commandId, bean.type, pendingEpoch))
+        // U4 指令接收时间：**载荷 ts 优先**（数值 epoch 毫秒，服务端 flushQueued 对积压
+        // 指令重建签名帧时注入原创建时间的位置——server/gateway withEpoch 同一注入点）；
+        // 缺失时退化 frame.meta.ts。如实登记：FrameVerifier 冻结规则 ts±30s（4403），
+        // 线上帧的 meta.ts 恒新鲜 → 退化路径下 TTL 门不触发（等价关闭）；服务端后续
+        // 在积压载荷注入 ts 后本门即生效，端侧无需发版（契约联动点）。
+        pendingReceivedAt = payloadTsOf(bean).takeIf { it >= 0 } ?: frame.meta.ts
+        val decision = gate.apply(
+            InboundCommandGate.InboundCommand(commandId, bean.type, pendingEpoch, pendingReceivedAt),
+        )
         when (decision) {
             InboundCommandGate.Decision.Applied -> Unit
             InboundCommandGate.Decision.AlreadyApplied -> {
@@ -223,6 +258,19 @@ class DeviceSessionLoop(
             }
             is InboundCommandGate.Decision.RejectedOld ->
                 onEvent?.invoke("commandId=$commandId epoch=${decision.epoch} < 水位 ${decision.appliedEpoch} → 拒旧")
+            is InboundCommandGate.Decision.Expired -> {
+                // U4：过期积压门——不下发执行器，回执 SKIPPED(过期)；journal 已记录
+                // 去重（重复投递/回放 → AlreadyApplied 幂等回执，防旧指令复活）。
+                ledger(commandId, pendingEpoch, started = false, outcome = "skipped_expired")
+                reportResult(
+                    commandId, bean.type, EXEC_ERROR_SKIPPED_EXPIRED,
+                    "指令已过期跳过执行", null, clock() - pendingReceivedAt,
+                    success = false, skippedExpired = true,
+                )
+                onEvent?.invoke(
+                    "commandId=$commandId 指令已过期跳过执行（age=${decision.ageMillis}ms > TTL=${decision.ttlMillis}ms）",
+                )
+            }
         }
         pendingBean = null
     }
@@ -230,6 +278,10 @@ class DeviceSessionLoop(
     /** dispatch 载荷 epoch 字段（spec §5.7.2 v1.2.0 冻结；缺失按 0 = 不拒旧仅去重）。 */
     private fun epochOf(bean: WeworkMessageBean): Long =
         (bean.extras["epoch"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: 0L
+
+    /** dispatch 载荷 ts 字段（U4：指令原创建时间，epoch 毫秒；缺失 -1）。 */
+    private fun payloadTsOf(bean: WeworkMessageBean): Long =
+        (bean.extras["ts"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: -1L
 
     // ---- 真实执行 + RAW_CONFIRM（本类唯一副作用入口，经 gate 调用）----
 
@@ -268,13 +320,26 @@ class DeviceSessionLoop(
             )
             return
         }
-        val report = runner.execute(normalized.intent, registry)
         val target = normalized.intent.targetDescription
+        var report = runner.execute(normalized.intent, registry)
+        // 采纳项（docs/16 #12）：失败重试可配（app 装配层整单重跑；0 = 首错即停）。
+        // 重试不过暂停门捷径——每次重跑都经 CommandRunner 内置执行前/步间暂停门
+        // （暂停优先于重试；PAUSED 时 report.status 已非 FAILED，不进本循环）。
+        val maxRetries = retryCountProvider?.invoke()?.coerceIn(0, MAX_RETRY_CLAMP) ?: 0
+        var attempt = 0
+        while (report.status == ExecutionStatus.FAILED && attempt < maxRetries) {
+            attempt += 1
+            onEvent?.invoke("commandId=$commandId 执行失败（code=${report.errorCode}）→ 第 $attempt/$maxRetries 次重试")
+            report = runner.execute(normalized.intent, registry)
+        }
         when (report.status) {
             ExecutionStatus.PAUSED -> {
-                // FR-52：接管暂停——只入队语义归上层调度；不发终态回执（服务端经对账收敛）
+                // FR-52：接管暂停——只入队不执行；不发终态回执（服务端经对账收敛）。
+                // U1/U3：入队观察口上抛（SessionRuntime → PauseManager.enqueue，待执行
+                // 队列视图/运行时段休眠共用同一数据源）。
                 ledger(commandId, epoch, started = false, outcome = "")
-                onEvent?.invoke("commandId=$commandId 暂停拦截（${report.pausedBySource}）→ 不发终态回执")
+                onDeferred?.invoke(commandId, type, startedAt)
+                onEvent?.invoke("commandId=$commandId 暂停拦截（${report.pausedBySource}）→ 不发终态回执（已入待执行队列）")
             }
             ExecutionStatus.SUCCEEDED -> {
                 ledger(commandId, epoch, started = true, outcome = "success")
@@ -379,6 +444,7 @@ class DeviceSessionLoop(
         timeCostMillis: Long,
         success: Boolean,
         deviceDryRun: Boolean = false,
+        skippedExpired: Boolean = false,
     ) {
         val bean = WeworkMessageBean(
             type = commandType,
@@ -391,6 +457,7 @@ class DeviceSessionLoop(
             metaJson = buildJsonObject {
                 put("dispatchId", commandId)
                 if (deviceDryRun) put("deviceDryRun", true) // FR-54 端侧干跑审计标记
+                if (skippedExpired) put("skipped", "expired") // U4 过期跳过审计标记
             }.toString(),
         )
         session.sendExecResult(commandId, bean)
@@ -398,7 +465,20 @@ class DeviceSessionLoop(
         onEvent?.invoke("RAW_CONFIRM commandId=$commandId type=$commandType errorCode=$errorCode")
     }
 
+    /** 当前重连序号（采纳项「重连中(第N次)」文案；状态卡观测面透出）。 */
+    fun reconnectAttempts(): Int = session.reconnectAttempts()
+
     private companion object {
         val RUN_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+        /** 重试次数钳制上限（防误配大值长占执行线程）。 */
+        const val MAX_RETRY_CLAMP = 5
+
+        /**
+         * U4 SKIPPED(过期) 回执码（端侧扩展语义，10xxx 格式/权限族；与
+         * ExecutorErrorCodes 既有 101001~101006 并列、不冲突——常量在本类声明，
+         * feature:executor 零改动）。
+         */
+        const val EXEC_ERROR_SKIPPED_EXPIRED = 101007
     }
 }

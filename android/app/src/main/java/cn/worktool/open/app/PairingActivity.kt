@@ -4,6 +4,7 @@
 package cn.worktool.open.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import cn.worktool.open.core.protocol.crypto.X25519
 import cn.worktool.open.core.protocol.pair.PairingClient
 import cn.worktool.open.core.protocol.pair.PairingException
 import cn.worktool.open.core.protocol.pair.PairRequest
+import cn.worktool.open.core.protocol.transport.ConnectionProbe
 import java.util.Locale
 
 /**
@@ -74,6 +76,7 @@ class PairingActivity : Activity() {
         AppSettings(this).serverAddress?.let { addressInput.setText(it) }
 
         findViewById<Button>(R.id.pair_address_next).setOnClickListener { onAddressNext() }
+        findViewById<Button>(R.id.pair_probe_button).setOnClickListener { onProbeConnection() }
         pairButton.setOnClickListener { onPair() }
 
         // 无障碍检测卡（BP-3/BP-7：配对前必须可见可操作——实时状态 + 一键直达系统设置）。
@@ -147,6 +150,59 @@ class PairingActivity : Activity() {
         }
         pairingBaseUrl = normalized
         showStep(stepCode)
+    }
+
+    // ---- U5 测试连接（docs/16：配对前探针，失败不阻断下一步）----
+
+    private fun onProbeConnection() {
+        addressError.text = ""
+        val input = addressInput.text.toString()
+        val verdict = OnboardingForms.validateServerAddress(input)
+        if (verdict is OnboardingForms.ServerAddress.Invalid) {
+            addressError.text = addressErrorText(verdict.reasonCode)
+            return
+        }
+        val normalized = (verdict as OnboardingForms.ServerAddress.Valid).normalized
+        val probeButton = findViewById<Button>(R.id.pair_probe_button)
+        probeButton.isEnabled = false
+        probeButton.text = getString(R.string.pair_probe_running)
+        Thread {
+            // 三层探测在后台线程（socket/OkHttp 阻塞调用）；结果回主线程弹框
+            val result = ConnectionProbe().probe(normalized)
+            mainHandler.post {
+                probeButton.isEnabled = true
+                probeButton.text = getString(R.string.pair_probe_button)
+                showProbeResult(normalized, result)
+            }
+        }.start()
+    }
+
+    private fun showProbeResult(url: String, result: cn.worktool.open.core.protocol.transport.ConnectionProbe.ProbeResult) {
+        val tcp = result.tcpMs?.let { "✓ ${it}ms" } ?: "✗"
+        val tls = when (result.tlsOk) {
+            true -> "✓"
+            false -> "✗"
+            null -> "—（明文端点或未到达）"
+        }
+        val http = result.httpCode?.let { code -> "✓ $code${result.httpMs?.let { "（${it}ms）" } ?: ""}" } ?: "✗"
+        val body = buildString {
+            append("URL：").append(url).append('\n')
+            append("① TCP 连接　 ").append(tcp)
+            result.reason?.takeIf { result.failedLayer == "tcp" }?.let { append("　").append(it) }
+            append('\n')
+            append("② TLS 握手　 ").append(tls)
+            result.reason?.takeIf { result.failedLayer == "tls" }?.let { append("　").append(it) }
+            append('\n')
+            append("③ HTTP /healthz　 ").append(http)
+            result.reason?.takeIf { result.failedLayer == "http" }?.let { append("　").append(it) }
+        }
+        val title = if (result.allOk) getString(R.string.pair_probe_overall_ok)
+        else getString(R.string.pair_probe_overall_fail, result.failedLayer ?: "?")
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(body)
+            .setPositiveButton(R.string.main_dialog_ok, null)
+            .show()
     }
 
     // ---- 步骤 2：6 位配对码 → POST /api/v2/pair ----

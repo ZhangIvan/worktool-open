@@ -178,6 +178,13 @@ object ProtocolClient {
         fun start() = ws.start()
         fun stop() = ws.stop()
 
+        /**
+         * 当前重连序号透出（docs/16 采纳项「离线态重连文案」：状态卡显示
+         * 「重连中（第 N 次）」；0 = 已连上/从未重连）。经 DeviceSessionLoop →
+         * SessionRuntime → 主界面状态卡。
+         */
+        fun reconnectAttempts(): Int = ws.reconnectAttempts()
+
         /** 发送上报（socketType=2）——经 AtLeastOnce 队列（先落盘后发送）；eventId 由帧构造器分配。 */
         fun sendReport(vararg beans: WeworkMessageBean, encrypt: Boolean = false): Boolean {
             val built = builder.build(

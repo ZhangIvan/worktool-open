@@ -58,6 +58,36 @@
             android:textColor="@color/text_secondary"
             android:textSize="13sp" />
 
+        <!-- RTT 延迟彩条（docs/16 优化-采纳 #8）：<100ms 绿 / <999ms 黄 / 其余红；
+             数据源 SessionStatusTracker 出向→入向配对采样（上界近似，见该类注）。 -->
+        <TextView
+            android:id="@+id/main_status_rtt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/status_online"
+            android:textSize="13sp" />
+
+        <!-- 企微版本检测行（docs/16 U6）：绿=兼容基线 / 黄=未验证 / 红=不兼容 / 灰=未安装。 -->
+        <TextView
+            android:id="@+id/main_status_wecom"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+
+        <!-- 运行时段休眠行（docs/16 U1）：非时段内可见（非模态，不弹框打断执行）。 -->
+        <TextView
+            android:id="@+id/main_status_window"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/main_window_sleeping"
+            android:textColor="@color/status_offline"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
         <!-- 无障碍服务观测（CR UI-02）：服务未连接时可见并给系统设置入口；
              已连接时整块隐藏（默认 gone，由 MainActivity 按 tick 观测切换）。 -->
         <TextView
@@ -169,20 +199,82 @@
             </LinearLayout>
         </ScrollView>
 
-        <!-- 指令 tab：容器承接标签显隐，内层 ListView 承接适配器（id 供 MainActivity 绑定） -->
-        <FrameLayout
+        <!-- 指令 tab（docs/16 U3）：顶部分段「目录 / 待执行」——目录 = P0 指令列表；
+             待执行 = 暂停期间只入队不执行的指令（PauseManager.deferred）+ 清空按钮
+             （FR-37 设备侧面；服务端 queued 队列清空走服务端管理面，不在端上）。 -->
+        <LinearLayout
             android:id="@+id/main_tab_commands_content"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="4dp">
+
+                <Button
+                    android:id="@+id/main_cmd_seg_catalog"
+                    style="?android:attr/buttonBarButtonStyle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/main_cmd_seg_catalog" />
+
+                <Button
+                    android:id="@+id/main_cmd_seg_queue"
+                    style="?android:attr/buttonBarButtonStyle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/main_cmd_seg_queue" />
+            </LinearLayout>
 
             <ListView
                 android:id="@+id/main_command_list"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
                 android:divider="@color/outline"
                 android:dividerHeight="1dp"
                 android:padding="8dp" />
-        </FrameLayout>
+
+            <!-- 待执行段（默认 gone；分段切换显隐） -->
+            <LinearLayout
+                android:id="@+id/main_cmd_queue_content"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:padding="12dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/main_queue_summary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <ListView
+                    android:id="@+id/main_queue_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:divider="@color/outline"
+                    android:dividerHeight="1dp" />
+
+                <Button
+                    android:id="@+id/main_btn_clear_queue"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/main_queue_clear" />
+            </LinearLayout>
+        </LinearLayout>
 
         <!-- 设置 tab -->
         <ScrollView
@@ -244,6 +336,133 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
                 </LinearLayout>
+
+                <!-- 运行时段（docs/16 U1）：总开关 + 双 TimePicker（开始/结束）；
+                     非时段内机器人休眠（暂停联动，指令只入队不执行）。 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/settings_window_title"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_window_switch"
+                        android:textColor="@color/text_primary" />
+
+                    <Switch
+                        android:id="@+id/main_settings_window_switch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/main_btn_window_start"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_window_start" />
+
+                    <Button
+                        android:id="@+id/main_btn_window_end"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_window_end" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/main_settings_window_summary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <!-- 悬浮窗开关（docs/16 U2 / FR-50 最小集：暂停/恢复两钮）。 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_float_switch"
+                        android:textColor="@color/text_primary" />
+
+                    <Switch
+                        android:id="@+id/main_settings_float_switch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <!-- 跳过过期指令（docs/16 U4）：默认开，TTL 默认 2h（点行可调）。 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_skip_expired_switch"
+                        android:textColor="@color/text_primary" />
+
+                    <Switch
+                        android:id="@+id/main_settings_skip_expired_switch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/main_btn_ttl_hours"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/settings_ttl_button" />
+
+                <!-- 执行失败重试次数（docs/16 优化-采纳 #12，可配 0~5；默认 0=首错即停）。 -->
+                <Button
+                    android:id="@+id/main_btn_retry_count"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/settings_retry_button" />
+
+                <!-- 停止会话（docs/16 优化-采纳 #11：强停映射 SessionRuntime.stop，
+                     不用 System.exit；重新打开 App/开机自启会按凭据恢复会话）。 -->
+                <Button
+                    android:id="@+id/main_btn_stop_session"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/settings_stop_session" />
 
                 <Button
                     android:id="@+id/main_btn_open_debug"

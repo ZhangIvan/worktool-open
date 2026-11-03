@@ -7,6 +7,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -62,6 +63,7 @@ class MainActivity : Activity() {
             renderStatusCard()
             renderPausePanel()
             commandAdapter.refresh(runtime.snapshotOutcomeByType())
+            if (::queueContent.isInitialized && queueContent.visibility == View.VISIBLE) refreshQueueSegment()
             mainHandler.postDelayed(this, TICK_MILLIS)
         }
     }
@@ -73,6 +75,14 @@ class MainActivity : Activity() {
     private lateinit var statusHeartbeat: TextView
     private lateinit var statusA11y: TextView
     private lateinit var openA11yButton: Button
+    private lateinit var statusRtt: TextView
+    private lateinit var statusWecom: TextView
+    private lateinit var statusWindow: TextView
+
+    /** U6 企微版本检测结果缓存（PackageManager 查询按 onResume 一次，不随 1s tick 刷新）。 */
+    private var wecomResult: WecomCompatCheck.Result = WecomCompatCheck.Result(
+        WecomCompatCheck.Verdict.NOT_INSTALLED, null,
+    )
 
     // 快捷操作
     private lateinit var pauseButton: Button
@@ -88,6 +98,12 @@ class MainActivity : Activity() {
     private lateinit var sessionDetail: TextView
     private lateinit var eventLog: TextView
 
+    // 指令 tab 分段（docs/16 U3）：目录 / 待执行
+    private lateinit var commandListView: ListView
+    private lateinit var queueContent: View
+    private lateinit var queueSummary: TextView
+    private lateinit var queueAdapter: DeferredQueueAdapter
+
     // 设置 tab
     private lateinit var settingsServerValue: TextView
     private lateinit var logSwitch: Switch
@@ -99,9 +115,17 @@ class MainActivity : Activity() {
         credentialStore = AndroidKeystoreCredentialStore(this)
 
         // 启动路由（SP-1/SP-3 接线）：未授权无障碍 → 引导页 → 未配对 → 配对流 → 已配对 → 主界面
+        // U7「不再询问」：无障碍未授权且用户已记 skip → 不再强制引导页（降级按配对态；
+        // 状态卡警示行持续可见，安全边界见 AppLaunchRoute.decide KDoc）。
         val paired = OnboardingForms.launchRoute(credentialStore, settings.serverAddress) ==
             OnboardingForms.LaunchRoute.MAIN
-        when (AppLaunchRoute.decide(paired, AccessibilityServiceGate.isAuthorized(this))) {
+        when (
+            AppLaunchRoute.decide(
+                paired,
+                AccessibilityServiceGate.isAuthorized(this),
+                settings.guideSkipAccessibility,
+            )
+        ) {
             AppLaunchRoute.Route.SETUP_GUIDE -> {
                 startActivity(Intent(this, SetupGuideActivity::class.java))
                 finish()
@@ -161,6 +185,15 @@ class MainActivity : Activity() {
         }
         runtime.logEnabled = settings.logEnabled
         runtime.dryRunEnabled = settings.dryRunEnabled
+        // U4 TTL 门 + 采纳项 #12 重试次数（AppSettings → SessionRuntime → DeviceSessionLoop）。
+        runtime.expiredTtlMillis = if (settings.skipExpiredEnabled) settings.expiredTtlHours * 3_600_000L else null
+        runtime.retryCount = settings.retryCount
+        // U6 企微版本检测缓存刷新（onResume 一次；安装/升级企微后回到前台自然刷新）。
+        wecomResult = WecomCompatCheck.classify(WecomCompatCheck.readInstalledVersion(packageManager))
+        // U2 悬浮窗：开关开 + 已授权 → 拉起（进程重启后恢复常驻气泡）。
+        if (settings.floatWindowEnabled && Settings.canDrawOverlays(this)) {
+            FloatControlService.start(this)
+        }
         // BP-1/SP-1 ②：已配对 → 自动恢复会话。幂等（SessionAutoStart.KEEP_RUNNING =
         // 在跑不重启，避免每次 onStart 重拨 WS 抖动）；重配对的新会话由 PairingActivity
         // 成功回调显式 stop-then-start。前台服务随 start/stop 由 SessionRuntime.foreground 钩子联动。
@@ -198,6 +231,9 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.main_status_text)
         statusServer = findViewById(R.id.main_status_server)
         statusHeartbeat = findViewById(R.id.main_status_heartbeat)
+        statusRtt = findViewById(R.id.main_status_rtt)
+        statusWecom = findViewById(R.id.main_status_wecom)
+        statusWindow = findViewById(R.id.main_status_window)
         statusA11y = findViewById(R.id.main_status_a11y)
         openA11yButton = findViewById(R.id.main_btn_open_a11y)
         // CR UI-02：服务未开启时的一键入口（系统无障碍设置页；用户开启后返回本页，
@@ -224,15 +260,67 @@ class MainActivity : Activity() {
             else -> R.drawable.dot_offline to R.string.main_status_not_started
         }
         statusDot.setBackgroundResource(dotRes)
-        statusText.setText(textRes)
+        // 采纳项 #14：离线态显式「重连中(第N次)」（重连计数经 V2Session 透出；
+        // 不弹模态框，状态卡文案承载）。
+        val attempts = runtime.reconnectAttempts()
+        if (status.stateCode == RobotStatusComputer.STATE_OFFLINE && attempts > 0) {
+            statusText.text = getString(R.string.main_status_reconnecting, attempts)
+        } else {
+            statusText.setText(textRes)
+        }
         statusServer.text = settings.serverAddress.orEmpty()
         statusHeartbeat.text =
             getString(R.string.main_status_heartbeat, RobotStatusComputer.heartbeatAgeText(status.heartbeatAgeMillis))
+        // 采纳项 #8：RTT 彩条（<100ms 绿 / <999ms 黄 / 其余红；观测口径见
+        // SessionStatusTracker.Snapshot.lastRttMillis 注——出向→入向配对上界近似）。
+        val rtt = snap.lastRttMillis
+        statusRtt.text = getString(R.string.main_status_rtt, rtt ?: -1L)
+        statusRtt.setTextColor(
+            getColor(
+                when (RobotStatusComputer.rttBand(rtt)) {
+                    RobotStatusComputer.RttBand.GREEN -> R.color.status_online
+                    RobotStatusComputer.RttBand.YELLOW -> R.color.status_warn
+                    RobotStatusComputer.RttBand.RED -> R.color.status_error
+                    RobotStatusComputer.RttBand.UNKNOWN -> R.color.status_offline
+                },
+            ),
+        )
+        statusRtt.visibility = if (rtt == null) View.GONE else View.VISIBLE
+        renderWecomRow()
+        // U1：非时段内休眠行（非模态；判定源 = 会话的运行时段调度器当前口径）。
+        val windowEnabled = settings.runtimeWindowEnabled
+        val outOfWindow = windowEnabled &&
+            runtime.windowScheduler.currentVerdict(System.currentTimeMillis()) ==
+            cn.worktool.open.core.task.WindowVerdict.OUT_OF_WINDOW
+        statusWindow.visibility = if (outOfWindow) View.VISIBLE else View.GONE
         // CR UI-02 无障碍服务观测：null = 未开启/未连接 → 指令通道不可用，须可见可跳转；
         // 服务连接后（含从系统设置返回）自动隐藏。观测点与服务/调试页同源（instance）。
         val a11yConnected = WorkToolAccessibilityService.instance != null
         statusA11y.visibility = if (a11yConnected) View.GONE else View.VISIBLE
         openA11yButton.visibility = if (a11yConnected) View.GONE else View.VISIBLE
+    }
+
+    /** U6 企微版本行（docs/05 兼容矩阵只读副本；onResume 重查，tick 不重复查 PackageManager）。 */
+    private fun renderWecomRow() {
+        val r = wecomResult
+        when (r.verdict) {
+            WecomCompatCheck.Verdict.NOT_INSTALLED -> {
+                statusWecom.text = getString(R.string.main_wecom_not_installed)
+                statusWecom.setTextColor(getColor(R.color.status_offline))
+            }
+            WecomCompatCheck.Verdict.COMPATIBLE -> {
+                statusWecom.text = getString(R.string.main_wecom_compatible, r.versionName)
+                statusWecom.setTextColor(getColor(R.color.status_online))
+            }
+            WecomCompatCheck.Verdict.UNVERIFIED, WecomCompatCheck.Verdict.UNKNOWN -> {
+                statusWecom.text = getString(R.string.main_wecom_unverified, r.versionName ?: "?")
+                statusWecom.setTextColor(getColor(R.color.status_warn))
+            }
+            WecomCompatCheck.Verdict.INCOMPATIBLE -> {
+                statusWecom.text = getString(R.string.main_wecom_incompatible, r.versionName)
+                statusWecom.setTextColor(getColor(R.color.status_error))
+            }
+        }
     }
 
     // ---- 快捷操作（FR-52 暂停/恢复 + 悬浮窗开关）----
@@ -320,13 +408,81 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---- 指令 tab：P0 目录 ----
+    // ---- 指令 tab：目录 / 待执行 分段（docs/16 U3）----
 
     private fun bindCommandsTab() {
         commandAdapter = CommandListAdapter(CommandCatalog.p0())
-        findViewById<ListView>(R.id.main_command_list).apply {
-            adapter = commandAdapter
-            setOnItemClickListener { _, _, position, _ -> showCommandDetail(commandAdapter.rows[position]) }
+        commandListView = findViewById(R.id.main_command_list)
+        commandListView.adapter = commandAdapter
+        commandListView.setOnItemClickListener { _, _, position, _ -> showCommandDetail(commandAdapter.rows[position]) }
+
+        queueContent = findViewById(R.id.main_cmd_queue_content)
+        queueSummary = findViewById(R.id.main_queue_summary)
+        queueAdapter = DeferredQueueAdapter()
+        findViewById<ListView>(R.id.main_queue_list).adapter = queueAdapter
+
+        findViewById<Button>(R.id.main_cmd_seg_catalog).setOnClickListener { showCommandsSegment(catalog = true) }
+        findViewById<Button>(R.id.main_cmd_seg_queue).setOnClickListener { showCommandsSegment(catalog = false) }
+        findViewById<Button>(R.id.main_btn_clear_queue).setOnClickListener { confirmClearQueue() }
+        showCommandsSegment(catalog = true)
+    }
+
+    /** 目录/待执行分段切换（U3；APK「查看待执行消息列表」对话框的页面化等价）。 */
+    private fun showCommandsSegment(catalog: Boolean) {
+        commandListView.visibility = if (catalog) View.VISIBLE else View.GONE
+        queueContent.visibility = if (catalog) View.GONE else View.VISIBLE
+        if (!catalog) refreshQueueSegment()
+    }
+
+    private fun refreshQueueSegment() {
+        val deferred = runtime.pauseManager.deferred()
+        queueAdapter.rows = deferred
+        queueSummary.text = getString(R.string.main_queue_summary, deferred.size)
+    }
+
+    /** 清空待执行队列（确认对话框 → PauseManager.discardDeferred，SR-12 全量审计）。 */
+    private fun confirmClearQueue() {
+        val count = runtime.pauseManager.deferred().size
+        if (count == 0) {
+            Toast.makeText(this, R.string.main_queue_cleared_toast, Toast.LENGTH_SHORT).show()
+            refreshQueueSegment()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.main_queue_clear_title)
+            .setMessage(getString(R.string.main_queue_clear_message, count))
+            .setPositiveButton(R.string.main_queue_clear_confirm) { _, _ ->
+                runtime.discardDeferredQueue(reason = "user-clear")
+                Toast.makeText(this, R.string.main_queue_cleared_toast, Toast.LENGTH_SHORT).show()
+                refreshQueueSegment()
+            }
+            .setNegativeButton(R.string.main_dialog_cancel, null)
+            .show()
+    }
+
+    /** 待执行队列行适配器（U3：commandId/type/入队时间；数据源 PauseManager.deferred）。 */
+    private inner class DeferredQueueAdapter : BaseAdapter() {
+
+        var rows: List<cn.worktool.open.core.task.PauseManager.DeferredCommand> = emptyList()
+            set(value) {
+                field = value
+                notifyDataSetChanged()
+            }
+
+        override fun getCount(): Int = rows.size
+        override fun getItem(position: Int) = rows[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: layoutInflater.inflate(R.layout.item_command, parent, false)
+            val row = rows[position]
+            val fmt = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date(row.receivedAtMillis))
+            view.findViewById<TextView>(R.id.cmd_row_title).text =
+                getString(R.string.main_queue_item, row.commandId, row.commandType)
+            view.findViewById<TextView>(R.id.cmd_row_types).text = fmt
+            view.findViewById<TextView>(R.id.cmd_row_last).text = ""
+            return view
         }
     }
 
@@ -398,6 +554,154 @@ class MainActivity : Activity() {
             settings.logEnabled = checked
             runtime.logEnabled = checked
         }
+
+        bindRuntimeWindowSettings()
+        bindFloatWindowSwitch()
+        bindSkipExpiredSettings()
+        bindRetryCountSetting()
+        findViewById<Button>(R.id.main_btn_stop_session).setOnClickListener { confirmStopSession() }
+    }
+
+    /** U1 运行时段设置区：总开关 + 双 TimePicker（默认 8:00–22:00，跨零点支持）。 */
+    private fun bindRuntimeWindowSettings() {
+        val windowSwitch = findViewById<Switch>(R.id.main_settings_window_switch)
+        val startButton = findViewById<Button>(R.id.main_btn_window_start)
+        val endButton = findViewById<Button>(R.id.main_btn_window_end)
+        val summary = findViewById<TextView>(R.id.main_settings_window_summary)
+
+        fun render() {
+            windowSwitch.isChecked = settings.runtimeWindowEnabled
+            startButton.text = getString(R.string.settings_window_start, minuteText(settings.runtimeWindowStartMinute))
+            endButton.text = getString(R.string.settings_window_end, minuteText(settings.runtimeWindowEndMinute))
+            summary.text = if (settings.runtimeWindowEnabled) {
+                getString(
+                    R.string.settings_window_summary_on,
+                    minuteText(settings.runtimeWindowStartMinute),
+                    minuteText(settings.runtimeWindowEndMinute),
+                )
+            } else {
+                getString(R.string.settings_window_summary_off)
+            }
+        }
+
+        windowSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.runtimeWindowEnabled = checked
+            // 配置变更即重置调度器基线（避免用旧窗口态误判边界迁移）
+            runtime.windowScheduler.rebase(System.currentTimeMillis())
+            render()
+        }
+        startButton.setOnClickListener {
+            pickTime(settings.runtimeWindowStartMinute) { minute ->
+                settings.runtimeWindowStartMinute = minute
+                runtime.windowScheduler.rebase(System.currentTimeMillis())
+                render()
+            }
+        }
+        endButton.setOnClickListener {
+            pickTime(settings.runtimeWindowEndMinute) { minute ->
+                settings.runtimeWindowEndMinute = minute
+                runtime.windowScheduler.rebase(System.currentTimeMillis())
+                render()
+            }
+        }
+        render()
+    }
+
+    private fun pickTime(currentMinute: Int, onPicked: (Int) -> Unit) {
+        android.app.TimePickerDialog(
+            this,
+            { _, hour, minute -> onPicked(hour * 60 + minute) },
+            currentMinute / 60,
+            currentMinute % 60,
+            true,
+        ).show()
+    }
+
+    private fun minuteText(minuteOfDay: Int): String =
+        "${minuteOfDay / 60}:${"%02d".format(minuteOfDay % 60)}"
+
+    /** U2 悬浮窗开关：缺 overlay 授权跳系统设置页（复用引导式授权，fail-soft）。 */
+    private fun bindFloatWindowSwitch() {
+        val floatSwitch = findViewById<Switch>(R.id.main_settings_float_switch)
+        floatSwitch.isChecked = settings.floatWindowEnabled
+        floatSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.floatWindowEnabled = checked
+            if (checked) {
+                if (Settings.canDrawOverlays(this)) {
+                    FloatControlService.start(this)
+                } else {
+                    Toast.makeText(this, R.string.float_no_permission, Toast.LENGTH_LONG).show()
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }
+            } else {
+                FloatControlService.stop(this)
+            }
+        }
+    }
+
+    /** U4 跳过过期指令：开关 + TTL 小时数（1/2/4/8 单选）。 */
+    private fun bindSkipExpiredSettings() {
+        val skipSwitch = findViewById<Switch>(R.id.main_settings_skip_expired_switch)
+        val ttlButton = findViewById<Button>(R.id.main_btn_ttl_hours)
+        skipSwitch.isChecked = settings.skipExpiredEnabled
+        skipSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.skipExpiredEnabled = checked
+            runtime.expiredTtlMillis = if (checked) settings.expiredTtlHours * 3_600_000L else null
+        }
+        val hoursOptions = intArrayOf(1, 2, 4, 8)
+        ttlButton.text = getString(R.string.settings_ttl_button, settings.expiredTtlHours)
+        ttlButton.setOnClickListener {
+            val labels = hoursOptions.map { "$it 小时" }.toTypedArray()
+            val checkedIndex = hoursOptions.indexOf(settings.expiredTtlHours).takeIf { it >= 0 } ?: 1
+            AlertDialog.Builder(this)
+                .setTitle(R.string.settings_ttl_title)
+                .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                    settings.expiredTtlHours = hoursOptions[which]
+                    runtime.expiredTtlMillis =
+                        if (settings.skipExpiredEnabled) hoursOptions[which] * 3_600_000L else null
+                    ttlButton.text = getString(R.string.settings_ttl_button, hoursOptions[which])
+                    dialog.dismiss()
+                }
+                .setNegativeButton(R.string.main_dialog_cancel, null)
+                .show()
+        }
+    }
+
+    /** 采纳项 #12：执行失败重试次数（0/1/2/3/5 单选；0 = 首错即停）。 */
+    private fun bindRetryCountSetting() {
+        val retryButton = findViewById<Button>(R.id.main_btn_retry_count)
+        val options = intArrayOf(0, 1, 2, 3, 5)
+        fun render() {
+            retryButton.text = getString(R.string.settings_retry_button, settings.retryCount)
+        }
+        retryButton.setOnClickListener {
+            val labels = options.map { if (it == 0) "0（不重试）" else "$it 次" }.toTypedArray()
+            val checkedIndex = options.indexOf(settings.retryCount).takeIf { it >= 0 } ?: 0
+            AlertDialog.Builder(this)
+                .setTitle(R.string.settings_retry_title)
+                .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                    settings.retryCount = options[which]
+                    runtime.retryCount = options[which]
+                    render()
+                    dialog.dismiss()
+                }
+                .setNegativeButton(R.string.main_dialog_cancel, null)
+                .show()
+        }
+        render()
+    }
+
+    /** 采纳项 #11 停止会话（确认后 SessionRuntime.stop；不用 System.exit）。 */
+    private fun confirmStopSession() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_stop_session)
+            .setMessage(getString(R.string.session_stopped_toast))
+            .setPositiveButton(R.string.settings_stop_session) { _, _ ->
+                runtime.stop()
+                Toast.makeText(this, R.string.session_stopped_toast, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton(R.string.main_dialog_cancel, null)
+            .show()
     }
 
     private fun renderSettingsServer() {

@@ -21,13 +21,17 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 会话通道（CR UI-01）+ 持续在线保活（BP-1/SP-1、BP-5/SP-2、BP-7/SP-3）。 -->
+    <!-- 会话通道（CR UI-01）+ 持续在线保活（BP-1/SP-1、BP-5/SP-2、BP-7/SP-3）
+         + 悬浮窗控制（docs/16 U2 / FR-50 最小集：SYSTEM_ALERT_WINDOW 为 special 级，
+         运行时经 Settings.canDrawOverlays 判定 + ACTION_MANAGE_OVERLAY_PERMISSION 引导，
+         缺授权服务 fail-soft 不 crash）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="false"
@@ -67,6 +71,12 @@
             android:name=".SessionForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- docs/16 U2 / FR-50 最小集：悬浮窗控制服务（暂停/恢复两钮，任意界面可
+             操作；设置 tab 开关拉起，缺 overlay 授权 fail-soft；exported=false，SR-10）。 -->
+        <service
+            android:name=".FloatControlService"
+            android:exported="false" />
 
         <!-- BP-1/SP-1 ③：开机恢复会话（BOOT_COMPLETED 为系统保护广播，外部应用不可伪造；
              exported=false 拒绝显式外部调用，SR-10/G10）。 -->

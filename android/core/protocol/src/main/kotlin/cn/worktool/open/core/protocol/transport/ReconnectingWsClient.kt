@@ -48,6 +48,15 @@ class ReconnectingWsClient(
     private var heartbeatHandle: Cancellable? = null
     private var timeoutHandle: Cancellable? = null
 
+    /**
+     * 当前重连序号（docs/16 采纳项「离线态重连文案」）：断连后进入第 N 次重连，
+     * onOpen 成功即清零。0 = 从未重连/当前已连上。UI 据此显示「重连中（第 N 次）」。
+     */
+    private var reconnectAttemptCount = 0
+
+    /** 重连计数透出（线程安全；状态卡观测面）。 */
+    fun reconnectAttempts(): Int = synchronized(lock) { reconnectAttemptCount }
+
     fun start() {
         synchronized(lock) {
             if (!stopped) return
@@ -89,6 +98,7 @@ class ReconnectingWsClient(
             if (stopped) return
             state = State.OPEN
             backoff.reset()
+            reconnectAttemptCount = 0
             lastServerActivity = clock()
         }
         greeting?.invoke()?.let { transport?.send(it) }
@@ -110,6 +120,7 @@ class ReconnectingWsClient(
             state = State.WAITING_RETRY
             cancelTimers()
             transport = null
+            reconnectAttemptCount += 1
             delay = backoff.nextDelayMillis()
         }
         onEvent?.invoke(Event.Disconnected(cause))

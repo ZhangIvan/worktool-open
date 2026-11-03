@@ -63,6 +63,16 @@
                 android:layout_marginTop="16dp"
                 android:text="@string/pair_address_next" />
 
+            <!-- U5 连接探针（docs/16）：TCP/TLS/HTTP 三层探测 + 结果逐层显示；
+                 失败不阻断「下一步」（配对码流程独立）。 -->
+            <Button
+                android:id="@+id/pair_probe_button"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/pair_probe_button" />
+
             <!-- 无障碍检测卡（FR-56 前置 + docs/12 BP-3）：用户配对前必须开启无障碍，
                  否则配对成功也执行不了指令（会话 2 实证）。实时状态 + 一键直达系统设置。 -->
             <LinearLayout

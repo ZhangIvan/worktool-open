@@ -21,4 +21,7 @@
     <!-- 状态卡圆点 -->
     <color name="status_online">#1FA463</color>
     <color name="status_offline">#9AA0A8</color>
+    <!-- 语义扩展（docs/16 T4.9）：RTT 彩条黄/红 + 企微版本行黄/红 -->
+    <color name="status_warn">#B26A00</color>
+    <color name="status_error">#D93025</color>
 </resources>

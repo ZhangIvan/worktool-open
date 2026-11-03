@@ -439,7 +439,10 @@ func TestOpenAPICallbackDeliveryPerRobot(t *testing.T) {
 		}
 	}
 delivered:
-	if body["type"] != "exec_result" || body["errorCode"].(float64) != 0 {
+	// T3.6 K3 语义属主变更（docs/15 破坏级 #3）：分发 body 默认双名别名——
+	// type=指令类型 int（203），原 "exec_result" 字符串字段迁别名 kind；
+	// messageId/runTime/rawMsg 由 compat 测试逐字段断言（此处仅守形态迁移）。
+	if body["kind"] != "exec_result" || body["type"] != float64(203) || body["errorCode"].(float64) != 0 {
 		t.Fatalf("回执载荷异常: %v", body)
 	}
 	if body["_sig"] == "" || body["_ct"] != "application/json" {

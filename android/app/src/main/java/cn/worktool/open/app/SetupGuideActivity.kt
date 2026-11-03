@@ -57,6 +57,13 @@ class SetupGuideActivity : Activity() {
     private lateinit var miuiAction: Button
     private lateinit var doneButton: Button
 
+    // U7 不再询问（docs/16）：三卡各自记忆（AppSettings 持久化）；已 skip 的卡折叠
+    private lateinit var settings: AppSettings
+    private lateinit var a11ySkip: android.widget.CheckBox
+    private lateinit var batterySkip: android.widget.CheckBox
+    private lateinit var miuiSkip: android.widget.CheckBox
+    private lateinit var skipNote: TextView
+
     /** 5s 轮询（onResume 起，onPause 停）。 */
     private val poll = object : Runnable {
         override fun run() {
@@ -69,6 +76,7 @@ class SetupGuideActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_setup_guide)
 
+        settings = AppSettings(this)
         a11yIcon = findViewById(R.id.guide_a11y_icon)
         a11yStatus = findViewById(R.id.guide_a11y_status)
         a11yAction = findViewById(R.id.guide_a11y_action)
@@ -79,6 +87,27 @@ class SetupGuideActivity : Activity() {
         miuiStatus = findViewById(R.id.guide_miui_status)
         miuiAction = findViewById(R.id.guide_miui_action)
         doneButton = findViewById(R.id.guide_done)
+        a11ySkip = findViewById(R.id.guide_a11y_skip)
+        batterySkip = findViewById(R.id.guide_battery_skip)
+        miuiSkip = findViewById(R.id.guide_miui_skip)
+        skipNote = TextView(this).apply {
+            text = getText(R.string.guide_skip_note)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_secondary))
+            visibility = View.GONE
+        }
+        // skip 说明行插到完成按钮前（运行时添加，避免再动布局结构）
+        (doneButton.parent as android.view.ViewGroup).addView(
+            skipNote,
+            (doneButton.parent as android.view.ViewGroup).indexOfChild(doneButton),
+        )
+
+        a11ySkip.isChecked = settings.guideSkipAccessibility
+        batterySkip.isChecked = settings.guideSkipBattery
+        miuiSkip.isChecked = settings.guideSkipMiui
+        a11ySkip.setOnCheckedChangeListener { _, checked -> settings.guideSkipAccessibility = checked; render() }
+        batterySkip.setOnCheckedChangeListener { _, checked -> settings.guideSkipBattery = checked; render() }
+        miuiSkip.setOnCheckedChangeListener { _, checked -> settings.guideSkipMiui = checked; render() }
 
         a11yAction.setOnClickListener { openAccessibilitySettings() }
         batteryAction.setOnClickListener { requestIgnoreBatteryOptimizations() }
@@ -139,6 +168,14 @@ class SetupGuideActivity : Activity() {
     // ---- 渲染 ----
 
     private fun render() {
+        // U7：已 skip 的卡折叠（用户明确「不再询问」= 本页不再展示该卡打扰）；
+        // 取消勾选即恢复显示（可逆；勾选态经 listener 已写 AppSettings 持久化键）。
+        findViewById<View>(R.id.guide_a11y_card).visibility = if (a11ySkip.isChecked) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.guide_battery_card).visibility = if (batterySkip.isChecked) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.guide_miui_card).visibility = if (miuiSkip.isChecked) View.GONE else View.VISIBLE
+        skipNote.visibility =
+            if (a11ySkip.isChecked || batterySkip.isChecked || miuiSkip.isChecked) View.VISIBLE else View.GONE
+
         val a11yCard = cards.getValue(SetupGuideCards.CardKey.ACCESSIBILITY)
         val a11yGreen = SetupGuideCards.isGreen(a11yCard)
         a11yIcon.text = if (a11yGreen) "✅" else "⚠️"
@@ -176,8 +213,11 @@ class SetupGuideActivity : Activity() {
         miuiAction.visibility =
             if (!miuiDevice || miuiCard.manualConfirmed) View.GONE else View.VISIBLE
 
+        // 放行：三卡全绿，**或**无障碍卡已「不再询问」（U7：skip = 用户明确放弃
+        // 引导，启动路由也不再强制回本页——若仍锁死完成按钮会成死路）。
+        // 电池/MIUI 卡 skip 不放行（两者本就不强制路由，只是折叠卡面）。
         val allGreen = SetupGuideCards.allGreen(cards.values)
-        doneButton.isEnabled = allGreen
+        doneButton.isEnabled = allGreen || a11ySkip.isChecked
         val paired = OnboardingForms.launchRoute(
             AndroidKeystoreCredentialStore(this),
             AppSettings(this).serverAddress,

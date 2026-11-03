@@ -79,14 +79,35 @@ class AtLeastOnceQueue(
 /** 入向命令门禁（E09 guard：执行门禁与去重持久化先于副作用）。 */
 class InboundCommandGate(
     private val store: JournalStore,
+    /**
+     * 时钟（TTL 判定用；缺省系统时钟——生产由 DeviceSessionLoop 注入会话时钟）。
+     */
+    private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * 过期跳过门（docs/16 U4，TTL 积压门）：提供者返回 >0 = 启用（每次 apply 实时
+     * 取值——AppSettings 变更免重建生效）。指令接收时间距今超 TTL → 不下发副作用，
+     * 记 [Decision.Expired]（调用方回执 SKIPPED(过期)）。缺省恒 null = 不启用
+     * （历史行为不变）。
+     */
+    private val expiredTtlMillis: () -> Long? = { null },
+    /** 过期命中回调（调用方发 SKIPPED 回执/事件日志；在 journal 去重记录之后调用）。 */
+    private val onExpired: ((command: InboundCommand, ageMillis: Long) -> Unit)? = null,
+    /** 副作用入口（执行指令；须在 journal 去重记录之后才被调用）。 */
     private val effect: (InboundCommand) -> Unit,
 ) {
 
-    /** 入向指令描述（来自已验帧 socketType=2 载荷）。 */
+    /**
+     * 入向指令描述（来自已验帧 socketType=2 载荷）。
+     *
+     * [receivedAtMillis] = 指令的**服务端下发时间戳**（dispatch 帧 meta.ts，毫秒）；
+     * -1 = 未携带（TTL 门无法判定 → 不拦截，保持既有行为）。回放（journal 重放/
+     * 903 重发）路径同字段判定，防重放旧指令复活。
+     */
     data class InboundCommand(
         val commandId: String,
         val type: Int,
         val epoch: Long,
+        val receivedAtMillis: Long = -1L,
     )
 
     sealed interface Decision {
@@ -95,14 +116,21 @@ class InboundCommandGate(
         object AlreadyApplied : Decision
         /** epoch < 已应用水位：拒旧（docs/02 §5.1 端侧拒旧）。 */
         data class RejectedOld(val epoch: Long, val appliedEpoch: Long) : Decision
+
+        /**
+         * 过期跳过（U4 TTL 门）：积压超 TTL，**不下发副作用**；已在 journal 去重
+         * 记录（重复投递/回放同 commandId → AlreadyApplied 幂等回执，防旧指令复活）。
+         */
+        data class Expired(val ageMillis: Long, val ttlMillis: Long) : Decision
     }
 
     /**
      * 门禁 + 副作用。顺序：
      * 1. epoch 拒旧（未持久，无副作用风险）；
-     * 2. journal 记录启动（持久，先于副作用；重复 commandId → AlreadyApplied）；
-     * 3. 执行副作用；
-     * 4. 推进 appliedEpoch。
+     * 2. TTL 过期跳过（U4：持久去重记录先于判定返回，副作用不下发）；
+     * 3. journal 记录启动（持久，先于副作用；重复 commandId → AlreadyApplied）；
+     * 4. 执行副作用；
+     * 5. 推进 appliedEpoch。
      */
     fun apply(command: InboundCommand): Decision {
         val watermark = store.appliedEpoch()
@@ -111,6 +139,14 @@ class InboundCommandGate(
         }
         if (!store.recordInboundStart(command.commandId, command.type, command.epoch)) {
             return Decision.AlreadyApplied
+        }
+        val ttl = expiredTtlMillis()
+        if (ttl != null && ttl > 0 && command.receivedAtMillis >= 0) {
+            val age = clock() - command.receivedAtMillis
+            if (age > ttl) {
+                onExpired?.invoke(command, age)
+                return Decision.Expired(age, ttl)
+            }
         }
         effect(command) // 副作用发生在持久化之后（崩溃恢复可由 journal 重放对账）
         if (command.epoch > watermark) {

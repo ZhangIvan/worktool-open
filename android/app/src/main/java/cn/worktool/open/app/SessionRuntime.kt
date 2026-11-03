@@ -11,6 +11,7 @@ import cn.worktool.open.core.protocol.transport.WsTransport
 import cn.worktool.open.core.protocol.android.SqliteJournalStore
 import cn.worktool.open.core.protocol.transport.OkHttpWsTransport
 import cn.worktool.open.core.task.PauseManager
+import cn.worktool.open.core.task.RuntimeWindowConfig
 import cn.worktool.open.feature.executor.exec.ExecutorRegistry
 import cn.worktool.open.feature.executor.query.FileInfo
 import cn.worktool.open.feature.executor.query.LocalFilePort
@@ -60,6 +61,28 @@ class SessionRuntime(
     /** 状态卡数据源（主界面 1s 轮询 snapshot）。 */
     val statusTracker = SessionStatusTracker()
 
+    /**
+     * U1 运行时段调度器（docs/16）：每分钟 tick——出窗 → PauseManager.pause
+     * （休眠中，指令只入队不执行）；入窗 → 预授权自动恢复（仅 runtime-window 来源
+     * 的暂停）。配置经 [configProvider] 每 tick 实时读取 AppSettings（改设置下一
+     * 分钟生效，无需重启会话）。随 start/stop 启停。
+     */
+    val windowScheduler = RuntimeWindowScheduler(
+        configProvider = {
+            val s = settingsSnapshot()
+            RuntimeWindowConfig(
+                enabled = s.runtimeWindowEnabled,
+                startMinuteOfDay = s.runtimeWindowStartMinute,
+                endMinuteOfDay = s.runtimeWindowEndMinute,
+            )
+        },
+        pauseManager = pauseManager,
+        onSleepNotice = { inWindow ->
+            appendEvent(if (inWindow) "进入运行时段，机器人已唤醒" else "机器人休眠中，您可在设置页修改工作时段")
+        },
+        onEvent = { line -> appendEvent(line) },
+    )
+
     /** 会话事件 UI 观察口（主线程回调不保证——UI 侧自行 runOnUiThread）。 */
     var onEventLine: ((String) -> Unit)? = null
 
@@ -100,6 +123,18 @@ class SessionRuntime(
      */
     @Volatile
     var dryRunEnabled: Boolean = false
+
+    /**
+     * U4 过期跳过门（AppSettings.skipExpiredEnabled 同步；DeviceSessionLoop 注入
+     * InboundCommandGate TTL）：null/≤0 = 不拦截；>0 = 指令接收时间距今超 TTL
+     * 直接回执 SKIPPED(过期)。
+     */
+    @Volatile
+    var expiredTtlMillis: Long? = null
+
+    /** 采纳项（docs/16 #12）：执行失败重试次数（AppSettings.retryCount 同步；0=首错即停）。 */
+    @Volatile
+    var retryCount: Int = 0
 
     /** 当前会话心跳间隔（start 时取自凭据 heartbeatIntervalSeconds；主界面在线判定口径）。 */
     @Volatile
@@ -165,12 +200,29 @@ class SessionRuntime(
                 }
             },
             dryRunGate = { dryRunEnabled },
+            onDeferred = { commandId, commandType, receivedAtMillis ->
+                // U1/U3：暂停拦截指令 → task-engine PauseManager 暂存（FR-52 只入队
+                // 不执行；待执行队列视图/清空与运行时段休眠共用此数据源）。
+                if (pauseManager.isPaused) {
+                    pauseManager.enqueue(
+                        PauseManager.DeferredCommand(
+                            commandId = commandId,
+                            commandType = commandType,
+                            receivedAtMillis = receivedAtMillis,
+                        ),
+                        now = clock(),
+                    )
+                }
+            },
+            expiredTtlMillis = { expiredTtlMillis },
+            retryCountProvider = { retryCount },
         )
         l.start()
         synchronized(lock) { loop = l }
         statusTracker.onSessionStarted()
         foreground?.startRequested() // SP-2：会话起来 → 前台服务常驻（熄屏/后台不被杀）
         heartbeatIntervalMillis = credentials.heartbeatIntervalSeconds * 1000L
+        windowScheduler.startWith(clock()) // U1：运行时段分钟 tick（出窗休眠/入窗恢复）
         appendEvent("会话启动 deviceId=${credentials.deviceId} → $baseUrl")
         return true
     }
@@ -178,6 +230,7 @@ class SessionRuntime(
     fun stop() {
         val l = synchronized(lock) { loop ?: return }
         synchronized(lock) { loop = null }
+        windowScheduler.stop() // U1：随会话停（无会话即无休眠语义）
         foreground?.stopRequested() // SP-2：无会话 → 无前台服务/常驻通知
         runCatching { l.stop() }
         statusTracker.onSessionStopped()
@@ -187,6 +240,21 @@ class SessionRuntime(
     /** 指令列表「上次执行状态」快照（type → 最近回执）。 */
     fun snapshotOutcomeByType(): Map<Int, CommandCatalog.Row.Outcome> =
         synchronized(lock) { lastOutcome.toMap() }
+
+    /**
+     * U3 清空待执行队列（docs/16 U3 / FR-37 设备侧面）：丢弃全部暂存指令并落审计
+     * （SR-12）；暂停态不变（清空 ≠ 恢复）。返回被丢弃条数（UI toast 用）。
+     */
+    fun discardDeferredQueue(reason: String = "user-clear"): Int {
+        val discarded = pauseManager.discardDeferred(reason = reason, actor = "app-main", now = clock())
+        if (discarded.isNotEmpty()) {
+            appendEvent("待执行队列已清空：${discarded.size} 条（$reason，SR-12 审计留痕）")
+        }
+        return discarded.size
+    }
+
+    /** 当前重连序号（采纳项「重连中(第N次)」文案；无会话 = 0）。 */
+    fun reconnectAttempts(): Int = synchronized(lock) { loop?.reconnectAttempts() ?: 0 }
 
     /** 事件环形缓冲快照（最新在末尾）。 */
     fun events(): List<String> = synchronized(lock) { eventBuffer.toList() }
@@ -203,6 +271,9 @@ class SessionRuntime(
         }
         onEventLine?.invoke(stamped)
     }
+
+    /** 运行时段配置快照（U1：windowScheduler 每 tick 实时读取 SharedPreferences）。 */
+    private fun settingsSnapshot(): AppSettings = AppSettings(appContext)
 
     private companion object {
         const val EVENT_BUFFER_MAX = 200
