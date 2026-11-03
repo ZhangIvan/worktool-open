@@ -11,6 +11,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -31,6 +32,10 @@ IMAGE = gates.IMAGE
 ALLOW = 'isolated-synthetic-browser-only'
 ORIGIN = 'http://127.0.0.1:5173'
 DRIVER = 'http://127.0.0.1:9515'
+# Fixed preinstalled locations used by the official hosted-runner Chromium and
+# ChromeDriver installers. No PATH fallback, download, or permission repair.
+CHROMIUM_BINARY = '/usr/local/share/chromium/chrome-linux/chrome'
+CHROMEDRIVER_BINARY = '/usr/local/share/chromedriver-linux64/chromedriver'
 PORTS = (3101, 5173, 9515)
 MIGRATIONS = tuple(f'{i:04d}_{name}.sql' for i, name in enumerate((
     'base19', 'control7', 'admission2', 'admission_constraints', 'indexes_roles',
@@ -314,18 +319,68 @@ def quote(value):
     return "'" + value.replace("'", "''") + "'"
 
 
+def verify_browser_binary(value):
+    need(value in (CHROMIUM_BINARY, CHROMEDRIVER_BINARY), 'BROWSER_PATH_REJECTED')
+    path = Path(value)
+    need(path.is_absolute() and path.resolve(strict=True) == path, 'BROWSER_PATH_NONCANONICAL')
+    for item in (path, *path.parents):
+        need(not stat.S_ISLNK(item.lstat().st_mode), 'BROWSER_PATH_SYMLINK')
+    mode = path.lstat().st_mode
+    need(stat.S_ISREG(mode) and bool(mode & 0o111), 'BROWSER_NOT_EXECUTABLE')
+    need(not (mode & 0o022), 'BROWSER_PERMISSION_REJECTED')
+    return value
+
+
+def browser_version(raw, driver=False):
+    need(isinstance(raw, bytes) and len(raw) <= 256, 'BROWSER_VERSION_REJECTED')
+    number = rb'([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})'
+    # ChromeDriver's optional suffix is a bounded commit/source reference, not
+    # arbitrary text. Chromium has no suffix. Neither command output is logged.
+    suffix = rb'(?: \([a-f0-9]{40}(?:-refs/(?:branch-heads/[0-9]{1,8}|heads/main)@\{#[0-9]{1,9}\})?\))?'
+    pattern = (rb'ChromeDriver ' + number + suffix if driver else rb'Chromium ' + number) + rb'\r?\n?'
+    match = re.fullmatch(pattern, raw)
+    need(match is not None, 'BROWSER_VERSION_REJECTED')
+    return match[1]
+
+
+def browser_preflight():
+    # Verify BOTH files before executing EITHER version command. This happens
+    # before port probes, resource creation, PostgreSQL, or service startup.
+    chrome = verify_browser_binary(CHROMIUM_BINARY)
+    driver = verify_browser_binary(CHROMEDRIVER_BINARY)
+    cv = browser_version(invoke([chrome, '--version'], timeout=5))
+    dv = browser_version(invoke([driver, '--version'], timeout=5), driver=True)
+    need(cv.split(b'.')[:3] == dv.split(b'.')[:3], 'BROWSER_DRIVER_MISMATCH')
+    return chrome, driver, cv, dv
+
+
+def browser_preflight_failure(error):
+    if isinstance(error, FileNotFoundError):
+        return 'missing'
+    if isinstance(error, PermissionError):
+        return 'permission'
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'timeout'
+    code = error.args[0] if isinstance(error, RuntimeError) and error.args else None
+    return {'BROWSER_PATH_REJECTED': 'path', 'BROWSER_PATH_NONCANONICAL': 'path',
+            'BROWSER_PATH_SYMLINK': 'path', 'BROWSER_NOT_EXECUTABLE': 'notexec',
+            'BROWSER_PERMISSION_REJECTED': 'permission', 'BROWSER_VERSION_REJECTED': 'versionformat',
+            'BROWSER_DRIVER_MISMATCH': 'mismatch'}.get(code, 'unavailable')
+
+
 def run():
     name, token, folder = identity()
     need(hashlib.sha256((ROOT / 'scripts/pg-integration-ci.py').read_bytes()).hexdigest() == GATES_SHA256,
          'EXISTING_RESOURCE_GATES_CHANGED')
+    try:
+        chrome, driver, cv, dv = browser_preflight()
+    except Exception as error:
+        print(json.dumps({'checkpoint': 'browser-preflight', 'result': 'FAIL', 'code': browser_preflight_failure(error)}))
+        raise
+    print(json.dumps({'checkpoint': 'browser-preflight', 'result': 'PASS',
+                      'browserVersion': cv.decode('ascii'), 'driverVersion': dv.decode('ascii')}))
     need(not folder.exists() and all(port_free(p) for p in PORTS), 'RESOURCE_ALREADY_EXISTS')
     need(shutil.which('docker') and shutil.which('go') and shutil.which('node'), 'TOOL_MISSING')
-    chrome = shutil.which('google-chrome') or shutil.which('google-chrome-stable')
-    driver = shutil.which('chromedriver')
-    need(chrome and driver, 'PREINSTALLED_BROWSER_REQUIRED')
-    cv = re.search(rb'(\d+\.\d+\.\d+\.\d+)', invoke([chrome, '--version']))
-    dv = re.search(rb'(\d+\.\d+\.\d+\.\d+)', invoke([driver, '--version']))
-    need(cv and dv and cv[1].split(b'.')[:3] == dv[1].split(b'.')[:3], 'BROWSER_DRIVER_MISMATCH')
     need(invoke(['go', 'env', 'GOVERSION']).strip() == b'go1.27.3', 'GO_VERSION_MISMATCH')
     need(invoke(['node', '--version']).strip() == b'v24.22.1', 'NODE_VERSION_MISMATCH')
     folder.mkdir(mode=0o700)
@@ -480,14 +535,89 @@ def run():
     completed.add('cleanup')
     need(completed == CASES, 'MISSING_CASE')
     print(json.dumps({'status': 'PASS', 'cases': sorted(completed), 'pgImage': IMAGE,
-                      'chromeVersion': cv[1].decode(), 'driverVersion': dv[1].decode(),
+                      'chromeVersion': cv.decode(), 'driverVersion': dv.decode(),
                       'limits': {'pgCPUs': 2, 'pgMemoryBytes': 1073741824, 'pgMemorySwapBytes': 1073741824,
                                  'pgTmpfsBytes': 2147483648, 'jobMinutes': 15, 'operationSeconds': 600},
                       'noRealDevices': True, 'noExternalCallbacks': True, 'cleanupConfirmed': True}))
 
 
+def browser_preflight_selftest():
+    from types import SimpleNamespace
+    from contextlib import redirect_stdout
+    from io import StringIO
+    calls = []
+    def metadata(path):
+        return SimpleNamespace(st_mode=(stat.S_IFREG | 0o755) if str(path) in (CHROMIUM_BINARY, CHROMEDRIVER_BINARY) else (stat.S_IFDIR | 0o755))
+    def version_invoke(args, **kw):
+        calls.append((args, kw))
+        return b'Chromium 145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 145.0.7584.1 (' + b'a' * 40 + b'-refs/heads/main@{#12345})\n'
+    def no_resources(*args, **kw):
+        raise AssertionError('resource reached before failed browser preflight')
+    def rejected(operation):
+        try:
+            operation()
+        except (RuntimeError, OSError):
+            return
+        raise AssertionError('unsafe browser preflight accepted')
+    with patch.object(Path, 'resolve', lambda p, **kw: p), patch.object(Path, 'lstat', metadata), \
+         patch.dict(globals(), {'invoke': version_invoke, 'port_free': no_resources, 'start': no_resources}):
+        assert browser_preflight() == (CHROMIUM_BINARY, CHROMEDRIVER_BINARY, b'145.0.7584.0', b'145.0.7584.1')
+        assert len(calls) == 2 and all(kw == {'timeout': 5} for _, kw in calls)
+        for binary in (CHROMIUM_BINARY, CHROMEDRIVER_BINARY):
+            for mode in (stat.S_IFREG | 0o777, stat.S_IFREG | 0o775, stat.S_IFREG | 0o757,
+                         stat.S_IFREG | 0o644, stat.S_IFDIR | 0o755, stat.S_IFLNK | 0o777):
+                calls.clear()
+                with patch.object(Path, 'lstat', lambda p, b=binary, m=mode: SimpleNamespace(st_mode=m) if str(p) == b else metadata(p)):
+                    rejected(browser_preflight)
+                assert not calls
+            calls.clear()
+            def missing(p):
+                if str(p) == binary:
+                    raise FileNotFoundError()
+                return metadata(p)
+            with patch.object(Path, 'lstat', missing):
+                rejected(browser_preflight)
+            assert not calls
+        calls.clear()
+        with patch.object(Path, 'resolve', lambda p, **kw: Path('/different') if str(p) == CHROMIUM_BINARY else p):
+            rejected(browser_preflight)
+        assert not calls
+        with patch.object(Path, 'lstat', lambda p: SimpleNamespace(st_mode=stat.S_IFLNK | 0o777) if str(p) == '/usr/local/share' else metadata(p)):
+            rejected(browser_preflight)
+        assert not calls
+        for raw in (b'', b'Google Chrome 145.0.7584.0\n', b'Chromium 145.0.7584.0 extra', b'x' * 257):
+            calls.clear()
+            def bad_version(args, **kw):
+                calls.append(args)
+                return raw
+            with patch.dict(globals(), {'invoke': bad_version}):
+                rejected(browser_preflight)
+            assert calls == [[CHROMIUM_BINARY, '--version']]
+        calls.clear()
+        def mismatch(args, **kw):
+            calls.append(args)
+            return b'Chromium 145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 146.0.7584.0\n'
+        with patch.dict(globals(), {'invoke': mismatch}):
+            rejected(browser_preflight)
+        assert calls == [[CHROMIUM_BINARY, '--version'], [CHROMEDRIVER_BINARY, '--version']]
+        for raw in (b'ChromeDriver 145.0.7584.0 SECRET', b'prefix ChromeDriver 145.0.7584.0', b'ChromeDriver 145.0.7584.0 (unknown)'):
+            rejected(lambda: browser_version(raw, driver=True))
+        # Run-level ordering: an unsafe binary must fail before even port probes.
+        calls.clear()
+        with patch.dict(globals(), {'identity': lambda: ('synthetic', 'synthetic', Path('/synthetic'))}), \
+             patch.object(Path, 'lstat', lambda p: SimpleNamespace(st_mode=stat.S_IFREG | 0o777)):
+            with redirect_stdout(StringIO()) as output:
+                rejected(run)
+            assert json.loads(output.getvalue()) == {'checkpoint': 'browser-preflight', 'result': 'FAIL', 'code': 'permission'}
+        assert not calls
+        assert browser_preflight_failure(RuntimeError('SECRET')) == 'unavailable'
+        assert browser_preflight_failure(FileNotFoundError('SECRET')) == 'missing'
+        assert browser_preflight_failure(subprocess.TimeoutExpired(['SECRET'], 5)) == 'timeout'
+
+
 def selftest():
     # No subprocess, credential generation, filesystem mutation or network.
+    browser_preflight_selftest()
     original = gates.invoke
     original_invoke, original_inspect = globals()['invoke'], gates.inspect
     gates.invoke = lambda *a, **kw: (_ for _ in ()).throw(AssertionError('unexpected subprocess'))
