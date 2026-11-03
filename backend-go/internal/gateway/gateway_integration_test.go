@@ -995,13 +995,34 @@ func TestPGGatewayGW12(t *testing.T) {
 	}
 }
 
-func waitBlockedPG(t *testing.T, f *gwFixture, tx pgx.Tx, n int) {
+// Capture both exact store backends before taking the observer transaction.
+// pg_stat_activity can cache a transaction snapshot before a lazy second pool
+// connection exists; the lock barrier must observe the actual contender PIDs.
+func storeBackendPIDs(t *testing.T, f *gwFixture) []int64 {
+	t.Helper()
+	first, e := f.pool.Acquire(f.ctx)
+	if e != nil {
+		t.Fatal("first barrier connection")
+	}
+	defer first.Release()
+	second, e := f.pool.Acquire(f.ctx)
+	if e != nil {
+		t.Fatal("second barrier connection")
+	}
+	defer second.Release()
+	pids := []int64{int64(first.Conn().PgConn().PID()), int64(second.Conn().PgConn().PID())}
+	if pids[0] == pids[1] {
+		t.Fatal("barrier requires distinct backends")
+	}
+	return pids
+}
+func waitBlockedPG(t *testing.T, f *gwFixture, tx pgx.Tx, pids []int64, n int) {
 	t.Helper()
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		var v int
-		e := tx.QueryRow(f.ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted AND pid IN(SELECT pid FROM pg_stat_activity WHERE application_name=$1)`, f.schema).Scan(&v)
+		e := tx.QueryRow(f.ctx, `SELECT count(DISTINCT pid) FROM pg_locks WHERE NOT granted AND pid=ANY($1::bigint[])`, pids).Scan(&v)
 		if e != nil {
 			t.Fatal("blocked lock query")
 		}
@@ -1035,6 +1056,7 @@ func privateNonceCAS(t *testing.T) {
 	f := newGW(t)
 	d := f.enroll(t)
 	a, sg := consumeFixture(t, f, d, "conn_same")
+	pids := storeBackendPIDs(t, f)
 	hold, e := f.owner.Begin(f.ctx)
 	if e != nil {
 		t.Fatal("gate begin")
@@ -1049,7 +1071,7 @@ func privateNonceCAS(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() { h, e := f.store.AcquireConnection(f.ctx, a); ch <- acquired{h, e} }()
 	}
-	waitBlockedPG(t, f, hold, 2)
+	waitBlockedPG(t, f, hold, pids, 2)
 	if e = hold.Commit(f.ctx); e != nil {
 		t.Fatal("gate commit")
 	}
@@ -1136,6 +1158,7 @@ func privateAcquireExpiry(t *testing.T) {
 	}
 	next, sg := consumeFixture(t, f, d, "conn_new")
 	before := f.count(t, `SELECT count(*) FROM audit`)
+	pids := storeBackendPIDs(t, f)
 	hold, e := f.owner.Begin(f.ctx)
 	if e != nil {
 		t.Fatal("command hold")
@@ -1149,7 +1172,7 @@ func privateAcquireExpiry(t *testing.T) {
 	}
 	ch := make(chan error, 1)
 	go func() { _, e := f.store.AcquireConnection(f.ctx, next); ch <- e }()
-	waitBlockedPG(t, f, hold, 1)
+	waitBlockedPG(t, f, hold, pids, 1)
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {

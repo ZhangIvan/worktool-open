@@ -108,11 +108,34 @@ def result_events(raw):
 def test_diagnostics(raw):
     # Fixed IDs, source locations and enumerated SQLSTATE only; NEVER Output text.
     failed, states, cases, locations = set(), set(), set(), set()
+    terminal = {test: [] for test in TESTS}
     approved_cases = TESTS | {
         'TestPGGatewayGW03/legacy_two_caps',
         'TestPGGatewayGW03/explicit_11_no_fallback',
         'TestPGGatewayGW08/private_consumed_nonce_cas',
         'TestPGGatewayGW08/private_late_command_lock_expiry',
+        'TestPGGatewayGW10/cross_tenant',
+        'TestPGGatewayGW10/wrong_session',
+        'TestPGGatewayGW10/sequence_gap',
+        'TestPGGatewayGW10/stale_timestamp',
+        'TestPGGatewayGW10/nul_result_and_wrong_attempt',
+        'TestPGGatewayGW10/rate_bound',
+        'TestPGGatewayGW10/migration_0008_guards',
+        'TestPGGatewayGW10/migration_0008_guards/old_check_name_drift',
+        'TestPGGatewayGW10/migration_0008_guards/old_check_definition_drift',
+        'TestPGGatewayGW10/migration_0008_guards/old_check_missing',
+        'TestPGGatewayGW10/migration_0008_guards/result_column_type_drift',
+        'TestPGGatewayGW10/migration_0008_guards/expired_but_unrevoked_session',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/malformed_json',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_null',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_array',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_string',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_number',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_boolean',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/sql_null',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/escaped_nul_object',
+        'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/empty_object',
     }
     approved_files = {'gateway_integration_test.go', 'migration_guard_integration_test.go'}
     approved_states = {'23503', '23505', '23514', '40001', '40P01', '57014', '55P03'}
@@ -123,6 +146,8 @@ def test_diagnostics(raw):
             continue
         if not isinstance(event, dict):
             continue
+        if event.get('Test') in TESTS and event.get('Action') in {'pass', 'fail', 'skip'}:
+            terminal[event['Test']].append(event['Action'])
         if event.get('Action') == 'fail' and event.get('Test') in TESTS:
             failed.add(event['Test'])
         if event.get('Action') == 'fail' and event.get('Test') in approved_cases:
@@ -135,6 +160,8 @@ def test_diagnostics(raw):
                     if file in approved_files:
                         locations.add((event['Test'], file, int(line)))
     return {'failedTests': sorted(failed), 'sqlstates': sorted(states),
+            'groupOutcomes': [{'test': test, 'terminal': events or ['NOT_OBSERVED']}
+                              for test, events in sorted(terminal.items())],
             'failedCases': sorted(cases),
             'sourceLocations': [{'test': t, 'file': f, 'line': n}
                                 for t, f, n in sorted(locations)[:64]]}
@@ -278,7 +305,8 @@ def selftest():
         raise AssertionError('unsafe DSN accepted')
     diagnostics = test_diagnostics(b'{"Action":"fail","Test":"not_allowed_secret","Output":"postgresql://secret SQLSTATE=23503 SQLSTATE=SECRET"}')
     assert diagnostics == {'failedTests': [], 'sqlstates': ['23503'],
-                           'failedCases': [], 'sourceLocations': []}
+                           'failedCases': [], 'sourceLocations': [],
+                           'groupOutcomes': [{'test': test, 'terminal': ['NOT_OBSERVED']} for test in sorted(TESTS)]}
     assert 'secret' not in json.dumps(diagnostics)
     safe = test_diagnostics('\n'.join(json.dumps(x) for x in [
         {'Action': 'output', 'Test': 'TestPGGatewayGW03/explicit_11_no_fallback',
@@ -293,6 +321,15 @@ def selftest():
     assert safe['sourceLocations'] == [{'test': 'TestPGGatewayGW03/explicit_11_no_fallback',
                                        'file': 'gateway_integration_test.go', 'line': 625}]
     assert 'secret' not in json.dumps(safe) and 'payload' not in json.dumps(safe)
+    outcomes = test_diagnostics('\n'.join(json.dumps({'Action': action, 'Test': test})
+        for test, action in [('TestPGGatewayGW03', 'pass'), ('TestPGGatewayGW08', 'fail'),
+                             ('TestPGGatewayGW10', 'skip')]).encode())['groupOutcomes']
+    assert len(outcomes) == 34
+    indexed = {row['test']: row['terminal'] for row in outcomes}
+    assert indexed['TestPGGatewayGW03'] == ['pass']
+    assert indexed['TestPGGatewayGW08'] == ['fail']
+    assert indexed['TestPGGatewayGW10'] == ['skip']
+    assert indexed['TestPGGatewayGW01'] == ['NOT_OBSERVED']
     print('PASS pure selftest: resource/identity/mount/port gates, missing-env and missing/skip/fail result gates; PG NOT_RUN')
 
 
