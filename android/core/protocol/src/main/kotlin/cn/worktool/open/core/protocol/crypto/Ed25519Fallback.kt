@@ -20,7 +20,7 @@ import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec
  * 选型审计理由（对 T2.6 DoD「AUD-07 复核依赖面」）：
  * 1. **零传递依赖**（POM 无 compile 依赖；构建脚本 `pinEd25519Fallback` 任务
  *    机械断言解析结果恰好 1 个工件）——依赖面不随引入扩张；
- * 2. **纯 JVM**（jar 仅 class 文件，无 native/.so/DexClassLoader 面；Java 6
+ * 2. **纯 JVM**（jar 仅 class 文件，无 native/.so/动态类加载面；Java 6
  *    字节码 → API 24+ 全覆盖），不经 JCA Provider 注册即可直接调用；
  * 3. **单一用途**：仅 Ed25519（非 BouncyCastle 式全栈加密库，符合豁免的
  *    「窄」边界）；
