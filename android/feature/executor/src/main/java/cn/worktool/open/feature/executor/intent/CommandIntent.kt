@@ -90,16 +90,31 @@ sealed interface CommandIntent {
 
     // ---- 查询类 501/502/509（docs/05 P0 首批行；只读 → FR-53 L0） ----
 
-    /** 501 群列表查询（FR-28）：导航+分页读取 → 结构化 [cn.worktool.open.feature.executor.query.QueryResult.GroupList]。 */
+    /**
+     * 501 群信息查询（FR-28；2026-11-04 会话 10 对齐原版语义）：
+     * 原版 `WeworkGetImpl.getGroupInfo(selectList)` = **按名单逐群进入读取**，
+     * 空名单走「群管理页」枚举——企微 5.0.x 已无该入口（原版同构建同样
+     * 「未找到群聊入口」失败），故空名单如实失败而非虚构枚举。
+     * 名单项 = 消息列表会话标题（未命名群=成员名串，如「成员甲、成员乙、…」）。
+     */
     data class GetGroupList(
+        val groupNames: List<String> = emptyList(),
         val maxPages: Int = DEFAULT_MAX_PAGES,
     ) : CommandIntent {
         override val commandType: Int get() = MessageTypes.GET_GROUP_INFO
-        override val targetDescription: String get() = "通讯录「群聊」列表（全量分页）"
+        override val targetDescription: String get() =
+            if (groupNames.isEmpty()) {
+                "群信息查询（selectList 空，无枚举入口）"
+            } else {
+                "群信息查询 " + groupNames.take(3) + if (groupNames.size > 3) " 等${groupNames.size}群" else ""
+            }
 
         companion object {
-            /** 翻页护栏（防界面异常无界滚动；对齐 PassFriend 单轮上限口径）。 */
+            /** 翻页护栏（历史枚举口径保留；按名单路径未用）。 */
             const val DEFAULT_MAX_PAGES: Int = 50
+
+            /** 名单护栏（对齐原版逐群循环 + 防界面异常无界循环）。 */
+            const val MAX_GROUPS: Int = 50
         }
     }
 

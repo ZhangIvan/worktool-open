@@ -161,6 +161,23 @@ class IntentNormalizerTest {
     }
 
     @Test
+    fun `501-selectList名单进意图（会话10对齐原版）`() {
+        val b = bean(
+            MessageTypes.GET_GROUP_INFO,
+            extras = mapOf(
+                "selectList" to kotlinx.serialization.json.JsonArray(
+                    listOf(
+                        kotlinx.serialization.json.JsonPrimitive("成员甲、成员乙、成员丙、成员丁"),
+                        kotlinx.serialization.json.JsonPrimitive("交付群"),
+                    ),
+                ),
+            ),
+        )
+        val intent = (normalizer.normalize(b) as NormalizedIntent.Valid).intent as CommandIntent.GetGroupList
+        assertEquals(listOf("成员甲、成员乙、成员丙、成员丁", "交付群"), intent.groupNames)
+    }
+
+    @Test
     fun `509-filePath候选字段可选`() {
         val withPath = normalizer.normalize(
             bean(MessageTypes.GET_LOCAL_FILE, extras = mapOf("filePath" to JsonPrimitive("/sdcard/Download/手册.pdf"))),

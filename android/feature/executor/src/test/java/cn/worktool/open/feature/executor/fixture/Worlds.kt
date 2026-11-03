@@ -223,37 +223,29 @@ class PassFriendWorld(
 
 /** 501 GET_GROUP_INFO 世界（通讯录 → 群聊 → 分页懒加载）。 */
 class GroupListWorld(
-    /** 群分页数据（首屏=第 1 页，滚动逐页追加）。 */
-    groupPages: List<List<String>> = listOf(
-        listOf("交付群", "客户群", "外部合作群"),
-        listOf("测试群", "售后群"),
-        listOf("最后一批群"),
-    ),
-    infiniteScroll: Boolean = false,
-    withContactsTab: Boolean = true,
-    withGroupChatEntry: Boolean = true,
+    /** 群名名单（= 消息列表会话标题；未命名群=成员名串）。 */
+    groupNames: List<String> = listOf("成员甲、成员乙、成员丙、成员丁"),
+    /** 未命名群聊天页头（「群聊(N)」形态）。 */
+    chatHeader: String = "群聊(4)",
+    conversationPresent: Boolean = true,
+    /** false = 点击会话项不切屏（群头永不出现 → 超时场景）。 */
+    chatOpens: Boolean = true,
 ) {
     val clock = FakeClock()
     val gate = FakePauseGate()
     val home = HomeFixture(
-        conversations = listOf("工作群"),
-        withContactsTab = withContactsTab,
+        conversations = if (conversationPresent) groupNames + listOf("工作群") else listOf("工作群"),
     )
-    val contacts = ContactsFixture(
-        withNewFriendsEntry = true,
-        withGroupChatEntry = withGroupChatEntry,
-    )
-    val groupList = GroupListFixture(pages = groupPages, infinite = infiniteScroll)
-
+    val chat = ChatFixture(title = chatHeader)
     val driver = FakeUiDriver(clock).apply {
         show(home.screen)
-        if (withContactsTab) {
-            onClick(home.screen, home.contactsTab!!) { push(contacts.screen) }
+        if (chatOpens && conversationPresent) {
+            groupNames.forEach { name ->
+                home.conversationNodes[name]?.let { node ->
+                    onClick(home.screen, node) { push(chat.screen) }
+                }
+            }
         }
-        if (withGroupChatEntry) {
-            onClick(contacts.screen, contacts.groupChatEntry!!) { push(groupList.screen) }
-        }
-        onScroll(groupList.screen, groupList.listContainer) { groupList.appendNextPage() }
     }
 }
 

@@ -15,6 +15,9 @@ object WeworkSelectorIds {
     /** 会话列表项名称文本（203/207/225 定位目标会话）。 */
     const val CONVERSATION_ITEM_NAME = "wework.conversation.item_name"
 
+    /** 主界面底部「消息」Tab（501 会话定位入口，对齐原版 goHome）。 */
+    const val MESSAGE_TAB = "wework.nav.message_tab"
+
     /** 聊天页标题（点击进入群设置）。 */
     const val CHAT_TITLE = "wework.chat.title"
 
@@ -364,6 +367,10 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
         val DEFAULTS: Map<String, SelectorDef> = mapOf(
             WeworkSelectorIds.CONVERSATION_ITEM_NAME to sel(
                 resourceId = "com.tencent.wework:id/conversation_item_name",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.MESSAGE_TAB to sel(
+                text = "消息",
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.CHAT_TITLE to sel(

@@ -87,6 +87,33 @@ internal object CommonSteps {
         StepOutcome.Success
     }
 
+    /** 返回上一级界面（driver.goBack 真机=系统返回）。 */
+    fun goBack(stepId: String = "go-back", what: String = "返回上一级"): PlanStep = PlanStep(
+        id = stepId,
+        description = what,
+    ) { driver ->
+        if (driver.goBack()) StepOutcome.Success
+        else StepOutcome.Failure(ExecutorErrorCodes.ACTION_REJECTED, "系统返回被拒绝（$what）")
+    }
+
+    /** 切换到底部「消息」Tab（501 会话定位入口，会话 10 对齐原版 goHome）；Tab 缺失 → NODE_NOT_FOUND。 */
+    fun openMessageTab(rules: WeworkScreenRules): PlanStep = PlanStep(
+        id = "open-message-tab",
+        description = "切换到底部「消息」Tab",
+    ) { driver ->
+        val root = driver.currentRoot()
+            ?: return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.NODE_NOT_FOUND,
+                "界面根节点不可得（无障碍服务未连接或前台无窗）",
+            )
+        val tab = rules.find(root, WeworkSelectorIds.MESSAGE_TAB)
+            ?: return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.NODE_NOT_FOUND,
+                "「消息」Tab 缺失（当前不在主界面？）",
+            )
+        clickOrReject(driver, tab, "「消息」Tab")
+    }
+
     /** 切换到底部「通讯录」Tab（212/501/502 入口）；Tab 缺失 → NODE_NOT_FOUND。 */
     fun openContactsTab(
         rules: WeworkScreenRules,

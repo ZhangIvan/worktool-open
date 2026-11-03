@@ -30,7 +30,7 @@ class HomeFixture(
     withContactsTab: Boolean = true,
     withPlusButton: Boolean = true,
 ) {
-    val messageTab: FakeExecutorNode = fakeNode(text = "消息", cls = TEXT_VIEW)
+    val messageTab: FakeExecutorNode = fakeNode(text = "消息", cls = TEXT_VIEW, clickable = true)
     val contactsTab: FakeExecutorNode? =
         if (withContactsTab) fakeNode(text = "通讯录", cls = TEXT_VIEW, clickable = true) else null
     val plusButton: FakeExecutorNode? =

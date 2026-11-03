@@ -29,7 +29,9 @@ class IntentNormalizer(
         MessageTypes.PASS_ALL_FRIEND_REQUEST -> NormalizedIntent.Valid(
             CommandIntent.PassFriend(),
         )
-        MessageTypes.GET_GROUP_INFO -> NormalizedIntent.Valid(CommandIntent.GetGroupList())
+        MessageTypes.GET_GROUP_INFO -> NormalizedIntent.Valid(
+            CommandIntent.GetGroupList(groupNames = selectList(bean)),
+        )
         MessageTypes.GET_FRIEND_INFO -> NormalizedIntent.Valid(CommandIntent.GetFriendList())
         MessageTypes.GET_LOCAL_FILE -> normalizeGetLocalFile(bean)
 
@@ -556,8 +558,17 @@ class IntentNormalizer(
         extraText?.takeIf { it.isNotBlank() }
             ?: extraString(PayloadFields.EXTRA_TEXT_FIELD)?.takeIf { it.isNotBlank() }
 
-    /** messageList（227/228）→ RelayItem（原文定位键非空条目）。 */
-    private fun relayItems(bean: WeworkMessageBean): List<CommandIntent.RelayItem> {
+    /** selectList（501 群名名单，2026-11-04 会话 10 对齐原版）→ 非空字符串列表。 */
+    private fun selectList(bean: WeworkMessageBean): List<String> {
+        val raw = bean.extras["selectList"] as? kotlinx.serialization.json.JsonArray
+            ?: return emptyList()
+        return raw.mapNotNull { el ->
+            (el as? kotlinx.serialization.json.JsonPrimitive)
+                ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    /** messageList（227/228）→ RelayItem（原文定位键非空条目）。 */    private fun relayItems(bean: WeworkMessageBean): List<CommandIntent.RelayItem> {
         val raw = bean.extras[PayloadFields.MESSAGE_LIST] as? kotlinx.serialization.json.JsonArray
             ?: return emptyList()
         return raw.mapNotNull { el ->

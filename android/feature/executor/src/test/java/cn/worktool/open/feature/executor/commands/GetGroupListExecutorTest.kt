@@ -19,8 +19,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 501 GET_GROUP_INFO 执行器场景（每执行器 ≥5：分页成功/入口缺失/超时/暂停/
- * 干跑/无界翻页护栏；docs/05 P0 首批行「501/502 群/好友列表查询」）。
+ * 501 GET_GROUP_INFO 执行器场景（2026-11-04 会话 10 **对齐原版语义重写**：
+ * selectList 按名单逐群「消息列表定位 → 进入 → 读群头」；空名单如实失败）。
  */
 class GetGroupListExecutorTest {
 
@@ -31,65 +31,110 @@ class GetGroupListExecutorTest {
 
     private fun runner(world: GroupListWorld) = CommandRunner(world.driver, world.gate)
 
-    // ---- ① 成功：导航 + 分页读取至收敛 + 结构化结果 ----
+    // ---- ① 成功：按名单进入群聊页并读取群显示名 ----
 
     @Test
-    fun `成功-三页群名全量收集并输出结构化结果`() {
-        val world = GroupListWorld()
-        val report = runner(world).execute(CommandIntent.GetGroupList(), registry())
+    fun `成功-名单群进入并读群头输出结构化结果`() {
+        val world = GroupListWorld(groupNames = listOf("成员甲、成员乙、成员丙、成员丁"), chatHeader = "群聊(4)")
+        val report = runner(world).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("成员甲、成员乙、成员丙、成员丁")),
+            registry(),
+        )
 
         assertEquals(ExecutionStatus.SUCCEEDED, report.status)
         assertEquals(MessageTypes.GET_GROUP_INFO, report.commandType)
         assertEquals(RiskLevel.L0, report.riskLevel)
         assertEquals(
-            listOf("交付群", "客户群", "外部合作群", "测试群", "售后群", "最后一批群"),
+            listOf("群聊(4)"),
             (sink.results.single().second as QueryResult.GroupList).groups,
         )
-        assertEquals(MessageTypes.GET_GROUP_INFO, sink.results.single().first)
-        // 页边界：2 步导航 + 50 页读取（3 页实读 + 收敛空过）+ 校验 + 输出
-        val ids = report.executedSteps.map { it.id }
-        assertEquals(listOf("open-contacts-tab", "open-group-list"), ids.take(2))
-        assertEquals((1..50).map { "collect-page-$it" }, ids.subList(2, 2 + 50))
-        assertEquals(listOf("verify-converged", "emit-result"), ids.takeLast(2))
-        // 滚动次数 = 实际翻页数（第 3 页滚动后第 4 页无新增即收敛）
-        assertEquals(3, world.driver.actionLog.count { it.startsWith("scroll(") })
+        // 步骤序：消息 Tab → 定位群 → 读群头 → 返回 → 输出
+        assertEquals(
+            listOf("open-message-tab", "open-group-0", "read-group-header-0", "back-to-list-0", "emit-result"),
+            report.executedSteps.map { it.id },
+        )
     }
 
-    // ---- ② 节点缺失：无通讯录 Tab ----
+    // ---- ② 多群名单：逐群循环（Tab 仅开一次，返回后定位下一个） ----
 
     @Test
-    fun `节点缺失-主界面无通讯录Tab则首步失败零结果`() {
-        val world = GroupListWorld(withContactsTab = false)
+    fun `成功-双群名单逐群循环`() {
+        val world = GroupListWorld(
+            groupNames = listOf("交付群", "售后群"),
+            chatHeader = "群聊(7)",
+        )
+        val report = runner(world).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("交付群", "售后群")),
+            registry(),
+        )
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        assertEquals(listOf("群聊(7)", "群聊(7)"), (sink.results.single().second as QueryResult.GroupList).groups)
+        assertEquals(
+            listOf("open-message-tab", "open-group-0", "read-group-header-0", "back-to-list-0",
+                "open-group-1", "read-group-header-1", "back-to-list-1", "emit-result"),
+            report.executedSteps.map { it.id },
+        )
+    }
+
+    // ---- ③ 空名单：如实失败（企微 5.0.x 无枚举入口） ----
+
+    @Test
+    fun `空名单-NODE_NOT_FOUND且说明枚举入口缺失`() {
+        val world = GroupListWorld()
         val report = runner(world).execute(CommandIntent.GetGroupList(), registry())
 
         assertEquals(ExecutionStatus.FAILED, report.status)
         assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
-        assertEquals("open-contacts-tab", report.errorStepId)
+        assertEquals("require-select-list", report.errorStepId)
+        assertTrue(report.errorReason!!.contains("企微 5.0"))
         assertEquals("零结构化结果外发", 0, sink.results.size)
     }
 
-    // ---- ③ 超时：群聊入口不出现 ----
+    // ---- ④ 会话缺失：消息列表无目标会话 ----
 
     @Test
-    fun `超时-通讯录页无群聊入口则等待超时`() {
-        val world = GroupListWorld(withGroupChatEntry = false)
-        val report = runner(world).execute(CommandIntent.GetGroupList(), registry())
+    fun `节点缺失-消息列表无目标会话则定位失败`() {
+        val world = GroupListWorld(groupNames = listOf("不存在的群"), conversationPresent = false)
+        val report = runner(world).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("不存在的群")),
+            registry(),
+        )
+
+        assertEquals(ExecutionStatus.FAILED, report.status)
+        assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
+        assertEquals("open-group-0", report.errorStepId)
+        assertEquals(0, sink.results.size)
+    }
+
+    // ---- ⑤ 超时：点击后聊天页群头不出现 ----
+
+    @Test
+    fun `超时-会话进入后群头不出现`() {
+        val world = GroupListWorld(groupNames = listOf("交付群"), chatOpens = false)
+        val report = runner(world).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("交付群")),
+            registry(),
+        )
 
         assertEquals(ExecutionStatus.FAILED, report.status)
         assertEquals(ExecutorErrorCodes.STEP_TIMEOUT, report.errorCode)
-        assertEquals("open-group-list", report.errorStepId)
+        assertEquals("read-group-header-0", report.errorStepId)
         assertTrue(world.clock.now >= timeouts.awaitNodeMs)
         assertEquals(0, sink.results.size)
     }
 
-    // ---- ④ 暂停拦截（FR-52） ----
+    // ---- ⑥ 暂停拦截（FR-52）与干跑（FR-54） ----
 
     @Test
     fun `暂停拦截-执行前已暂停则零动作零结果PAUSED`() {
         val world = GroupListWorld()
         world.gate.paused = true
         world.gate.source = "console"
-        val report = runner(world).execute(CommandIntent.GetGroupList(), registry())
+        val report = runner(world).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("交付群")),
+            registry(),
+        )
 
         assertEquals(ExecutionStatus.PAUSED, report.status)
         assertEquals(ExecutorErrorCodes.PAUSED_BY_USER_TAKEOVER, report.errorCode)
@@ -98,32 +143,19 @@ class GetGroupListExecutorTest {
         assertEquals(0, sink.results.size)
     }
 
-    // ---- ⑤ 干跑（FR-54）：只读 L0 查询零界面动作 ----
-
     @Test
-    fun `干跑-报告分页计划与L0且零动作零结果`() {
+    fun `干跑-报告名单计划与L0且零动作零结果`() {
         val world = GroupListWorld()
-        val dry = runner(world).dryRun(CommandIntent.GetGroupList(), registry())
+        val dry = runner(world).dryRun(
+            CommandIntent.GetGroupList(groupNames = listOf("交付群", "售后群")),
+            registry(),
+        )
 
         assertEquals(RiskLevel.L0, dry.riskLevel)
-        assertTrue(dry.paramsSummary.contains("maxPages=50"))
-        assertTrue(dry.plannedSteps.any { it.startsWith("collect-page-1:") })
+        assertTrue(dry.paramsSummary.contains("groups=2"))
+        assertTrue(dry.plannedSteps.any { it.startsWith("open-group-0:") })
         assertTrue(dry.plannedSteps.any { it.startsWith("emit-result:") })
         assertEquals(0, world.driver.actionLog.size)
         assertEquals("干跑不外发结果", 0, sink.results.size)
-    }
-
-    // ---- ⑥ 无界翻页护栏（FR-53 审慎默认同源） ----
-
-    @Test
-    fun `护栏-翻页永不收敛则VERIFY_FAILED且部分结果不外发`() {
-        val world = GroupListWorld(infiniteScroll = true)
-        val report = runner(world).execute(CommandIntent.GetGroupList(maxPages = 3), registry())
-
-        assertEquals(ExecutionStatus.FAILED, report.status)
-        assertEquals(ExecutorErrorCodes.VERIFY_FAILED, report.errorCode)
-        assertEquals("verify-converged", report.errorStepId)
-        assertEquals("部分读取结果不外发（宁缺勿错）", 0, sink.results.size)
-        assertEquals("护栏页数即滚动上限", 3, world.driver.actionLog.count { it.startsWith("scroll(") })
     }
 }
