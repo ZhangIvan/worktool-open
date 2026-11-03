@@ -26,6 +26,7 @@ android {
     }
     buildFeatures { resValues = true }
     testOptions { unitTests.isReturnDefaultValues = false }
+    sourceSets.getByName("test").resources.srcDir("../../contracts/interop")
 }
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.2")

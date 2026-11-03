@@ -1,0 +1,167 @@
+{
+  "clock": "2026-11-03T01:00:00Z",
+  "frames": [
+    {
+      "direction": "server_to_device",
+      "frame": {
+        "version": "1.0",
+        "kind": "command",
+        "eventId": "evt_command",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 1,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "commandId": "cmd_text",
+          "attemptId": "attempt_text",
+          "capability": "message.send_text",
+          "expiresAt": "2026-11-03T01:02:00Z",
+          "policyVersion": 7,
+          "requiresLocalConfirmation": false,
+          "payload": {
+            "targetId": "synthetic_target_001",
+            "text": "合成 Fixture 😀\nquote \" slash \\ <>&   "
+          },
+          "payloadDigest": "6a40e7bf2e15ae90c688a997f32c33912cfb71b22a655384cb142a1d6c4df8fa"
+        }
+      }
+    },
+    {
+      "direction": "device_to_server",
+      "frame": {
+        "version": "1.0",
+        "kind": "accepted",
+        "eventId": "evt_accepted",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 1,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "commandId": "cmd_text",
+          "attemptId": "attempt_text"
+        }
+      }
+    },
+    {
+      "direction": "server_to_device",
+      "frame": {
+        "version": "1.0",
+        "kind": "transport_ack",
+        "eventId": "evt_accept_ack",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 2,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "ackEventId": "evt_accepted"
+        }
+      }
+    },
+    {
+      "direction": "device_to_server",
+      "frame": {
+        "version": "1.0",
+        "kind": "started",
+        "eventId": "evt_started",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 2,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "commandId": "cmd_text",
+          "attemptId": "attempt_text"
+        }
+      }
+    },
+    {
+      "direction": "server_to_device",
+      "frame": {
+        "version": "1.0",
+        "kind": "transport_ack",
+        "eventId": "evt_started_ack",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 3,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "ackEventId": "evt_started"
+        }
+      }
+    },
+    {
+      "direction": "device_to_server",
+      "frame": {
+        "version": "1.0",
+        "kind": "execution_result",
+        "eventId": "evt_result",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 3,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "commandId": "cmd_text",
+          "attemptId": "attempt_text",
+          "status": "succeeded",
+          "effectState": "applied",
+          "code": "APP_LOCAL_SYNTHETIC_APPLIED",
+          "evidenceRefs": [
+            "journal_e916eea8523bb665c3c98bed91721de2f3926fd3"
+          ]
+        }
+      }
+    },
+    {
+      "direction": "server_to_device",
+      "frame": {
+        "version": "1.0",
+        "kind": "result_ack",
+        "eventId": "evt_result_ack",
+        "tenantId": "tenant_fixture",
+        "deviceId": "device_fixture",
+        "sessionId": "session_fixture",
+        "seq": 4,
+        "sentAt": "2026-11-03T01:00:00Z",
+        "mode": "synthetic",
+        "body": {
+          "ackEventId": "evt_result",
+          "commandId": "cmd_text"
+        }
+      }
+    }
+  ],
+  "hello": {
+    "kind": "hello",
+    "supportedVersions": [
+      "1.0"
+    ],
+    "mode": "synthetic",
+    "capabilities": [
+      "message.send_text",
+      "file.export"
+    ]
+  },
+  "helloAck": {
+    "kind": "hello_ack",
+    "version": "1.0",
+    "tenantId": "tenant_fixture",
+    "deviceId": "device_fixture",
+    "sessionId": "session_fixture",
+    "policyVersion": 7,
+    "serverTime": "2026-11-03T01:00:00Z",
+    "heartbeatIntervalSec": 15,
+    "maxFrameBytes": 65536,
+    "mode": "synthetic"
+  }
+}

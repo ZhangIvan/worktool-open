@@ -2,10 +2,10 @@ name: Go backend foundation checks
 on:
   pull_request:
     branches: [main]
-    paths: ['backend-go/**', '.github/workflows/go-foundation.yml']
+    paths: ['contracts/interop/**', 'backend-go/**', '.github/workflows/go-foundation.yml']
   push:
     branches: [worktool/synthetic-prototype]
-    paths: ['backend-go/**', '.github/workflows/go-foundation.yml']
+    paths: ['contracts/interop/**', 'backend-go/**', '.github/workflows/go-foundation.yml']
 permissions:
   contents: read
 concurrency:

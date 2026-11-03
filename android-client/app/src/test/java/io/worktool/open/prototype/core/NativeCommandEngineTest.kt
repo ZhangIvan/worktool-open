@@ -30,10 +30,10 @@ class NativeCommandEngineTest {
         override fun close()=Unit
     }
     private class Link:DeviceLink {
-        var online=true;var failStarted=false;val sent=mutableListOf<Pair<String,JSONObject>>()
+        var online=true;var failStarted=false;var eventIds=emptyMap<String,String>();val sent=mutableListOf<Pair<String,JSONObject>>()
         override fun enroll(endpoint:String,enrollmentId:String,enrollmentToken:String,callback:(Result<Identity>)->Unit)=error("NOT_USED")
         override fun connect(identity:Identity,listener:LinkListener)=Unit
-        override fun send(kind:String,body:JSONObject):String?{if(kind=="started"&&failStarted){online=false;return null};sent.add(kind to JSONObject(body.toString()));return "sent_event_${sent.size}"}
+        override fun send(kind:String,body:JSONObject):String?{if(kind=="started"&&failStarted){online=false;return null};sent.add(kind to JSONObject(body.toString()));return eventIds[kind] ?: "sent_event_${sent.size}"}
         override fun connected()=online
         override fun disconnect(){online=false}
     }
@@ -80,4 +80,57 @@ class NativeCommandEngineTest {
         assertTrue(h.journal.effects.isEmpty())
         assertTrue(h.engine.isPaused())
     }
+    private fun sharedExchange():JSONObject = javaClass.getResourceAsStream("/android-go-1.0.json")!!
+        .bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
+
+    @Test fun sharedGoExchangeExecutesOnceAndAcknowledgesExactResult() {
+        val fixture=sharedExchange(); val frames=fixture.getJSONArray("frames")
+        assertEquals(WireValidation.canonicalDigest(fixture.getJSONObject("hello")),
+            WireValidation.canonicalDigest(io.worktool.open.prototype.policy.ConnectionProfile.SYNTHETIC.hello()))
+        val command=frames.getJSONObject(0).getJSONObject("frame")
+        val hello=fixture.getJSONObject("helloAck")
+        val clock=java.time.Instant.parse(fixture.getString("clock")).toEpochMilli()
+        val j=MemoryJournal();val l=Link();val e=Events()
+        l.eventIds=mapOf("accepted" to "evt_accepted", "started" to "evt_started", "execution_result" to "evt_result")
+        val engine=NativeCommandEngine(j,l,e){clock}
+        engine.ready(Binding(hello.getString("tenantId"),hello.getString("deviceId"),hello.getString("sessionId"),hello.getLong("policyVersion"),clock))
+        engine.resume()
+        engine.frame(command)
+        // Re-delivery of the same event must not repeat the local effect.
+        engine.frame(JSONObject(command.toString()))
+        assertEquals(1,j.effects.size)
+        assertEquals("synthetic_inbox",j.effects.single().kind)
+        assertEquals(command.getJSONObject("body").getJSONObject("payload").getString("text"),j.effects.single().value)
+        for (i in 1 until frames.length()) {
+            val entry=frames.getJSONObject(i);val f=entry.getJSONObject("frame")
+            if(entry.getString("direction")=="device_to_server") {
+                val actual=l.sent.first { it.first==f.getString("kind") }.second
+                assertEquals(WireValidation.canonicalDigest(f.getJSONObject("body")),WireValidation.canonicalDigest(actual))
+            } else engine.frame(f)
+        }
+        assertTrue(j.command("cmd_text")!!.acked)
+        assertTrue(j.pendingResults().isEmpty())
+        assertTrue(e.errors.isEmpty())
+    }
+
+    @Test fun sharedUnackedResultSurvivesEngineReplacementWithoutEffectReplay() {
+        val fixture=sharedExchange();val command=fixture.getJSONArray("frames").getJSONObject(0).getJSONObject("frame")
+        val clock=java.time.Instant.parse(fixture.getString("clock")).toEpochMilli()
+        val b=Binding("tenant_fixture","device_fixture","session_fixture",7,clock)
+        val j=MemoryJournal();val l=Link();val e=Events()
+        val first=NativeCommandEngine(j,l,e){clock};first.ready(b);first.resume();first.frame(command)
+        assertFalse(j.command("cmd_text")!!.acked)
+        val nextLink=Link();nextLink.eventIds=mapOf("execution_result" to "evt_recovered_result")
+        val next=NativeCommandEngine(j,nextLink,e){clock};next.ready(b.copy(sessionId="session_recovered"))
+        assertEquals(1,j.effects.size)
+        assertEquals(1,nextLink.sent.count{it.first=="execution_result"})
+        val ack=JSONObject(fixture.getJSONArray("frames").getJSONObject(6).getJSONObject("frame").toString())
+            .put("sessionId","session_recovered").put("seq",1).put("eventId","evt_recovered_ack")
+        ack.getJSONObject("body").put("ackEventId","evt_recovered_result")
+        next.frame(ack)
+        assertTrue(j.command("cmd_text")!!.acked)
+        assertTrue(e.errors.isEmpty())
+        // MemoryJournal validates engine recovery, not SQLite process-death durability.
+    }
+
 }

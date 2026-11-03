@@ -2,10 +2,10 @@ name: Android native and isolated lab checks
 on:
   pull_request:
     branches: [main]
-    paths: ['android-client/**', '.github/workflows/android.yml']
+    paths: ['contracts/interop/**', 'android-client/**', '.github/workflows/android.yml']
   push:
     branches: [worktool/synthetic-prototype]
-    paths: ['android-client/**', '.github/workflows/android.yml']
+    paths: ['contracts/interop/**', 'android-client/**', '.github/workflows/android.yml']
 permissions:
   contents: read
 concurrency:
