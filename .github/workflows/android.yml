@@ -29,15 +29,16 @@ on:
 # WORKTOOL_STORE_FILE 由落盘步骤写入 GITHUB_ENV（绝对路径）——build.gradle.kts
 # 对绝对路径按原样解析。WORKTOOL_STORE_FILE 不在 job env 静态注入，唯一来源即
 # 落盘步骤，避免 job env 与 GITHUB_ENV 双源覆盖歧义。
-env:
-  WORKTOOL_STORE_PASSWORD: ${{ secrets.WORKTOOL_STORE_PASSWORD }}
-  WORKTOOL_KEY_ALIAS: ${{ secrets.WORKTOOL_KEY_ALIAS }}
-  WORKTOOL_KEY_PASSWORD: ${{ secrets.WORKTOOL_KEY_PASSWORD }}
-
+# 修正（W-M4 收口）：secrets 上下文在 workflow 级 env 不可用（GH Actions 限制），
+# 移入 job 级 env。
 jobs:
   build:
     name: assembleDebug + test（JDK17 / AGP 8.5 / Gradle 8.7）
     runs-on: ubuntu-latest
+    env:
+      WORKTOOL_STORE_PASSWORD: ${{ secrets.WORKTOOL_STORE_PASSWORD }}
+      WORKTOOL_KEY_ALIAS: ${{ secrets.WORKTOOL_KEY_ALIAS }}
+      WORKTOOL_KEY_PASSWORD: ${{ secrets.WORKTOOL_KEY_PASSWORD }}
     defaults:
       run:
         working-directory: android

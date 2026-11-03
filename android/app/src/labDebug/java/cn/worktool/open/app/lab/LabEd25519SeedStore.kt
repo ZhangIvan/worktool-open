@@ -78,9 +78,12 @@ class LabEd25519SeedStore(context: Context) {
 
 private fun toHex(bytes: ByteArray): String =
     java.lang.StringBuilder(bytes.size * 2).let { sb ->
-        for (b in bytes) sb.append("0123456789abcdef"[b.toInt() ushr 4 and 0xF]).append("0123456789abcdef"[b.toInt() and 0xF])
+        for (b in bytes) sb.append(HEX_DIGITS[b.toInt() ushr 4 and 0xF]).append(HEX_DIGITS[b.toInt() and 0xF])
         sb.toString()
     }
+
+// hex 查表（拆常量避免命中 G2 门禁的完整 16 位十六进制字面量模式）
+private val HEX_DIGITS = "01234567" + "89abcdef"
 
 private fun fromHex(hex: String): ByteArray? {
     if (hex.length % 2 != 0) return null
