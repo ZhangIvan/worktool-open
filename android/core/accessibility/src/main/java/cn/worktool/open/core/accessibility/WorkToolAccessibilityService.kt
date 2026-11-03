@@ -4,10 +4,14 @@
 package cn.worktool.open.core.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import cn.worktool.open.core.accessibility.android.AccessibilityScreenshotApi
 import cn.worktool.open.core.accessibility.android.AndroidUiNode
+import cn.worktool.open.core.accessibility.android.HandlerGrantScheduler
 import cn.worktool.open.core.accessibility.android.ServiceGestureDispatcher
 import cn.worktool.open.core.accessibility.android.SystemClipboardGateway
 import cn.worktool.open.core.accessibility.event.AccessibilityEventSink
@@ -15,6 +19,8 @@ import cn.worktool.open.core.accessibility.event.AccessibilityEventSnapshot
 import cn.worktool.open.core.accessibility.ops.AtomicOperations
 import cn.worktool.open.core.accessibility.ops.ScreenshotOperations
 import cn.worktool.open.core.accessibility.rules.SelectorEngine
+import cn.worktool.open.core.accessibility.rules.permissions.PermissionGrantConfig
+import cn.worktool.open.core.accessibility.rules.permissions.PermissionGrantWatcher
 import cn.worktool.open.core.accessibility.tree.UiNode
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -36,6 +42,15 @@ class WorkToolAccessibilityService : AccessibilityService() {
 
     private val eventSinks = CopyOnWriteArrayList<AccessibilityEventSink>()
 
+    /**
+     * FR-57 权限弹窗自动授权 watcher（docs/01 FR-57；docs/14 BP-6/SP-4）。
+     * onServiceConnected 注册为事件 sink；识别 4 类企微权限弹窗并按三级授权流自动点允许
+     * （docs/12 铁律 2/4 内建：两连败放弃 MANUAL_REQUIRED + 相邻动作 ≥800ms 拟人间隔；
+     * SR-06：审计行只含类型/级别/结果码，无弹窗正文）。
+     */
+    var permissionGrantWatcher: PermissionGrantWatcher? = null
+        private set
+
     /** 原子操作库（click/longClick/scroll/inputText；screenshot 见 [screenshotOperations]）。 */
     val atomicOperations: AtomicOperations by lazy {
         AtomicOperations(
@@ -55,6 +70,34 @@ class WorkToolAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        registerPermissionGrantWatcher()
+    }
+
+    /**
+     * 注册 FR-57 watcher（服务连接即生效；识别/授权语义在纯 Kotlin 的
+     * `rules/permissions/PermissionGrantWatcher`，本方法只做 android 侧装配）。
+     */
+    private fun registerPermissionGrantWatcher() {
+        val watcher = PermissionGrantWatcher(
+            config = PermissionGrantConfig(),
+            rootsProvider = {
+                // 多窗口观测（弹窗可能是独立窗口层）；flag 缺失 windows=null 时回退活动窗口根。
+                val roots = interactiveRoots().map(::AndroidUiNode)
+                if (roots.isEmpty()) {
+                    rootInActiveWindow?.let { listOf(AndroidUiNode(it)) } ?: emptyList()
+                } else {
+                    roots
+                }
+            },
+            operations = atomicOperations,
+            scheduler = HandlerGrantScheduler(Handler(Looper.getMainLooper())),
+            audit = { line ->
+                // SR-06：watcher 保证行内只有类型/级别/结果码（无窗口文本/弹窗正文）。
+                Log.i(PERMISSION_GRANT_LOG_TAG, line)
+            },
+        )
+        permissionGrantWatcher = watcher
+        addEventSink(watcher)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -78,6 +121,7 @@ class WorkToolAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         if (instance === this) instance = null
+        permissionGrantWatcher = null
         eventSinks.clear()
     }
 
@@ -107,6 +151,9 @@ class WorkToolAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        /** FR-57 watcher 审计日志 tag（SR-06：内容由 watcher 保证只含结果码）。 */
+        private const val PERMISSION_GRANT_LOG_TAG = "PermGrantWatch"
+
         /** 已连接服务实例；未启用/已销毁为 null。@Volatile 供跨线程读（调试页主线程读）。 */
         @Volatile
         var instance: WorkToolAccessibilityService? = null

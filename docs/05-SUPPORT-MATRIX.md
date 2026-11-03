@@ -1,10 +1,10 @@
 # 逐指令支持矩阵（Support Matrix）v1
 
-- 版本：v1.1（2026-11-03，W-M3R driver 车道真机取证回填：基线列扩 5.0.13 实测列 + 各指令行证据备注；状态列无真机执行证据，⬜ 一律未动）
+- 版本：v1.2（2026-11-03，P0-S2 车道回填：执行器批次 437a8a4 已装配并首获端侧真实执行回执（RAW_CONFIRM），501 真实执行 3 败终局停（铁律2），0 次成功⬜ 不翻；v1.1（W-M3R driver 车道真机取证回填：基线列扩 5.0.13 实测列 + 各指令行证据备注））
 - 基线（用户确认 2026-11-02）：兼容企微 **4.1.8~4.1.39** 与 **5.0.0~5.0.10**；开发/验证默认基线 **5.0.x 最新稳定**；实测设备列 **5.0.13**（Synthetic-Phone-A12 / Android 12 / 企微 5.0.13 versionCode 84802，D1 RIG 通道，2026-11-03）。**加注（2026-11-03 双源深审）**：APK 内置版本映射声明兼容 **4.0.2~5.0.12**（e2/a.java:82 实证 44 档，含 4.0.x 全系与 5.0.11/5.0.12）——声明兼容范围据此扩界（docs/01 §2.2 已同步），本矩阵列结构维持现状
 - 图例：✅=真机验证通过（≥5 次，回执错误码=0）｜🟡=可运行未全版本验证｜❌=明确不支持｜⬜=未验证（NOT_RUN，不得宣称支持）｜N/A=该版本无此功能
 - 规则：**任何单元格未经真机证据不得从 ⬜ 变更为 ✅/🟡**（对齐 04 §5.1 Release Gate）；每列证据（设备/企微版本/次数/日志）存 `local-private/evidence/`
-- 2026-11-03 真机取证总边界（证据 `local-private/evidence/2026-11-03/`）：lab 配对面会话在 hello_ack 即被端侧 FrameVerifier 拒收关闭（hello_ack/901~904 schema 随 T3.4 冻结，assemble 部署清单登记）→ **端侧指令执行层（UiDriver/执行器接线）未装配，无任何指令获得真机执行回执**；干跑（FR-54 服务端代行）与下发链（queued→flushQueued 补投→帧达设备被 seq_gap 拒收）已分别取证。⬜ 未经执行回执不得翻转。
+- 2026-11-03 真机取证总边界（证据 `local-private/evidence/2026-11-03/` 与 `local-private/evidence/p0-s2/`）：v1.1 时点边界=执行层未装配（配对面会话 hello_ack 即被 FrameVerifier 拒收）；**P0-S2 已更新**：执行器批次 437a8a4 装机后，配对→hello_ack→下发→端侧执行器真实运行→RAW_CONFIRM 回执→服务端 E10 全链贯通（501 迭代 3/4 闭环，UI 日志行为证）——卡点收窄到执行器观测面首步（openContactsTab NODE_NOT_FOUND 201001×3，见 501/502 行备注两层根因）。干跑（FR-54 服务端代行）与下发链（queued→flushQueued 补投→帧达设备被 seq_gap 拒收）此前已分别取证。⬜ 未经执行回执不得翻转。
 
 ## P0 首批指令（v0.1.0）
 
@@ -13,9 +13,9 @@
 | 101/102 | 新消息读取上报 | FR-01 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | 离线暂存重发（FR-46）联测：2026-11-03 真机半链已证——断网 60s 窗口内提交→服务端 queued 暂存→恢复后新会话 flushQueued 补投 E03（设备 UI 日志 seq=2 帧达）；端侧出向 journal/904 补报未装配 NOT_RUN（证据 fr46） |
 | 203 | 发送消息（含@） | FR-02 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | 误发分级 L0；2026-11-03：apifox 干跑×5 全链 succeeded（errCode=0，风险级 L0，服务端代行绝不下发设备）+ 同幂等键重放 replay=true/事件数不变（不重执行）+ 变参 409/101007；真实发送按红线未执行（device_targets.json 未配置→默认 dry-run）；端侧执行 NOT_RUN |
 | 206 | 创建外部群 | FR-09 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | L1：白名单+确认；2026-11-03：apifox 干跑×5 succeeded（报告 riskClass=L1/plannedAction=创建群，L1 限速节奏内）；端侧执行 NOT_RUN |
-| 207/225 | 修改群信息/成员（拉踢） | FR-10 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | L1；2026-11-03：207 干跑×5 succeeded（riskClass=L1）；225 未测（v0.2+）；端侧执行 NOT_RUN |
+| 207/225 | 修改群信息/成员（拉踢） | FR-10 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | L1；2026-11-03：207 干跑×5 succeeded（riskClass=L1）；225 P0-S2 干跑×5 succeeded（riskClass=L0/plannedAction=修改群成员备注/标签，无 E03 下发边）；端侧执行 NOT_RUN |
 | 212 | 新好友自动通过（端侧规则） | FR-15 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | 本地模式可用；2026-11-03：apifox REST 面刻意不注册（AUD-WM3-09 端侧本地动作，REST 不收）——提交 5 次均 400/101002 UNKNOWN_COMMAND（设计负例，fail-closed 一致）；端侧规则执行 NOT_RUN |
-| 501/502 | 群/好友列表查询 | FR-28/29 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | Schema 校验；2026-11-03：干跑×5/5 succeeded + **真实下发×9（只读，ask 允许）**：无会话→queued 暂存→配对面会话触发 flushQueued 补投（E03 epoch1-8/seq2-9，帧物理达设备、被端侧 seq_gap 拒收）→ACK TTL 到期 E17 execution_unknown（对账登记，禁止超时定性）——下发链贯通至帧层；**执行层未装配，执行回执 NOT_RUN** |
+| 501/502 | 群/好友列表查询 | FR-28/29 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | Schema 校验+干跑×5/5 succeeded（P0-S2 复跑再 ×5 全 PASS）；执行器已装配（437a8a4）并首获真实执行回执（P0-S2，2026-11-03）：每迭代重配对绕 W-M4 45s 会话缺陷，下发→执行→RAW_CONFIRM 全链 3/4 迭代闭环，但执行器首步 openContactsTab NODE_NOT_FOUND(201001) ×3（iter1/2/4，iter3=FR-53 熔断 503/101009 如实冷却）→ **0 次成功，⬜ 不翻（docs/12 铁律2 终局停 501；502 同流程未尝试，502/dod.json）**；已证伪 wm4「无登录态」定性（会话内截图=企微 5.0.13 已登录且「通讯录」Tab 在 uiautomator dump 可见）；根因两层：①MIUI 下 settings-put 启用无障碍不触发 AMS 绑定（P0-S2 已定位并修复：accessibility_enabled 0→1 往返后 Bound services 生效，capabilities=161 含 CAN_RETRIEVE_WINDOW_CONTENT）②绑定生效后 rootInActiveWindow 仍观测不到企微主窗节点（未决；dumpsys 显示 active window=企业微信且 hasChildren、节点三要素与 WeComRulePack 选择器匹配——疑 MIUI 安全中心降权/服务连接窗口视图滞后）→ 待人工经系统设置 UI 授权无障碍后复测；证据 local-private/evidence/p0-s2/ |
 | 509 | 上传本地文件/日志 | FR-33 | ✅计划 | ⬜ | ⬜ | ⬜ | ⬜ | 语义=GET_LOCAL_FILE 上传（audit/02 F30），非"列表"；2026-11-03：apifox 干跑×5 succeeded（L0）；端侧执行 NOT_RUN |
 
 ## L1/L2 危险与扩展指令（v0.2+）

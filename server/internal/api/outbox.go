@@ -152,30 +152,80 @@ func (w *OutboxWorker) hasRobotCallbacks(ctx context.Context) bool {
 	return n > 0
 }
 
-// callbackURLFor 解析本行的投递目标：exec_result 行且其 robot 登记了 type=1
-// 回调绑定 → 该 URL；否则部署级全局 URL（可能为空 = 本行不投递）。
-// robot 归属：commands.target 为 deviceId（→ devices.robot_id）或 v1:robotId。
+// callbackURLFor 解析本行的投递目标（按 kind 分域；T3.5 事件面扩展）：
+//   - exec_result 行：其 robot 登记了 type=1 指令结果回调绑定 → 该 URL；
+//   - query_result 行（511~515 查询结果推送，events.md §五「机器人配置的消息回调
+//     地址」）：commandID 反查 robot → type=11 消息回调绑定（qaUrl 语义）；
+//   - event_callback / image_callback 行（101~105 被动事件 / 图片回调）：
+//     CommandID=管线目标键 → robot → type=11 消息回调绑定；
+//   - 各域绑定未命中或无 robot → 部署级全局 URL（可能为空 = 本行不投递，
+//     行保持 pending；E7 未配置=仅回执不推送的双轨语义）。
 func (w *OutboxWorker) callbackURLFor(ctx context.Context, it sqlite.OutboxItem) string {
-	if it.Kind != "exec_result" || it.CommandID == "" {
-		return w.cfg.CallbackURL
-	}
-	rows, err := w.db.QueryDump(ctx, `SELECT target FROM commands WHERE command_id = ?`, it.CommandID)
-	if err != nil || len(rows) != 1 {
-		return w.cfg.CallbackURL
-	}
-	target := rows[0][0]
-	robotID := strings.TrimPrefix(target, "v1:")
-	if robotID == target { // v2 deviceId → 反查 devices.robot_id
-		drows, derr := w.db.QueryDump(ctx, `SELECT COALESCE(robot_id,'') FROM devices WHERE device_id = ?`, target)
-		if derr != nil || len(drows) != 1 || drows[0][0] == "" {
+	switch it.Kind {
+	case "exec_result":
+		if it.CommandID == "" {
 			return w.cfg.CallbackURL
 		}
-		robotID = drows[0][0]
+		robotID := w.robotIDForCommand(ctx, it.CommandID)
+		if u := w.robotCallbackURL(ctx, robotID, 1); u != "" {
+			return u
+		}
+		return w.cfg.CallbackURL
+	case outboxKindQueryResult:
+		if it.CommandID == "" {
+			return w.cfg.CallbackURL
+		}
+		if u := w.robotCallbackURL(ctx, w.robotIDForCommand(ctx, it.CommandID), 11); u != "" {
+			return u
+		}
+		return w.cfg.CallbackURL
+	case outboxKindEventCallback, outboxKindImageCallback:
+		// CommandID=管线目标键（"v1:<robotId>" 或 deviceId；无指令行可反查）
+		if it.CommandID == "" {
+			return w.cfg.CallbackURL
+		}
+		if u := w.robotCallbackURL(ctx, w.robotIDForTarget(ctx, it.CommandID), 11); u != "" {
+			return u
+		}
+		return w.cfg.CallbackURL
+	default:
+		return w.cfg.CallbackURL
+	}
+}
+
+// robotIDForCommand 由指令号反查 robot（commands.target 为 deviceId →
+// devices.robot_id，或 v1:robotId）；不可解析返回空。
+func (w *OutboxWorker) robotIDForCommand(ctx context.Context, commandID string) string {
+	rows, err := w.db.QueryDump(ctx, `SELECT target FROM commands WHERE command_id = ?`, commandID)
+	if err != nil || len(rows) != 1 {
+		return ""
+	}
+	return w.robotIDForTarget(ctx, rows[0][0])
+}
+
+// robotIDForTarget 由管线目标键解析 robot（"v1:<robotId>" 直读；v2 deviceId 反查
+// devices.robot_id）。
+func (w *OutboxWorker) robotIDForTarget(ctx context.Context, target string) string {
+	robotID := strings.TrimPrefix(target, "v1:")
+	if robotID != target {
+		return robotID
+	}
+	drows, derr := w.db.QueryDump(ctx, `SELECT COALESCE(robot_id,'') FROM devices WHERE device_id = ?`, target)
+	if derr != nil || len(drows) != 1 || drows[0][0] == "" {
+		return ""
+	}
+	return drows[0][0]
+}
+
+// robotCallbackURL 取 robot 登记的指定 type 回调绑定 URL（未登记/空返回空串）。
+func (w *OutboxWorker) robotCallbackURL(ctx context.Context, robotID string, callbackType int) string {
+	if robotID == "" {
+		return ""
 	}
 	crows, cerr := w.db.QueryDump(ctx,
-		`SELECT callback_url FROM openapi_callbacks WHERE robot_id = ? AND type = 1 LIMIT 1`, robotID)
+		`SELECT callback_url FROM openapi_callbacks WHERE robot_id = ? AND type = ? LIMIT 1`, robotID, callbackType)
 	if cerr != nil || len(crows) != 1 || crows[0][0] == "" {
-		return w.cfg.CallbackURL
+		return ""
 	}
 	return crows[0][0]
 }

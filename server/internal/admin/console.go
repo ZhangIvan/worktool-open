@@ -66,6 +66,10 @@ func (s *Server) ensureSchema() error {
 const (
 	settingsKeyGuard      = "guard_config"
 	settingsKeyEncryption = "comm_encryption_enabled"
+	// settingsKeyEventCallbacks 事件回调开关 KV 键（与 api/events.go 同一单一
+	// 事实源：api 包只读、管理面唯一写方；值 = {pushEventCallback, pushImage}
+	// JSON。缺省形态 = 上游缺省（events.md §〇）：总门 true、图片 false）。
+	settingsKeyEventCallbacks = "event_callback_config"
 )
 
 func (s *Server) settingGet(ctx context.Context, key string) (string, bool, error) {
@@ -1092,6 +1096,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"enabled": encEnabled,
 		"note":    "FR-43 通讯加密开关（默认关）。本开关持久化管理面意图并落审计；网关握手协商的强制接线属网关车道（dodDeferred，见 admin/README）",
 	}
+	// 事件回调开关（T3.5）：api/events.go 分发内核逐事件只读同源 KV，改即生效。
+	pushEvent, pushImage, evSource := s.eventCallbackSwitches(ctx)
+	eventCallbacks := map[string]any{
+		"pushEventCallback": pushEvent, "pushImage": pushImage, "source": evSource,
+		"note": "事件类回调开关（T3.5）：pushEventCallback 总门（101 被拉群/102 群名更新/103 群解散/104 被踢/105 好友通过 + 511/512/513/515 查询推送，默认开）；pushImage 图片 fileBase64 回调独立门（默认关）。改即生效（分发内核逐事件读 KV）",
+	}
 	tokens := map[string]any{}
 	if rows, err := s.db.QueryDump(ctx, `SELECT COUNT(*) FROM api_tokens WHERE status='active'`); err == nil && len(rows) == 1 {
 		tokens["activeTokens"] = atoiDefault(rows[0][0])
@@ -1099,7 +1109,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if rows, err := s.db.QueryDump(ctx, `SELECT COUNT(*) FROM recipient_whitelist`); err == nil && len(rows) == 1 {
 		tokens["whitelistEntries"] = atoiDefault(rows[0][0])
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"guard": guard, "breaker": breaker, "encryption": encryption, "counts": tokens})
+	writeJSON(w, http.StatusOK, map[string]any{"guard": guard, "breaker": breaker, "encryption": encryption, "eventCallbacks": eventCallbacks, "counts": tokens})
 }
 
 // handleGuardSettings PUT /api/v1/admin/settings/guard（限流/白名单策略：实时
@@ -1170,6 +1180,70 @@ func (s *Server) handleEncryptionSettings(w http.ResponseWriter, r *http.Request
 	_ = s.db.InsertAudit(ctx, nil, "admin_settings_encryption", "",
 		"FR-43 通讯加密开关 → "+map[bool]string{true: "开", false: "关"}[*req.Enabled]+"（网关强制待接线）", s.now().UTC())
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": *req.Enabled})
+}
+
+// ---- ⑦ 事件回调开关（T3.5，W-M6；契约 local-private/parity/b3/events.md） ----
+
+// adminEventCallbackSwitches 为开关 KV 值的本包镜像结构（与 api/events.go
+// EventCallbackConfig 同字段同名 JSON 键——单一事实源为 admin_settings KV 行，
+// 结构两侧镜像不互 import，同 openapi_callbacks DDL 镜像先例）。
+type adminEventCallbackSwitches struct {
+	PushEventCallback bool `json:"pushEventCallback"` // 总门：101~105 + 511~515（缺省 true，e2/a.java:209）
+	PushImage         bool `json:"pushImage"`         // 图片回调独立门（缺省 false，doc-861677）
+}
+
+// eventCallbackSwitches 读当前开关（KV 缺失/损坏 → 缺省形态：总门开、图片关，
+// 与 api/events.go 读路径同一缺省策略——上游缺省，events.md §〇）。
+func (s *Server) eventCallbackSwitches(ctx context.Context) (pushEvent, pushImage bool, source string) {
+	pushEvent, pushImage, source = true, false, "default"
+	raw, ok, err := s.settingGet(ctx, settingsKeyEventCallbacks)
+	if err != nil || !ok {
+		return
+	}
+	var cfg adminEventCallbackSwitches
+	if json.Unmarshal([]byte(raw), &cfg) != nil {
+		return // 损坏值回落缺省
+	}
+	return cfg.PushEventCallback, cfg.PushImage, "persisted"
+}
+
+// handleEventCallbackSettings PUT /api/v1/admin/settings/event-callbacks（T3.5
+// 开关面：六类被动事件 101~105 + 查询推送 511~515 总门 pushEventCallback（缺省
+// 开，e2/a.java:209）与图片 fileBase64 回调独立门 pushImage（缺省关，doc-861677）。
+// 指针字段=仅更新提供项；持久化 admin_settings（api 分发内核只读同源）+ 审计）。
+func (s *Server) handleEventCallbackSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	var req struct {
+		PushEventCallback *bool `json:"pushEventCallback"`
+		PushImage         *bool `json:"pushImage"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		(&adminError{http.StatusBadRequest, "INVALID_BODY", "请求体须为 {pushEventCallback?: bool, pushImage?: bool}"}).write(w)
+		return
+	}
+	ctx := r.Context()
+	pushEvent, pushImage, _ := s.eventCallbackSwitches(ctx)
+	if req.PushEventCallback != nil {
+		pushEvent = *req.PushEventCallback
+	}
+	if req.PushImage != nil {
+		pushImage = *req.PushImage
+	}
+	raw, err := json.Marshal(adminEventCallbackSwitches{PushEventCallback: pushEvent, PushImage: pushImage})
+	if err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	if err := s.settingPut(ctx, settingsKeyEventCallbacks, string(raw)); err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	_ = s.db.InsertAudit(ctx, nil, "admin_settings_event_callbacks", "", string(raw), s.now().UTC())
+	writeJSON(w, http.StatusOK, map[string]any{"pushEventCallback": pushEvent, "pushImage": pushImage, "source": "persisted"})
 }
 
 // handleBreakerReset POST /api/v1/admin/breaker/reset（人工复位熔断为 closed；

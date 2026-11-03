@@ -9,8 +9,11 @@
   - accessibilityEventTypes 仅 typeWindowStateChanged|typeWindowContentChanged：事件骨架最小集
   - 不设 packageNames：调试页需 dump 任意前台应用校准规则（docs/03 T2.4 D1 定位用）；
     生产订阅面收敛在 T3.1 按指令落地时复评
-  未放开：flagRequestFilterKeyEvents / flagRetrieveInteractiveWindows / canRequestTouchExplorationMode
-  等本阶段不需要的能力。
+  - accessibilityFlags=flagRetrieveInteractiveWindows（FR-57 补开，G10 diff 审查项）：
+    interactiveRoots()（WorkToolAccessibilityService）依赖 getWindows()；无此 flag 框架返回
+    null，权限弹窗/对话框独立窗口层无法观测（2026-11-03 会话 2 观测面修复的同一能力位，
+    代码侧已引用但本配置此前漏配——此处对齐）。仅放宽窗口读取，不含焦点/按键能力。
+  未放开：flagRequestFilterKeyEvents / canRequestTouchExplorationMode 等本阶段不需要的能力。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/accessibility_service_description"
@@ -19,4 +22,4 @@
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
-    android:accessibilityFlags="flagReportViewIds" />
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows" />

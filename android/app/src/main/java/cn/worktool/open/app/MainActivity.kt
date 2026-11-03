@@ -42,7 +42,11 @@ import cn.worktool.open.core.protocol.android.AndroidKeystoreCredentialStore
  * - 底部标签页：状态（设备/会话信息 + 事件日志）| 指令（P0 目录 + 上次执行状态 +
  *   详情干跑预览 FR-54）| 设置（server 地址 / 断开配对 / 日志开关 / 关于）。
  *
- * 启动路由（ask ⑥）：未配对（无凭据或缺 server 地址）→ [PairingActivity]。
+ * 启动路由（BP-1/SP-1 + BP-7/SP-3 接线，判定 [AppLaunchRoute]）：**未授权无障碍 →
+ * [SetupGuideActivity]（三卡引导，全绿放行）→ 未配对（无凭据或缺 server 地址）→
+ * [PairingActivity] → 已配对 → 主界面 + onStart 自动 [SessionRuntime.start]（幂等，
+ * [SessionAutoStart] 判定；会话生命周期归 [SessionForegroundService]，Activity
+ * onDestroy 不再停止会话 = 持续在线）**。
  * SR-10：无任何伪装命名；G3：零遥测（所有数据仅本地 + 用户自配 server 会话）。
  */
 class MainActivity : Activity() {
@@ -94,22 +98,34 @@ class MainActivity : Activity() {
         settings = AppSettings(this)
         credentialStore = AndroidKeystoreCredentialStore(this)
 
-        // 启动路由：未配对 → 配对引导流（ask ⑥）
-        if (OnboardingForms.launchRoute(credentialStore, settings.serverAddress) !=
+        // 启动路由（SP-1/SP-3 接线）：未授权无障碍 → 引导页 → 未配对 → 配对流 → 已配对 → 主界面
+        val paired = OnboardingForms.launchRoute(credentialStore, settings.serverAddress) ==
             OnboardingForms.LaunchRoute.MAIN
-        ) {
-            startActivity(Intent(this, PairingActivity::class.java))
-            finish()
-            return
+        when (AppLaunchRoute.decide(paired, AccessibilityServiceGate.isAuthorized(this))) {
+            AppLaunchRoute.Route.SETUP_GUIDE -> {
+                startActivity(Intent(this, SetupGuideActivity::class.java))
+                finish()
+                return
+            }
+            AppLaunchRoute.Route.PAIRING -> {
+                startActivity(Intent(this, PairingActivity::class.java))
+                finish()
+                return
+            }
+            AppLaunchRoute.Route.MAIN -> Unit
         }
 
         setContentView(R.layout.activity_main)
-        runtime = SessionRuntime(this)
+        // 进程级唯一运行时（SessionRuntimeHolder）：会话生命周期归前台服务，
+        // 主界面只是观测面/控制面（BP-5/SP-2 改造）。
+        runtime = SessionRuntimeHolder.get(this)
         runtime.logEnabled = settings.logEnabled
         runtime.onCredentialRevoked = {
-            // 902 凭据撤销（服务端强制重配对）：清凭据 → 引导流
-            credentialStore.clear()
+            // 902 凭据撤销（服务端强制重配对）：停会话（连带停前台服务）→ 清凭据 → 引导流。
+            // post 到主线程执行（回调发生在回路线程内，避免 stop() 重入自身线程）。
             mainHandler.post {
+                runtime.stop()
+                credentialStore.clear()
                 Toast.makeText(this, R.string.main_credential_revoked, Toast.LENGTH_LONG).show()
                 startActivity(
                     Intent(this, PairingActivity::class.java).apply {
@@ -145,7 +161,19 @@ class MainActivity : Activity() {
         }
         runtime.logEnabled = settings.logEnabled
         runtime.dryRunEnabled = settings.dryRunEnabled
-        runtime.start(creds, baseUrl)
+        // BP-1/SP-1 ②：已配对 → 自动恢复会话。幂等（SessionAutoStart.KEEP_RUNNING =
+        // 在跑不重启，避免每次 onStart 重拨 WS 抖动）；重配对的新会话由 PairingActivity
+        // 成功回调显式 stop-then-start。前台服务随 start/stop 由 SessionRuntime.foreground 钩子联动。
+        when (SessionAutoStart.decide(runtime.isRunning(), creds, baseUrl)) {
+            SessionAutoStart.Decision.START -> runtime.start(creds, baseUrl)
+            else -> Unit // KEEP_RUNNING / SKIP_*：路由层已保证主界面只在已配对时可达
+        }
+        // CR Q4：主界面路径补 POST_NOTIFICATIONS 一次性请求——引导页只在「无障碍未授权」
+        // 时可达，已开无障碍的设备永不进引导页 → API 33+ 常驻通知（「机器人运行中」）
+        // 会被静默抑制。会话在跑时请求一次（进程级共享门，拒绝后不重复骚扰，与引导页同语义）。
+        if (runtime.isRunning()) {
+            NotificationPermissionGate.requestOnce(this)
+        }
         renderSessionDetail(creds.deviceId, creds.sessionId)
         mainHandler.post(tick)
     }
@@ -156,9 +184,10 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        // 会话生命周期 = Activity 生命周期（进程级常驻 = 前台服务任务卡，dodDeferred，
-        // 见 SessionRuntime 类注；进程存活期间后台断连由重连机制兜底）。
-        if (::runtime.isInitialized) runtime.stop()
+        // BP-5/SP-2：会话生命周期归 SessionForegroundService（前台服务常驻），Activity
+        // 销毁**不再**停止会话（离开界面/熄屏后机器人仍在线）。显式停止只在：断开配对/
+        // 修改 server（设置页）/ 902 凭据撤销。进程被系统回收时服务自愈重启见
+        // SessionForegroundService.selfHealSessionIfNeeded。
         super.onDestroy()
     }
 

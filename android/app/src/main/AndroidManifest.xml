@@ -3,20 +3,31 @@
   app 模块清单（T1.2）。
   SR-10 组件最小化：
   - allowBackup=false（禁止 adb 备份导出应用数据）
-  - uses-permission 仅 INTERNET 一项（CR UI-01 修复，2026-11-03）：产品变体的网络面
-    （PairingActivity→PairingClient.pair / SessionRuntime→OkHttpWsTransport）全在 main
-    源集，无 INTERNET 时配对 socket 在系统层被拒 → 用户永远卡在第 2 步配对。
-    INTERNET 是 normal 级权限（安装即授、无运行时弹窗），不触碰 G3 零遥测（本权限
-    只服务用户自配 server 的会话通道）与 G12 零 hook；除网络外仍零权限
-    （无存储/位置/相机等；未设 usesCleartextTraffic，targetSdk 28+ 默认禁明文，
-    满足 SR-01/SR-09）。labDebug 叠加层另声明 networkSecurityConfig 信任 lab CA。
-  - 组件：MainActivity（LAUNCHER 入口，exported=true 仅为启动必需）+ 内部页
-    （PairingActivity 配对引导 / NodeTreeDebugActivity 节点树调试，均 exported=false）
+  - 权限面（2026-11-03 BP-1/SP-1 + BP-5/SP-2 + BP-7/SP-3 冲刺修订；此前仅 INTERNET）：
+    · INTERNET（CR UI-01）：WSS/HTTPS 配对与会话通道（normal 级，不触碰 G3 零遥测/G12 零 hook；
+      未设 usesCleartextTraffic，targetSdk 28+ 默认禁明文，满足 SR-01/SR-09）；
+    · FOREGROUND_SERVICE + FOREGROUND_SERVICE_DATA_SYNC：SessionForegroundService（dataSync
+      型常驻保活，BP-5；均为 normal 级）；
+    · RECEIVE_BOOT_COMPLETED：BootCompletedReceiver 开机恢复会话（normal 级）；
+    · POST_NOTIFICATIONS：API 33+ 常驻通知运行时请求（引导页与主界面共享
+      NotificationPermissionGate 进程内一次门，CR Q4）；
+    · REQUEST_IGNORE_BATTERY_OPTIMIZATIONS：SetupGuideActivity 电池豁免卡的系统授权对话框
+      （ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 必需声明；normal 级）。
+    无存储/位置/相机等敏感权限；全部服务于「用户自配 server 的会话持续在线」，无遥测。
+    labDebug 叠加层另声明 networkSecurityConfig 信任 lab CA。
+  - 组件：MainActivity（LAUNCHER 入口，exported=true 仅为启动必需）+ 内部组件
+    （SetupGuideActivity 设置引导 / PairingActivity 配对引导 / NodeTreeDebugActivity 节点树
+    调试 / SessionForegroundService 前台服务 / BootCompletedReceiver 开机自启，均 exported=false）
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 产品变体唯一权限：WSS/HTTPS 配对与会话通道（见上方注释，CR UI-01）。 -->
+    <!-- 会话通道（CR UI-01）+ 持续在线保活（BP-1/SP-1、BP-5/SP-2、BP-7/SP-3）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="false"
@@ -44,6 +55,28 @@
         <activity
             android:name=".PairingActivity"
             android:exported="false" />
+
+        <!-- BP-7/SP-3：设置引导页（无障碍/电池豁免/MIUI 自启动三卡，配对前置；exported=false）。 -->
+        <activity
+            android:name=".SetupGuideActivity"
+            android:exported="false" />
+
+        <!-- BP-5/SP-2：会话前台服务（dataSync 型常驻保活；仅应用内部经
+             SessionRuntime.foreground 钩子拉起，exported=false）。 -->
+        <service
+            android:name=".SessionForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- BP-1/SP-1 ③：开机恢复会话（BOOT_COMPLETED 为系统保护广播，外部应用不可伪造；
+             exported=false 拒绝显式外部调用，SR-10/G10）。 -->
+        <receiver
+            android:name=".BootCompletedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

@@ -33,6 +33,8 @@ import java.util.Locale
  * 步骤 2：输入 6 位一次性配对码 → PairingClient.pair（Ed25519 签名公钥 +
  *         X25519 临时公钥，spec §5.1/§5.3；产品面不注册 lab 裸 IP 例外）；
  * 步骤 3：配对成功 → 凭据经 AndroidKeystoreCredentialStore 加密落盘（SR-05/G5）
+ *         → **立即 [SessionRuntime.start]**（BP-1/SP-1 ①：配对完=立即在线，不让用户
+ *         再手动拉起；经 [SessionRuntimeHolder] 单例操作，前台服务随之常驻）
  *         →「进入主界面」。
  *
  * 配对成功后 server 地址存 [AppSettings]（启动路由判据之一）。
@@ -189,22 +191,25 @@ class PairingActivity : Activity() {
                 ),
             )
 
-            // 5. 凭据加密落盘 + 地址持久化 → 成功页
-            AndroidKeystoreCredentialStore(this).save(
-                DeviceCredentials(
-                    deviceId = response.deviceId,
-                    deviceTokenHex = response.deviceTokenHex,
-                    tokenVersion = response.tokenVersion,
-                    sessionId = response.sessionId,
-                    serverX25519PublicKeyHex = response.serverX25519PublicKeyHex,
-                    rotationIntervalDays = response.rotationIntervalDays,
-                    heartbeatIntervalSeconds = response.heartbeatIntervalSeconds,
-                    sessionTimeoutSeconds = response.sessionTimeoutSeconds,
-                    wsPath = response.wsPath,
-                ),
+            // 5. 凭据加密落盘 + 地址持久化 → 立即拉起会话（SP-1 ①）→ 成功页
+            val credentials = DeviceCredentials(
+                deviceId = response.deviceId,
+                deviceTokenHex = response.deviceTokenHex,
+                tokenVersion = response.tokenVersion,
+                sessionId = response.sessionId,
+                serverX25519PublicKeyHex = response.serverX25519PublicKeyHex,
+                rotationIntervalDays = response.rotationIntervalDays,
+                heartbeatIntervalSeconds = response.heartbeatIntervalSeconds,
+                sessionTimeoutSeconds = response.sessionTimeoutSeconds,
+                wsPath = response.wsPath,
             )
+            AndroidKeystoreCredentialStore(this).save(credentials)
             AppSettings(this).serverAddress = baseUrl
             mainHandler.post {
+                // BP-1/SP-1 ①：配对成功回调里直接 SessionRuntime.start——配对完=立即在线
+                // （Holder 单例与主界面同一运行时；前台服务经 SessionRuntime.foreground 钩子拉起）。
+                // start 为幂等装配（stop-then-start），重配对即换凭据重启会话。
+                SessionRuntimeHolder.get(applicationContext).start(credentials, baseUrl)
                 findViewById<TextView>(R.id.pair_done_detail).text =
                     getString(R.string.pair_done_detail, response.deviceId)
                 showStep(stepDone)

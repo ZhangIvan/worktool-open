@@ -118,6 +118,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/settings", s.handleSettings)
 	mux.HandleFunc("PUT /api/v1/admin/settings/guard", s.handleGuardSettings)
 	mux.HandleFunc("PUT /api/v1/admin/settings/encryption", s.handleEncryptionSettings)
+	mux.HandleFunc("PUT /api/v1/admin/settings/event-callbacks", s.handleEventCallbackSettings)
 	mux.HandleFunc("POST /api/v1/admin/breaker/reset", s.handleBreakerReset)
 	mux.HandleFunc("GET /api/v1/admin/risk/{type}", s.handleRiskQuery)
 	mux.HandleFunc("/api/v1/admin/whitelist", s.handleWhitelist)

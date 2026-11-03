@@ -12,9 +12,9 @@
 | FR-01 | 新消息监听上报(101/102) | W-M3R·补执行器车道+真机 | ⏸ |
 | FR-02 | 发送消息(203) | W-M3(T3.1)→W-M3R 真机 | 🔄（W-M4 G-1 复核 2026-11-03：干跑×5 PASS（FR-54 服务端同引擎代行报告，E05=无设备传输；证据 local-private/evidence/2026-11-03/wm4/203/）；真实发送仍无白名单测试目标（用户裁决①）→ 真实发送 NOT_RUN 保持 ⬜；端侧执行层已装配（T2.6 回退+执行回路），回路闭环性由 501/502 真实下发失败路径×5/类证明） |
 | FR-09 | 建群(206) | W-M3(T3.1)→W-M3R | 🔄（W-M4 G-1 复核：干跑×5 PASS（plannedAction=创建群… riskClass=L1；证据 wm4/206/）；真实建群=真实副作用按红线 NOT_RUN；端侧执行器已装配未成功路径实测） |
-| FR-10 | 改群/成员(207/225) | W-M3(T3.1)→W-M3R(dry-run) | 🔄（W-M4 G-1 复核：207 干跑×5 PASS（L1；证据 wm4/207/）；225 未测；真实改群按红线 NOT_RUN） |
+| FR-10 | 改群/成员(207/225) | W-M3(T3.1)→W-M3R(dry-run) | 🔄（W-M4 G-1 复核：207 干跑×5 PASS（L1；证据 wm4/207/）；225 P0-S2 干跑×5 PASS（riskClass=L0，无 E03 下发边；证据 p0-s2/225/）；真实改群按红线 NOT_RUN） |
 | FR-15 | 好友自动通过(212 规则) | W-M3(T3.1/T3.3)→W-M3R(dry-run) | 🔄（W-M4 G-1 复核：212 干跑提交×5 均 400/101002 设计负例一致（REST 面不注册，AUD-WM3-09；证据 wm4/212/）；端侧规则执行 NOT_RUN） |
-| FR-28/29 | 群/好友查询(501/502) | W-M3R·补执行器车道 | ⏸（W-M4 G-1 执行回路已全链闭环（失败路径）×5/类：E01→E03 投帧→E05→E09→E11 failed errorCode=201001（设备企微 5.0.13 无登录态→「通讯录」Tab 缺失，CommonSteps openContactsTab NODE_NOT_FOUND），端侧 RAW_CONFIRM UI 日志行+企微前台截图+服务端 F2 逐边齐备（证据 wm4/501、502/）；0 次成功→不可翻✅；另发现规格缺陷：会话 45s 无服务端帧即关流+重连拨已关会话 URL→404 永久离线（Go/Kotlin/python 三方不一致，wm4/server/session_death_forensics.json，已上报）） |
+| FR-28/29 | 群/好友查询(501/502) | W-M3R·补执行器车道 | ⏸（**P0-S2 更新 2026-11-03 15:1x**：执行器 437a8a4 装机后真实执行链首获端侧回执——每迭代重配对绕 45s 会话缺陷，下发→执行→RAW_CONFIRM 全链 3/4 迭代闭环，但执行器首步 openContactsTab NODE_NOT_FOUND(201001)×3（iter3=FR-53 熔断冷却）→ **0 次成功⬜ 不翻，铁律2 终局停 501、502 同流程 dodge 未尝试（502/dod.json）**；**wm4「无登录态」定性已被证伪**（P0-S2 截图：企微 5.0.13 已登录且「通讯录」Tab 在 uiautomator dump 可见）——真实根因两层：①MIUI settings-put 启用无障碍不触发 AMS 绑定（已定位并修复：accessibility_enabled 0→1 往返后 Bound services 生效，capabilities=161）②绑定后 rootInActiveWindow 仍不见企微节点（未决，疑 MIUI 降权/窗口视图滞后）→ 待人工 UI 授权无障碍后复测；证据 local-private/evidence/p0-s2/；另 W-M4 规格缺陷（45s 关流+重连拨死会话 URL→404 永久离线，session_death_forensics.json）仍开放，本车道以每迭代重配对绕行） |
 | FR-33 | 上传本地文件(509) | W-M3R·补执行器车道（dry-run） | ⏸（W-M4 G-1 复核：干跑×5 PASS（plannedAction=上传本地文件/日志 riskClass=L0；证据 wm4/509/）；真实上传=真实副作用按红线 NOT_RUN） |
 | FR-34 | apifox 兼容 REST | W-M3(T3.2 子集)→W-M4(全量冒烟) | 🔄（2026-11-03 driver：S1 实部署面 7 类指令干跑×5 + 真实下发/RAW_CONFIRM/幂等 409/404 全部实测通过） |
 | FR-35 | 回调(签名/重试) | M2 已实现→W-M4 生产化(WTO-008 对齐自查) | ✅基线 |

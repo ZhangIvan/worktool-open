@@ -38,13 +38,16 @@ import java.util.Locale
  * - [events]：回路事件环形缓冲（状态 tab 日志）；日志开关开 = 追加落盘 filesDir/logs/；
  * - [snapshotOutcomeByType]：指令列表「上次执行状态」（DeviceSessionLoop.onExecResult）。
  *
- * 已知边界（如实登记，dodDeferred）：
- * - 会话生命周期 = Activity 生命周期（onDestroy 停止）。进程级常驻（前台服务）与
- *   FR-50 悬浮窗控制为后续任务卡；进程被系统回收期间指令由服务端 queued 暂存 +
- *   重连 flushQueued 补投（docs/05 FR-46 取证链）兜底，不丢。
- * - 配对时 X25519 临时私钥不持久化（spec §5.1.3 语义：每次配对新生成）→ 重启后的
- *   会话为 encryptType 0（TLS + 逐帧 HMAC；spec 允许形态），加密会话 encryptType 2
- *   仅配对当次有效。持久化加密会话 = 后续任务卡。
+ * 会话生命周期（BP-5/SP-2 改造，2026-11-03）：
+ * - 单例经 [SessionRuntimeHolder] 装配，生命周期归 [SessionForegroundService]
+ *   （foregroundServiceType=dataSync + 常驻通知「机器人运行中」）——start 时经
+ *   [foreground] 钩子拉起前台服务、stop 时停，Activity onDestroy **不再**停止会话
+ *   （熄屏/后台不被杀 = 持续在线；进程被系统回收期间指令由服务端 queued 暂存 +
+ *   重连 flushQueued 补投（docs/05 FR-46 取证链）兜底，不丢）。
+ * - 已知边界（如实登记，dodDeferred）：FR-50 悬浮窗控制为后续任务卡；配对时
+ *   X25519 临时私钥不持久化（spec §5.1.3 语义：每次配对新生成）→ 重启后的会话为
+ *   encryptType 0（TLS + 逐帧 HMAC；spec 允许形态），加密会话 encryptType 2 仅配对
+ *   当次有效。持久化加密会话 = 后续任务卡。
  */
 class SessionRuntime(
     context: Context,
@@ -62,6 +65,22 @@ class SessionRuntime(
 
     /** 902 凭据撤销（外部走强制重配对 → 引导流）。 */
     var onCredentialRevoked: (() -> Unit)? = null
+
+    /**
+     * 前台服务拉起/停止钩子（BP-5/SP-2；由 [SessionRuntimeHolder] 装配 Android 实现
+     * [AndroidSessionForegroundController]）。接口隔离：SessionRuntime 本体不触碰
+     * Service API（可装配出无前台服务的形态），缺省 null = 不拉前台服务。
+     */
+    interface Foreground {
+        /** 会话启动成功后拉起前台服务（常驻通知）。 */
+        fun startRequested()
+
+        /** 会话停止后停掉前台服务（撤常驻通知）。 */
+        fun stopRequested()
+    }
+
+    @Volatile
+    var foreground: Foreground? = null
 
     private val appContext = context.applicationContext
     private val lock = Any()
@@ -100,7 +119,6 @@ class SessionRuntime(
             return false
         }
         stop()
-        val runtime = this
         val registry = ExecutorRegistry.defaultFirstBatch(
             querySink = QueryResultSink { type, result ->
                 val summary = when (result) {
@@ -151,6 +169,7 @@ class SessionRuntime(
         l.start()
         synchronized(lock) { loop = l }
         statusTracker.onSessionStarted()
+        foreground?.startRequested() // SP-2：会话起来 → 前台服务常驻（熄屏/后台不被杀）
         heartbeatIntervalMillis = credentials.heartbeatIntervalSeconds * 1000L
         appendEvent("会话启动 deviceId=${credentials.deviceId} → $baseUrl")
         return true
@@ -159,6 +178,7 @@ class SessionRuntime(
     fun stop() {
         val l = synchronized(lock) { loop ?: return }
         synchronized(lock) { loop = null }
+        foreground?.stopRequested() // SP-2：无会话 → 无前台服务/常驻通知
         runCatching { l.stop() }
         statusTracker.onSessionStopped()
         appendEvent("会话停止")

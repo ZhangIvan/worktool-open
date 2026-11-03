@@ -113,4 +113,32 @@
     <!-- 配对成功页服务提示（CR UI-02）：进主界面后的指令前置条件，先一步告知 -->
     <string name="pair_done_a11y_hint">重要：还需在 系统设置 → 无障碍 → WorkTool Open 自动化服务 开启服务，机器人才可执行指令（主界面状态卡有入口）。</string>
     <string name="pair_done">进入主界面</string>
+
+    <!-- ==================== BP-1/SP-1 会话自启 + BP-5/SP-2 前台服务 + BP-7/SP-3 设置引导 ==================== -->
+
+    <!-- 前台服务常驻通知（SessionForegroundService） -->
+    <string name="fg_notification_title">机器人运行中</string>
+    <string name="fg_notification_text">会话保持在线（点击进入主界面）</string>
+    <string name="fg_channel_name">会话保活</string>
+    <string name="fg_channel_desc">机器人会话前台服务通知（撤掉通知不会停止会话，断开配对请在主界面设置页操作）</string>
+
+    <!-- 设置引导页（SetupGuideActivity，配对前置页：三卡全绿→完成） -->
+    <string name="guide_page_title">启动前设置引导</string>
+    <string name="guide_page_subtitle">机器人需要以下系统设置才能持续在线并执行指令。每项完成后自动显示绿勾；全部完成后进入配对。</string>
+    <string name="guide_card_a11y_title">1 · 无障碍服务</string>
+    <string name="guide_card_a11y_off">未开启——指令执行的唯一通道（MIUI 提示：系统设置里开启后若状态反复，请重启一次应用）</string>
+    <string name="guide_card_a11y_on">已开启 ✓</string>
+    <string name="guide_card_a11y_action">去开启</string>
+    <string name="guide_card_battery_title">2 · 电池优化豁免</string>
+    <string name="guide_card_battery_desc">加入电池优化白名单，熄屏/后台才不会被系统杀掉</string>
+    <string name="guide_card_battery_on">已豁免 ✓</string>
+    <string name="guide_card_battery_action">去设置</string>
+    <string name="guide_card_battery_failed">本系统未提供电池白名单入口（可在系统设置的电池页手动设置）</string>
+    <string name="guide_card_miui_title">3 · MIUI 自启动授权</string>
+    <string name="guide_card_miui_desc">指引：安全中心 → 应用管理 → 自启动 → 允许本应用（后台弹出权限如有也一并允许）。系统未提供该授权的检测接口，设置完成后请点击右侧确认。</string>
+    <string name="guide_card_miui_confirm">我已完成设置</string>
+    <string name="guide_card_miui_confirmed">已确认（用户自述）✓</string>
+    <string name="guide_card_miui_na">非 MIUI 设备，无需此设置 ✓</string>
+    <string name="guide_done">完成，去配对</string>
+    <string name="guide_done_to_main">完成，进入主界面</string>
 </resources>

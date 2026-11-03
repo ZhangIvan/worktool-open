@@ -37,10 +37,30 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(K_DRY_RUN, false)
         set(value) = prefs.edit().putBoolean(K_DRY_RUN, value).apply()
 
+    /**
+     * FR-58 自动关闭企微新消息通知开关（**默认关**——docs/01 FR-58「开关默认关、
+     * 可配置」；与 APK autoCloseNewMessageNotice 默认 true 不同：我方为无障碍动作面，
+     * 显式开启才会在主功能初始化时导航企微设置页关通知，
+     * NotificationSuppressor.enabledProvider 消费本键）。
+     */
+    var suppressNoticeEnabled: Boolean
+        get() = prefs.getBoolean(K_SUPPRESS_NOTICE, false)
+        set(value) = prefs.edit().putBoolean(K_SUPPRESS_NOTICE, value).apply()
+
+    /**
+     * FR-49 运行日志上报总开关（默认开；FR-40「日志上报默认脱敏、可整体关闭」的
+     * 「可关闭」面——关闭后 LogReportPipeline 零采样零发送；SR-06 脱敏强制不可关）。
+     */
+    var logReportEnabled: Boolean
+        get() = prefs.getBoolean(K_LOG_REPORT, true)
+        set(value) = prefs.edit().putBoolean(K_LOG_REPORT, value).apply()
+
     private companion object {
         const val PREFS = "worktool_app_settings"
         const val K_SERVER = "server_address"
         const val K_LOG = "log_enabled"
         const val K_DRY_RUN = "dry_run_enabled"
+        const val K_SUPPRESS_NOTICE = "suppress_notice_enabled"
+        const val K_LOG_REPORT = "log_report_enabled"
     }
 }
