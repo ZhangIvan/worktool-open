@@ -186,15 +186,15 @@ object ProtocolClient {
          */
         private fun rebuildSessionUrl(): String {
             return try {
+                val body = """{"deviceId":"${credentials.deviceId}"}"""
                 val request = okhttp3.Request.Builder()
                     .url(baseUrl.trimEnd('/') + "/api/v2/device-sessions")
-                    .post(okhttp3.RequestBody.create(null, "{}"))
-                    .addHeader("Authorization", "Bearer " + credentials.deviceTokenHex)
+                    .post(okhttp3.RequestBody.create(null, body))
                     .build()
                 val response = httpClient.newCall(request).execute()
-                val body = response.body?.string() ?: "{}"
+                val respBody = response.body?.string() ?: "{}"
                 response.close()
-                val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
+                val json = kotlinx.serialization.json.Json.parseToJsonElement(respBody)
                 val wsPath = json.jsonObject["wsPath"]?.jsonPrimitive?.content
                 if (wsPath != null) {
                     baseUrl.trimEnd('/') + wsPath
