@@ -27,13 +27,16 @@ type Controller struct {
 	live          map[*connection]struct{}
 	wg            sync.WaitGroup
 	cleanupErrors atomic.Int64
+	// Private test seam, fixed before any connection; production always time.Now.
+	// This clock affects ingress budgets only, never authorization or deadlines.
+	budgetNow func() time.Time
 }
 
 func New(store *pg.GatewayStore) (*Controller, error) {
 	if store == nil {
 		return nil, errors.New("store required")
 	}
-	return &Controller{store: store, live: map[*connection]struct{}{}}, nil
+	return &Controller{store: store, live: map[*connection]struct{}{}, budgetNow: time.Now}, nil
 }
 func (c *Controller) CleanupErrors() int64 { return c.cleanupErrors.Load() }
 func (c *Controller) LiveCount() int       { c.mu.Lock(); defer c.mu.Unlock(); return len(c.live) }
@@ -231,7 +234,7 @@ func (x *connection) finish() {
 }
 func (x *connection) handle() pg.LeaseHandle { x.mu.Lock(); defer x.mu.Unlock(); return *x.lease }
 func (x *connection) run() {
-	x.budget = newBudget(time.Now())
+	x.budget = newBudget(x.parent.budgetNow())
 	helloCtx, cancel := context.WithTimeout(x.ctx, 5*time.Second)
 	kind, raw, e := x.ws.Read(helloCtx)
 	cancel()
@@ -243,7 +246,7 @@ func (x *connection) run() {
 		x.stop(1002, "PROTOCOL_ERROR")
 		return
 	}
-	if !x.budget.take(time.Now(), len(raw)) {
+	if !x.budget.take(x.parent.budgetNow(), len(raw)) {
 		x.stop(1008, "RESOURCE_LIMIT")
 		return
 	}
@@ -295,7 +298,7 @@ func (x *connection) run() {
 			x.stop(1002, "PROTOCOL_ERROR")
 			return
 		}
-		if !x.budget.take(time.Now(), len(data)) {
+		if !x.budget.take(x.parent.budgetNow(), len(data)) {
 			x.stop(1008, "RESOURCE_LIMIT")
 			return
 		}

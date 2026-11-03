@@ -909,6 +909,11 @@ func TestPGGatewayGW10(t *testing.T) {
 	})
 	t.Run("rate_bound", func(t *testing.T) {
 		f := newGW(t)
+		// Real sockets and PG processing may take >1s on a constrained runner,
+		// legitimately refilling the bucket. Freeze only the budget clock before
+		// any connection to test burst enforcement, not wall-clock throughput.
+		budgetTime := time.Now()
+		f.controller.budgetNow = func() time.Time { return budgetTime }
 		d := f.enroll(t)
 		p := f.dial(t, d, f.session(t, d))
 		p.hello(t)

@@ -32,6 +32,13 @@ slice. Android Kotlin and its durable local SQLite ledger are unchanged.
   65536-byte frame cap, 8 frames/s burst16, 64KiB/s burst128KiB, 256 frames/512KiB
   per session. Outbound queue is 16/1MiB; ACK coalescing occurs before consecutive
   server sequence allocation. Failed write closes before any later sequence.
+  The current rate clock is sampled after each complete WebSocket `Read`, before
+  JSON decoding/store work, not at packet arrival. Slow PG processing can therefore
+  refill the bucket while unread frames experience socket backpressure. This is a
+  processing/admission rate bound, not a proven wire-arrival rate limiter or bound
+  on all kernel/library buffering. Exact wall-clock ingress shaping under slow PG
+  and a slow receiver remains an unvalidated production requirement; the original
+  rate wording did not specify the measurement boundary.
 - Current app authorization gates execution; current same-device identity can
   still submit immutable old-attempt evidence after app revocation/expiry. Device
   revocation closes that evidence channel. New session does not mean new attempt.
@@ -97,7 +104,14 @@ consume/101/hello/lease commit; consume-transaction commit uncertainty; TCP-leve
 commit response loss; sequence write failure injected between consecutive writes;
 100+ reconnect endurance; cross-process/multi-gateway load; exact 512KiB session
 byte exhaustion and 1MiB outbound exhaustion under a slow network receiver.
-Pure queue/budget tests do not substitute for these network cases. The real
+GW10 `rate_bound` retains real PG, 24 actual socket frames, closure and zero-inbox
+assertions, but freezes only the private budget clock before connection startup.
+This removes dependence on runner/PG processing speed for the burst-enforcement
+assertion. Production construction always uses `time.Now`; PG authorization,
+lease/session/heartbeat clocks, frame timestamps and all timeouts are unchanged.
+It is deterministic budget integration evidence, not real wall-clock rate or
+load/backpressure validation. Pure queue/budget tests do not substitute for these
+network cases. The real
 transaction uncertainty injection is a wrapper around pgx.Tx.Commit: it first
 commits PostgreSQL, then returns a synthetic error; it is not merely a successful
 business callback returning an error, and it is not a network fault experiment.
