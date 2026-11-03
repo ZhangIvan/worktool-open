@@ -106,8 +106,15 @@ def result_events(raw):
 
 
 def test_diagnostics(raw):
-    # Only fixed test IDs / enumerated SQLSTATE tokens, NEVER arbitrary Output.
-    failed, states = set(), set()
+    # Fixed IDs, source locations and enumerated SQLSTATE only; NEVER Output text.
+    failed, states, cases, locations = set(), set(), set(), set()
+    approved_cases = TESTS | {
+        'TestPGGatewayGW03/legacy_two_caps',
+        'TestPGGatewayGW03/explicit_11_no_fallback',
+        'TestPGGatewayGW08/private_consumed_nonce_cas',
+        'TestPGGatewayGW08/private_late_command_lock_expiry',
+    }
+    approved_files = {'gateway_integration_test.go', 'migration_guard_integration_test.go'}
     approved_states = {'23503', '23505', '23514', '40001', '40P01', '57014', '55P03'}
     for line in raw.splitlines():
         try:
@@ -118,10 +125,19 @@ def test_diagnostics(raw):
             continue
         if event.get('Action') == 'fail' and event.get('Test') in TESTS:
             failed.add(event['Test'])
+        if event.get('Action') == 'fail' and event.get('Test') in approved_cases:
+            cases.add(event['Test'])
         output = event.get('Output', '')
         if isinstance(output, str):
             states.update(x for x in re.findall(r'\bSQLSTATE=([A-Z0-9]{5})\b', output) if x in approved_states)
-    return {'failedTests': sorted(failed), 'sqlstates': sorted(states)}
+            if event.get('Test') in approved_cases:
+                for file, line in re.findall(r'^\s+([a-z_]+\.go):([1-9][0-9]{0,4}):', output, re.MULTILINE):
+                    if file in approved_files:
+                        locations.add((event['Test'], file, int(line)))
+    return {'failedTests': sorted(failed), 'sqlstates': sorted(states),
+            'failedCases': sorted(cases),
+            'sourceLocations': [{'test': t, 'file': f, 'line': n}
+                                for t, f, n in sorted(locations)[:64]]}
 
 def cleanup():
     name, token, folder = identity()
@@ -261,8 +277,22 @@ def selftest():
             continue
         raise AssertionError('unsafe DSN accepted')
     diagnostics = test_diagnostics(b'{"Action":"fail","Test":"not_allowed_secret","Output":"postgresql://secret SQLSTATE=23503 SQLSTATE=SECRET"}')
-    assert diagnostics == {'failedTests': [], 'sqlstates': ['23503']}
+    assert diagnostics == {'failedTests': [], 'sqlstates': ['23503'],
+                           'failedCases': [], 'sourceLocations': []}
     assert 'secret' not in json.dumps(diagnostics)
+    safe = test_diagnostics('\n'.join(json.dumps(x) for x in [
+        {'Action': 'output', 'Test': 'TestPGGatewayGW03/explicit_11_no_fallback',
+         'Output': '    gateway_integration_test.go:625: secret payload must never escape\n'},
+        {'Action': 'output', 'Test': 'TestPGGatewayGW08/private_consumed_nonce_cas',
+         'Output': '    private_secret.go:12: secret\n'},
+        {'Action': 'output', 'Test': 'not_allowed_secret',
+         'Output': '    gateway_integration_test.go:625: secret\n'},
+        {'Action': 'fail', 'Test': 'TestPGGatewayGW03/explicit_11_no_fallback'},
+    ]).encode())
+    assert safe['failedCases'] == ['TestPGGatewayGW03/explicit_11_no_fallback']
+    assert safe['sourceLocations'] == [{'test': 'TestPGGatewayGW03/explicit_11_no_fallback',
+                                       'file': 'gateway_integration_test.go', 'line': 625}]
+    assert 'secret' not in json.dumps(safe) and 'payload' not in json.dumps(safe)
     print('PASS pure selftest: resource/identity/mount/port gates, missing-env and missing/skip/fail result gates; PG NOT_RUN')
 
 

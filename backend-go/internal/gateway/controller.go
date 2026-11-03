@@ -211,10 +211,13 @@ func (x *connection) finish() {
 	x.mu.Lock()
 	ws := x.ws
 	x.mu.Unlock()
+	x.work.Wait()
+	// stop synchronously registers its bounded close worker. Give that worker
+	// the opportunity to send the policy close frame before the final hard close.
+	// Authorization cancellation is still immediate; the worker has a 200ms cap.
 	if ws != nil {
 		_ = ws.CloseNow()
 	}
-	x.work.Wait()
 	x.mu.Lock()
 	h := x.lease
 	x.mu.Unlock()
