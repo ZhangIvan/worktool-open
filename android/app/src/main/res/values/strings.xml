@@ -24,4 +24,84 @@
     <string name="debug_screenshot_ok">截图 OK：%1$d×%2$d（PNG %3$d 字节，仅内存未落盘）</string>
     <string name="debug_screenshot_unsupported">截图不可用：API&lt;30 或服务未连接（降级路径见 docs/03 T2.4）</string>
     <string name="debug_screenshot_failed">截图失败：code=%1$d msg=%2$s</string>
+
+    <!-- ==================== 产品冲刺 A 车道（主界面 / 配对引导 / 设置） ==================== -->
+
+    <!-- 状态卡 -->
+    <string name="main_status_online">机器人在线</string>
+    <string name="main_status_offline">机器人离线</string>
+    <string name="main_status_not_started">会话未启动</string>
+    <string name="main_status_heartbeat">最后心跳：%1$s</string>
+
+    <!-- 快捷操作（FR-52 暂停/恢复 + FR-54 干跑开关） -->
+    <string name="main_pause">暂停机器人</string>
+    <string name="main_resume_request">发起恢复</string>
+    <string name="main_resume_confirm">确认恢复</string>
+    <string name="main_resume_cancel">撤回恢复</string>
+    <string name="main_dry_run_switch">干跑</string>
+    <string name="main_dry_run_summary">干跑开启：服务端下发的指令只产出「将要做什么」预览，不执行任何真实操作（FR-54，同引擎同路径零副作用）；回执经 metaJson.deviceDryRun=true 标记</string>
+
+    <!-- 底部标签页 -->
+    <string name="main_tab_status">状态</string>
+    <string name="main_tab_commands">指令</string>
+    <string name="main_tab_settings">设置</string>
+
+    <!-- 状态 tab -->
+    <string name="main_session_detail">设备：%1$s\n会话：%2$s</string>
+    <string name="main_event_log_title">事件日志</string>
+    <string name="main_credential_revoked">服务端已撤销本设备凭据，请重新配对</string>
+
+    <!-- 指令 tab（列表行 + 详情） -->
+    <string name="cmd_row_types">%1$s · 风险 %2$s</string>
+    <string name="cmd_row_last">上次：%1$s</string>
+    <string name="cmd_detail_types">指令号：%1$s · 风险：%2$s</string>
+    <string name="cmd_detail_params">参数：</string>
+    <string name="cmd_detail_last">上次执行：%1$s</string>
+    <string name="cmd_detail_dry_run">干跑预览（FR-54）</string>
+
+    <!-- 设置 tab -->
+    <string name="settings_server_title">服务端</string>
+    <string name="settings_server_hint">wss://host:port</string>
+    <string name="settings_change_server">修改 server 地址</string>
+    <string name="settings_change_server_title">修改 server 地址</string>
+    <string name="settings_change_server_message">凭据由原 server 签发，更换地址后需重新配对（将清除本机凭据并进入配对引导）。</string>
+    <string name="settings_change_server_confirm">确认更换</string>
+    <string name="settings_unpair">断开配对</string>
+    <string name="settings_unpair_title">断开配对</string>
+    <string name="settings_unpair_message">将清除本机加密凭据与 server 地址（服务端凭据保留，可随时重新配对）。确定断开？</string>
+    <string name="settings_unpair_confirm">断开</string>
+    <string name="settings_log_switch">会话日志落盘（filesDir/logs/）</string>
+
+    <!-- 关于（版本 + License + 致谢，与仓库根 LICENSE/NOTICE 同口径；R4：描述性使用 + 显著致谢） -->
+    <string name="about_title">关于</string>
+    <string name="about_body">版本 v%1$s（M4）\nLicense：Apache-2.0（仓库根 LICENSE）\n致谢：本产品包含开源项目 gallonyin/worktool（Apache-2.0）衍生的软件，修改与增补见 git 历史（NOTICE）。\nWeCom/企业微信 为腾讯商标；本项目为基于 Android 无障碍 API 的独立自动化工具，与腾讯无关联、无官方背景。</string>
+
+    <!-- 通用对话框 -->
+    <string name="main_dialog_ok">确定</string>
+    <string name="main_dialog_cancel">取消</string>
+
+    <!-- 配对引导流 -->
+    <string name="pair_title">连接你的服务端</string>
+    <string name="pair_step_address_title">第 1 步 · 服务端地址</string>
+    <string name="pair_step_code_title">第 2 步 · 输入 6 位配对码</string>
+    <string name="pair_step_done_title">配对成功</string>
+    <string name="pair_address_hint">wss://your-server.example.com</string>
+    <string name="pair_address_next">下一步</string>
+    <string name="pair_addr_error_format">地址格式：wss://host[:port]（或 https://）</string>
+    <string name="pair_addr_error_host">主机名缺失或不合法</string>
+    <string name="pair_addr_error_port">端口须为 1~65535</string>
+    <string name="pair_addr_error_extra">地址不得携带用户信息/查询/锚点</string>
+    <string name="pair_addr_error_bare_ip">产品版不允许裸 IP 地址（请使用域名，SR-09）</string>
+    <string name="pair_addr_error_plain">明文连接仅允许 loopback 原型调试（SR-09）</string>
+    <string name="pair_addr_error_security">安全策略拒绝：%1$s</string>
+    <string name="pair_addr_error_security_generic">该地址被安全策略拒绝（裸 IP / 明文限制，SR-09）</string>
+    <string name="pair_code_hint">6 位一次性配对码（服务端签发）</string>
+    <string name="pair_button">配对</string>
+    <string name="pair_button_running">配对中…</string>
+    <string name="pair_code_error">请输入 6 位数字配对码</string>
+    <string name="pair_err_403">配对码无效、过期或已使用（403）</string>
+    <string name="pair_err_400">配对请求被服务端拒绝（400）</string>
+    <string name="pair_err_generic">配对失败：%1$s</string>
+    <string name="pair_done_detail">设备已注册：%1$s\n凭据已加密存入 AndroidKeyStore</string>
+    <string name="pair_done">进入主界面</string>
 </resources>

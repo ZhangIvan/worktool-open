@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 零依赖（无 AppCompat），直接用系统 Material 主题。 -->
+<!--
+  主题（产品冲刺 A 车道）：Material 3 设计令牌（colors.xml M3 light 方案取值）挂载到
+  平台 android:Theme.Material（零外部 UI 库，ask ④——Material Components for Android
+  是外部 UI 库，本仓依赖策略（G3/SR-03 白名单：OkHttp + kotlinx-serialization）禁引入；
+  Android 12+ 平台主题本身即 Material 化样式，低版本由平台 Material 主题兜底）。
+-->
 <resources>
     <style name="Theme.WorkToolOpen" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/primary</item>
+        <item name="android:colorPrimaryDark">@color/primary</item>
+        <item name="android:colorAccent">@color/primary</item>
         <item name="android:statusBarColor">@color/primary</item>
+        <item name="android:navigationBarColor">@color/surface</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/surface</item>
+        <item name="android:colorBackground">@color/surface</item>
     </style>
 </resources>

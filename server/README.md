@@ -48,6 +48,10 @@ go run ./cmd/server -db worktool.db \
 - `POST /api/v2/device-sessions`——建会话；服务端凭据失忆（重启）时须 `renegotiate{ts,nonce,signature}=Ed25519(deviceId|ts|nonce)`（spec §5.5.1，兼作重启恢复）
 - `WS /api/v2/device-sessions/{sessionId}`——v2 安全会话（首帧 hello）
 - `WS /webserver/wework/{robotId}`——v1 兼容（弱鉴权已知，仅迁移面）
+- `POST /openapi/v1/robots/{robotId}/commands`——apifox 兼容面（FR-34）与扩展组：配置/回调 CRUD/历史/群/队列（`openapi_rest.go`；鉴权→60QPM 限流→写操作幂等键；队列清理/指定取消经 L2 审批门 REV-SRV-05）
+- `POST /fileUpload/upload?robotId=`——文件上传（multipart part 名 `file`，≤50MiB；b2 §1 契约，REV-SRV-02 补齐）→ `data:{fileId,url,size,sha256}`
+- `GET /files/{fileId}`——上传文件取回（218 fileUrl 闭环取数面；能力 URL：fileId 为 128-bit UUID，鉴权口径登记于 05 矩阵）
+- `POST /robot/robotInfo/update?robotId=`——机器人消息回调配置（QA 面 openCallback/replyAll/callbackUrl，b2 §2.1，REV-SRV-02 补齐；分发接线属网关/事件车道 dodDeferred）
 - `/healthz` / `/readyz`
 
 ### 凭据存储语义（spec §5.1.3 的落地口径）

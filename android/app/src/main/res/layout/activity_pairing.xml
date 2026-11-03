@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  配对引导流（产品冲刺 A 车道，首次启动入口）：三步单 Activity 切换
+  （地址 → 6 位配对码 → 成功）。全 Android 原生组件，零外部 UI 库（ask ④）。
+  id 契约见 PairingActivity：pair_step_* 三容器 + pair_address_*/pair_code_*/pair_*。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/pair_title"
+            android:textColor="@color/primary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <!-- 步骤 1：server 地址 -->
+        <LinearLayout
+            android:id="@+id/pair_step_address"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/pair_step_address_title"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/pair_address_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:autofillHints=""
+                android:hint="@string/pair_address_hint"
+                android:inputType="textUri" />
+
+            <TextView
+                android:id="@+id/pair_address_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/status_offline"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/pair_address_next"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/pair_address_next" />
+        </LinearLayout>
+
+        <!-- 步骤 2：6 位配对码 -->
+        <LinearLayout
+            android:id="@+id/pair_step_code"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/pair_step_code_title"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/pair_code_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:autofillHints=""
+                android:hint="@string/pair_code_hint"
+                android:inputType="number"
+                android:maxLength="6" />
+
+            <TextView
+                android:id="@+id/pair_code_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/status_offline"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/pair_button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/pair_button" />
+        </LinearLayout>
+
+        <!-- 步骤 3：成功 → 进主界面 -->
+        <LinearLayout
+            android:id="@+id/pair_step_done"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/pair_step_done_title"
+                android:textColor="@color/status_online"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/pair_done_detail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/pair_done"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/pair_done" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

@@ -4,143 +4,166 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>WorkTool-Open 管理台 v0.1</title>
+<title>WorkTool-Open 管理台</title>
 <style>
-  :root { --bg:#101418; --panel:#1a2027; --line:#2a323c; --fg:#dfe6ee; --dim:#8b98a5;
-          --acc:#4da3ff; --ok:#3fbf7f; --warn:#e0a93f; --err:#e06c5f; --mono:ui-monospace,Consolas,monospace; }
+  /* 深色主题（#1e1e2e 底）· 单文件内嵌 CSS · 零外部资源（无 CDN/字体/图片，G3/G4 纪律） */
+  :root {
+    --bg:#1e1e2e; --panel:#262637; --panel2:#2d2d44; --line:#3b3b55; --fg:#e6e6f0;
+    --dim:#9494b0; --acc:#89b4fa; --ok:#a6da95; --warn:#eed49f; --err:#ed8796;
+    --mono:ui-monospace,"Cascadia Code",Consolas,"Courier New",monospace;
+  }
   * { box-sizing:border-box; }
+  html,body { height:100%; }
   body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif; }
-  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between;
-           padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header h1 { font-size:16px; margin:0; font-weight:600; }
-  header h1 small { color:var(--dim); font-weight:400; margin-left:8px; }
-  #authbar { display:flex; gap:8px; align-items:center; }
-  #authbar input { width:280px; }
-  input, select, button { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+         font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif; }
+  /* ---- 布局：左导航 + 右内容 + 顶栏 ---- */
+  #app { display:grid; grid-template-columns:216px 1fr; grid-template-rows:52px 1fr;
+         grid-template-areas:"brand topbar" "nav content"; height:100vh; }
+  #brand { grid-area:brand; display:flex; align-items:center; gap:8px; padding:0 14px;
+           background:var(--panel); border-right:1px solid var(--line); font-weight:700; }
+  #brand .logo { width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg,var(--acc),#b48ead);
+                 display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:#1e1e2e; }
+  #brand small { display:block; color:var(--dim); font-weight:400; font-size:10px; }
+  #topbar { grid-area:topbar; display:flex; align-items:center; justify-content:space-between;
+            gap:12px; padding:0 18px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #crumbs { color:var(--dim); font-size:13px; }
+  #crumbs b { color:var(--fg); font-weight:600; }
+  #authbar { display:flex; gap:6px; align-items:center; }
+  #authbar input { width:230px; }
+  #nav { grid-area:nav; overflow-y:auto; background:var(--panel); border-right:1px solid var(--line);
+         padding:10px 0 30px; }
+  #nav .group { margin:14px 0 4px; padding:0 16px; font-size:11px; color:var(--dim);
+                letter-spacing:1px; text-transform:uppercase; }
+  #nav a { display:flex; align-items:center; gap:9px; padding:7px 16px; color:var(--fg);
+           text-decoration:none; font-size:13.5px; border-left:3px solid transparent; }
+  #nav a .ic { width:18px; text-align:center; font-size:14px; }
+  #nav a:hover { background:var(--panel2); }
+  #nav a.active { background:var(--panel2); border-left-color:var(--acc); color:var(--acc); }
+  #content { grid-area:content; overflow-y:auto; padding:18px 22px 60px; }
+  /* ---- 通用元件 ---- */
+  h2.view { margin:0 0 4px; font-size:17px; }
+  .sub { color:var(--dim); font-size:12.5px; margin:0 0 14px; }
+  section.card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+                 padding:14px 16px; margin:0 0 16px; }
+  section.card > h3 { margin:0 0 10px; font-size:13.5px; color:var(--acc); }
+  section.card > h3 .hint { color:var(--dim); font-weight:400; font-size:11.5px; margin-left:8px; }
+  input, select, textarea, button { background:#191927; color:var(--fg); border:1px solid var(--line);
            border-radius:6px; padding:5px 10px; font:inherit; }
+  textarea { font-family:var(--mono); font-size:12.5px; width:100%; }
   button { cursor:pointer; }
   button:hover { border-color:var(--acc); }
-  button.primary { background:var(--acc); border-color:var(--acc); color:#08131f; font-weight:600; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#1e1e2e; font-weight:600; }
   button.ok { background:transparent; border-color:var(--ok); color:var(--ok); }
   button.no { background:transparent; border-color:var(--err); color:var(--err); }
-  main { max-width:1100px; margin:0 auto; padding:16px 20px 60px; }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-            padding:14px 16px; margin:16px 0; }
-  section h2 { font-size:14px; margin:0 0 10px; color:var(--acc); font-weight:600; }
-  section h2 .hint { color:var(--dim); font-weight:400; font-size:12px; margin-left:8px; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
+  button.warn { background:transparent; border-color:var(--warn); color:var(--warn); }
+  button.mini { padding:2px 8px; font-size:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .row label { display:flex; gap:5px; align-items:center; font-size:13px; color:var(--dim); }
+  table { width:100%; border-collapse:collapse; font-size:12.8px; }
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--dim); font-weight:500; white-space:nowrap; }
   td.mono, .mono { font-family:var(--mono); font-size:12px; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
-  .pill.on { color:var(--ok); border-color:var(--ok); }
-  .pill.off { color:var(--dim); }
-  .pill.dry { color:var(--warn); border-color:var(--warn); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11.5px;
+          border:1px solid var(--line); white-space:nowrap; }
+  .pill.on, .pill.st-delivered, .pill.st-succeeded, .pill.st-active { color:var(--ok); border-color:var(--ok); }
+  .pill.off, .pill.st-dead, .pill.st-failed, .pill.st-revoked, .pill.st-paused { color:var(--err); border-color:var(--err); }
+  .pill.st-pending, .pill.warn, .pill.dry { color:var(--warn); border-color:var(--warn); }
   .pill.L2 { color:var(--err); border-color:var(--err); }
   .pill.L1 { color:var(--warn); border-color:var(--warn); }
   .pill.L0 { color:var(--dim); }
-  .pill.st-succeeded { color:var(--ok); border-color:var(--ok); }
-  .pill.st-failed, .pill.st-execution_unknown { color:var(--err); border-color:var(--err); }
   .pill.st-queued, .pill.st-dispatched, .pill.st-acked, .pill.st-running { color:var(--acc); border-color:var(--acc); }
+  .pill.edge { color:var(--acc); border-color:var(--acc); font-family:var(--mono); }
+  .pill.edge.term { color:var(--warn); border-color:var(--warn); }
+  .pill.edge.unk { color:var(--err); border-color:var(--err); }
+  .dim { color:var(--dim); }
+  .empty { color:var(--dim); padding:10px 0; }
+  #banner { background:#3a1a24; border:1px solid var(--err); color:#ffc4ce; border-radius:8px;
+            padding:8px 12px; margin:0 0 12px; display:none; }
+  #okmsg { background:#20323a; border:1px solid var(--ok); color:#c7e8d4; border-radius:8px;
+           padding:8px 12px; margin:0 0 12px; display:none; }
+  pre.json { background:#191927; border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+             font-family:var(--mono); font-size:12px; overflow-x:auto; margin:8px 0; white-space:pre-wrap; word-break:break-all; }
+  /* 概览指标卡 */
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:16px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .stat .k { color:var(--dim); font-size:12px; }
+  .stat .v { font-size:24px; font-weight:700; font-family:var(--mono); margin-top:2px; }
+  .stat .v small { font-size:12px; color:var(--dim); font-weight:400; }
+  .stat.ok .v { color:var(--ok); } .stat.err .v { color:var(--err); } .stat.acc .v { color:var(--acc); }
+  /* 执行日志时间线 */
+  .tl { border-left:2px solid var(--line); margin:8px 0 4px 6px; padding-left:16px; }
+  .tl .item { position:relative; padding:4px 0 10px; }
+  .tl .item::before { content:""; position:absolute; left:-21px; top:10px; width:8px; height:8px;
+                      border-radius:50%; background:var(--acc); }
+  .tl .item.term::before { background:var(--warn); }
+  .tl .item.unk::before { background:var(--err); }
+  .tl .head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .tl .meta { color:var(--dim); font-size:12px; }
+  .tl .detail { font-family:var(--mono); font-size:11.5px; color:var(--dim); word-break:break-all; }
+  /* 弹层（指令详情） */
+  #modal { position:fixed; inset:0; background:rgba(20,20,31,.72); display:none;
+           align-items:flex-start; justify-content:center; padding:40px 16px; z-index:50; overflow-y:auto; }
+  #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+                max-width:960px; width:100%; padding:16px 18px; }
+  #modal .box h3 { margin:0 0 8px; display:flex; justify-content:space-between; align-items:center; }
+  /* 配对码 */
   #code-result { display:flex; gap:18px; align-items:center; flex-wrap:wrap; margin-top:8px; }
   #code-big { font:700 34px/1 var(--mono); letter-spacing:8px; color:var(--ok);
-              background:#0d1117; border:1px dashed var(--ok); border-radius:8px; padding:12px 18px; }
-  .dim { color:var(--dim); }
-  .err-banner { background:#3a1512; border:1px solid var(--err); color:#ffb3aa;
-                border-radius:8px; padding:8px 12px; margin:10px 0; display:none; }
-  .row-actions { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; align-items:center; }
-  .ap-cell input { width:150px; }
-  #foot { color:var(--dim); font-size:12px; margin-top:24px; }
-  .empty { color:var(--dim); padding:8px 0; }
+              background:#191927; border:1px dashed var(--ok); border-radius:8px; padding:12px 18px; }
+  .note { font-size:12px; color:var(--dim); margin-top:6px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:980px){ #app{ grid-template-columns:64px 1fr; } #nav a span.txt,#nav .group,#brand small{ display:none; } .grid2{ grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>WorkTool-Open 管理台 <small>v0.1 最小面 · Go 直接伺服 · 零构建链</small></h1>
-  <div id="authbar">
-    <input id="token" type="password" placeholder="管理面 Bearer Token" autocomplete="off">
-    <button id="save-token" class="primary">保存</button>
-    <button id="clear-token">清除</button>
+<div id="app">
+  <div id="brand"><span class="logo">WT</span><span>WorkTool-Open<small>管理台 · 单文件 · 零构建链</small></span></div>
+  <div id="topbar">
+    <div id="crumbs">管理台 / <b id="crumb-view">概览</b></div>
+    <div id="authbar">
+      <input id="token" type="password" placeholder="管理面 Bearer Token" autocomplete="off">
+      <button id="save-token" class="primary mini">保存</button>
+      <button id="clear-token" class="mini">清除</button>
+    </div>
   </div>
-</header>
-
-<div class="err-banner" id="banner"></div>
-
-<main>
-  <section>
-    <h2>配对码签发 <span class="hint">POST /api/v1/admin/pairing-codes · 6 位数字 · TTL 10 分钟 · 单次有效（spec §5.1.1）</span></h2>
-    <div class="row-actions">
-      <button id="issue-code" class="primary">签发配对码</button>
-      <span class="dim" id="code-note">签发后把 6 位码填入 App 配对面；一次成功配对即作废。</span>
+  <nav id="nav">
+    <div class="group">总览</div>
+    <a href="#/dashboard" data-route="dashboard"><span class="ic">📊</span><span class="txt">概览 Dashboard</span></a>
+    <div class="group">设备</div>
+    <a href="#/devices" data-route="devices"><span class="ic">📱</span><span class="txt">设备管理</span></a>
+    <div class="group">指令</div>
+    <a href="#/send" data-route="send"><span class="ic">📨</span><span class="txt">指令发送</span></a>
+    <a href="#/commands" data-route="commands"><span class="ic">🗒️</span><span class="txt">指令历史</span></a>
+    <a href="#/queue" data-route="queue"><span class="ic">🧾</span><span class="txt">队列视图</span></a>
+    <a href="#/approvals" data-route="approvals"><span class="ic">✅</span><span class="txt">L2 审批</span></a>
+    <div class="group">回调</div>
+    <a href="#/callbacks" data-route="callbacks"><span class="ic">🔔</span><span class="txt">回调配置</span></a>
+    <a href="#/callback-logs" data-route="callback-logs"><span class="ic">📡</span><span class="txt">回调日志</span></a>
+    <div class="group">日志</div>
+    <a href="#/logs-exec" data-route="logs-exec"><span class="ic">🧭</span><span class="txt">指令执行日志</span></a>
+    <a href="#/logs-audit" data-route="logs-audit"><span class="ic">📜</span><span class="txt">系统审计日志</span></a>
+    <div class="group">系统</div>
+    <a href="#/settings" data-route="settings"><span class="ic">⚙️</span><span class="txt">设置</span></a>
+  </nav>
+  <main id="content">
+    <div id="banner"></div>
+    <div id="okmsg"></div>
+    <div id="view"></div>
+    <div class="note" id="foot">
+      数据全部来自本服务（无第三方资源/字体/统计）· 指令正文仅在详情面展示（列表仅元数据）·
+      令牌仅存 SHA-256 hash（原始值一次返回）· TLS 部署下使用（SR-01/09）。
     </div>
-    <div id="code-result" hidden>
-      <div id="code-big">000000</div>
-      <div>
-        <div>有效期至 <span id="code-exp" class="mono"></span></div>
-        <div id="code-countdown" class="dim mono"></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>设备与在线状态 <span class="hint">GET /api/v1/admin/devices</span></h2>
-    <div class="row-actions">
-      <button id="refresh-devices">刷新</button>
-      <label><input type="checkbox" id="auto-devices"> 每 5s 自动刷新</label>
-      <span class="dim">robotId 为空 = 配对面未绑定 / 被重配对清空（W-M3R 运维注意），如实展示。</span>
-    </div>
-    <table>
-      <thead><tr><th>deviceId</th><th>robotId</th><th>名称</th><th>状态</th><th>tokenVer</th><th>epoch</th><th>配对时间</th><th>在线</th></tr></thead>
-      <tbody id="devices-body"><tr><td colspan="8" class="empty">尚未加载</td></tr></tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>指令审计流 <span class="hint">GET /api/v1/admin/commands · 「干跑」= FR-54 dryRun：绝不下发设备</span></h2>
-    <div class="row-actions">
-      <button id="refresh-commands">刷新</button>
-      <label>条数 <select id="cmd-limit"><option>50</option><option>100</option><option>200</option><option>500</option></select></label>
-      <label>状态 <select id="cmd-state">
-        <option value="">全部</option><option>queued</option><option>dispatched</option><option>acked</option>
-        <option>running</option><option>succeeded</option><option>failed</option><option>cancelled</option>
-        <option>execution_unknown</option>
-      </select></label>
-      <label><input type="checkbox" id="auto-commands"> 每 5s 自动刷新</label>
-    </div>
-    <table>
-      <thead><tr><th>时间</th><th>commandId</th><th>目标</th><th>类型</th><th>状态</th><th>风险</th><th>干跑</th></tr></thead>
-      <tbody id="commands-body"><tr><td colspan="7" class="empty">尚未加载</td></tr></tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>L2 审批 <span class="hint">GET /api/v1/admin/approvals + POST …/decision · approver 必须独立（自批拒绝，FR-53）</span></h2>
-    <div class="row-actions">
-      <button id="refresh-approvals">刷新</button>
-      <label>决议人 <input id="approver" placeholder="approver（≠申请人）" size="16"></label>
-      <label>理由 <input id="ap-reason" placeholder="决议理由（可选）" size="24"></label>
-      <span class="dim">决议人名会记住在本浏览器（localStorage）。</span>
-    </div>
-    <table>
-      <thead><tr><th>approvalId</th><th>申请人</th><th>目标</th><th>类型</th><th>理由</th><th>登记时间</th><th>决议</th></tr></thead>
-      <tbody id="approvals-body"><tr><td colspan="7" class="empty">尚未加载</td></tr></tbody>
-    </table>
-  </section>
-
-  <div id="foot">
-    数据全部来自本服务（无第三方资源）· 指令正文不入本面（审计流仅元数据）·
-    管理面令牌仅存 SHA-256 hash · TLS 部署下使用（SR-01/09）。
-  </div>
-</main>
+  </main>
+</div>
+<div id="modal"><div class="box" id="modal-box"></div></div>
 
 <script>
 "use strict";
-// —— 令牌管理：localStorage 持久；支持 #token= 深链吸收（吸收后立即从地址栏抹除，
-//    防止随链接二次泄露；仍不建议分享带 token 的 URL）。
+/* ============ 基础设施 ============ */
 var TOKEN_KEY = "wt_admin_token", APPROVER_KEY = "wt_admin_approver";
 var token = localStorage.getItem(TOKEN_KEY) || "";
-(function absorbHash() {
+// #token= 深链吸收（吸收后立即抹除，防随链接二次泄露）；其余 hash 一律视为路由。
+(function absorbToken() {
   var m = location.hash.match(/^#token=(.+)$/);
   if (m) {
     token = decodeURIComponent(m[1]);
@@ -148,21 +171,18 @@ var token = localStorage.getItem(TOKEN_KEY) || "";
     history.replaceState(null, "", location.pathname + location.search);
   }
 })();
-var $ = function (id) { return document.getElementById(id); };
-function banner(msg) {
-  var b = $("banner");
-  b.textContent = msg; b.style.display = msg ? "block" : "none";
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
 }
 function fmtMs(ms) {
   if (!ms) return "—";
   return new Date(ms).toISOString().replace("T", " ").replace(".000Z", "Z");
 }
-function esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
-  });
-}
-// api()：统一 Bearer 鉴权 + 401 统一提示。
+function banner(msg) { var b = $("banner"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
+function okmsg(msg) { var b = $("okmsg"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
 function api(method, path, body) {
   var opt = { method: method, headers: { "Authorization": "Bearer " + token } };
   if (body !== undefined) {
@@ -172,128 +192,758 @@ function api(method, path, body) {
   return fetch(path, opt).then(function (r) {
     return r.json().catch(function () { return {}; }).then(function (j) {
       if (r.status === 401) { banner("鉴权失败（401）：请检查管理面 Token 后点「保存」。"); throw new Error("401"); }
-      if (!r.ok) { banner("请求失败（" + r.status + "）：" + (j.message || r.statusText)); throw new Error(String(r.status)); }
-      banner("");
-      return j;
+      if (!r.ok) { banner("请求失败（" + r.status + " " + (j.error || "") + "）：" + (j.message || r.statusText)); throw new Error(String(r.status)); }
+      banner(""); return j;
     });
   });
 }
+function openModal(html) { $("modal-box").innerHTML = html; $("modal").style.display = "flex"; }
+function closeModal() { $("modal").style.display = "none"; $("modal-box").innerHTML = ""; }
+$("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(); });
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
 
-// —— 配对码 ——
-var codeTimer = null;
-$("issue-code").onclick = function () {
-  api("POST", "/api/v1/admin/pairing-codes", {}).then(function (j) {
-    $("code-result").hidden = false;
-    $("code-big").textContent = j.pairingCode;
-    $("code-exp").textContent = fmtMs(j.expiresAt);
-    var deadline = j.expiresAt;
-    if (codeTimer) clearInterval(codeTimer);
-    codeTimer = setInterval(function () {
-      var left = Math.floor((deadline - Date.now()) / 1000);
-      $("code-countdown").textContent = left > 0
-        ? "剩余 " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
-        : "已过期（未使用即作废）";
-      if (left <= 0) clearInterval(codeTimer);
-    }, 500);
-  }).catch(function () {});
+/* ============ 指令目录（数据源：server/internal/api/openapi_registry.go 指令名 +
+ * scheduler/guard.go riskClassByType 分级 + 未登记类型 L2 fail-closed；展示口径
+ * 以服务端 GET /api/v1/admin/risk/{type} 实时查询为准） ============ */
+var RISK = {
+  L1: [206, 207, 213, 220, 227, 228, 229, 230],
+  L2: [219, 234, 304]
 };
-
-// —— 设备列表 ——
-function loadDevices() {
-  api("GET", "/api/v1/admin/devices").then(function (j) {
-    var rows = (j.devices || []).map(function (d) {
-      return "<tr><td class='mono'>" + esc(d.deviceId) + "</td>" +
-        "<td class='mono'>" + esc(d.robotId || "—") + "</td>" +
-        "<td>" + esc(d.deviceName || "—") + "</td>" +
-        "<td>" + esc(d.status) + "</td>" +
-        "<td>" + d.tokenVersion + "</td><td>" + d.epoch + "</td>" +
-        "<td class='mono'>" + fmtMs(d.pairedAtMs) + "</td>" +
-        "<td><span class='pill " + (d.online ? "on" : "off") + "'>" + (d.online ? "在线" : "离线") + "</span></td></tr>";
-    });
-    $("devices-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>无已配对设备</td></tr>";
-  }).catch(function () {});
+var CATALOG = [
+  { t: 201, n: "停止并回家", p: [] },
+  { t: 202, n: "循环接收新消息", p: [] },
+  { t: 203, n: "发送文本消息", p: ["targetRoom", "receivedContent"] },
+  { t: 204, n: "回复消息", p: ["targetRoom", "receivedContent"] },
+  { t: 205, n: "转发消息", p: ["targetRoom", "receivedName"] },
+  { t: 206, n: "建群", p: ["groupName"] },
+  { t: 207, n: "改群配置", p: ["targetRoom"] },
+  { t: 212, n: "通过全部好友申请", p: [] },
+  { t: 213, n: "手机号加好友", p: ["receivedName"] },
+  { t: 214, n: "查看群信息", p: ["targetRoom"] },
+  { t: 218, n: "发送文件", p: ["targetRoom", "receivedName"] },
+  { t: 219, n: "解散群", p: ["targetRoom"] },
+  { t: 220, n: "群内加好友", p: ["receivedName"] },
+  { t: 224, n: "发送链接", p: ["targetRoom", "receivedContent"] },
+  { t: 226, n: "撤回消息", p: ["targetRoom", "receivedContent"] },
+  { t: 229, n: "批量发送", p: ["targetRoom"] },
+  { t: 233, n: "扫描二维码", p: [] },
+  { t: 234, n: "删除联系人", p: ["receivedName"] },
+  { t: 237, n: "清理企微缓存", p: [] },
+  { t: 238, n: "批量发文本", p: ["targetRoom"] },
+  { t: 244, n: "退出群", p: ["targetRoom"] },
+  { t: 303, n: "机器人控制器测试", p: [] },
+  { t: 304, n: "清空指令队列", p: [] },
+  { t: 501, n: "查群信息", p: ["targetRoom"] },
+  { t: 503, n: "查我的信息", p: [] },
+  { t: 505, n: "查最近会话", p: [] },
+  { t: 506, n: "查企业列表", p: ["receivedContent"] },
+  { t: 507, n: "查全部好友", p: [] },
+  { t: 508, n: "查全部群聊", p: [] }
+];
+function riskOf(t) {
+  if (RISK.L2.indexOf(t) >= 0) return "L2";
+  if (RISK.L1.indexOf(t) >= 0) return "L1";
+  var known = CATALOG.some(function (c) { return c.t === t; });
+  return known ? "L0" : "L2"; // 未登记类型按 L2 fail-closed（FR-53 裁决②）
+}
+function catByType(t) {
+  for (var i = 0; i < CATALOG.length; i++) if (CATALOG[i].t === t) return CATALOG[i];
+  return null;
+}
+var STATES = ["", "queued", "dispatched", "acked", "running", "succeeded", "failed", "cancelled", "execution_unknown"];
+var STNAME = { queued: "排队", dispatched: "已下发", acked: "已确认", running: "执行中", succeeded: "成功", failed: "失败", cancelled: "已取消", execution_unknown: "结果未知" };
+function stPill(st) { return "<span class='pill st-" + esc(st) + "'>" + (STNAME[st] || esc(st)) + "</span>"; }
+function riskPill(rc) { return "<span class='pill " + esc(rc) + "'>" + esc(rc) + "</span>"; }
+function shortId(id) { return "<span class='mono' title='" + esc(id) + "'>" + esc(String(id).slice(0, 13)) + "…</span>"; }
+// E01..E18 边（数据源 protocol/state-transitions.csv；term=终态边 unk=对账登记边）
+var EDGE_TERM = { E02: 1, E04: 1, E10: 1, E11: 1, E13: 1, E14: 1, E15: 1, E16: 1 };
+var EDGE_UNK = { E06: 1, E07: 1, E08: 1, E17: 1, E18: 1 };
+function edgePill(e) {
+  var cls = "edge" + (EDGE_TERM[e] ? " term" : EDGE_UNK[e] ? " unk" : "");
+  return "<span class='pill " + cls + "'>" + esc(e) + "</span>";
 }
 
-// —— 指令审计流 ——
-function loadCommands() {
-  var q = "?limit=" + $("cmd-limit").value;
-  if ($("cmd-state").value) q += "&state=" + encodeURIComponent($("cmd-state").value);
-  api("GET", "/api/v1/admin/commands" + q).then(function (j) {
-    var rows = (j.commands || []).map(function (c) {
-      return "<tr><td class='mono'>" + fmtMs(c.createdAtMs) + "</td>" +
-        "<td class='mono'>" + esc(c.commandId.slice(0, 13)) + "…</td>" +
-        "<td class='mono'>" + esc(c.target) + "</td>" +
-        "<td>" + c.type + "</td>" +
-        "<td><span class='pill st-" + esc(c.state) + "'>" + esc(c.state) + "</span></td>" +
-        "<td><span class='pill " + esc(c.riskClass) + "'>" + esc(c.riskClass) + "</span></td>" +
-        "<td>" + (c.dryRun ? "<span class='pill dry'>干跑</span>" : "<span class='dim'>—</span>") + "</td></tr>";
-    });
-    $("commands-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>无指令记录</td></tr>";
-  }).catch(function () {});
+/* ============ 路由 ============ */
+var ROUTES = {
+  "dashboard": { title: "概览 Dashboard", render: renderDashboard },
+  "devices": { title: "设备管理", render: renderDevices },
+  "send": { title: "指令发送", render: renderSend },
+  "commands": { title: "指令历史", render: renderCommands },
+  "queue": { title: "队列视图", render: renderQueue },
+  "approvals": { title: "L2 审批", render: renderApprovals },
+  "callbacks": { title: "回调配置", render: renderCallbacks },
+  "callback-logs": { title: "回调日志", render: renderCallbackLogs },
+  "logs-exec": { title: "指令执行日志", render: renderExecLogs },
+  "logs-audit": { title: "系统审计日志", render: renderAuditLogs },
+  "settings": { title: "设置", render: renderSettings }
+};
+var autoTimers = {}; // boxId → interval 句柄（每视图至多一个；CR ADM-3）
+function clearAuto() {
+  Object.keys(autoTimers).forEach(function (k) { clearInterval(autoTimers[k]); });
+  autoTimers = {};
+}
+function bindAuto(boxId, fn) {
+  $(boxId).addEventListener("change", function () {
+    // 先清本视图旧 interval 再按勾选态重建（CR ADM-3：取消勾选即停；反复勾选不叠加）
+    if (autoTimers[boxId]) { clearInterval(autoTimers[boxId]); delete autoTimers[boxId]; }
+    if ($(boxId).checked) { fn(); autoTimers[boxId] = setInterval(fn, 5000); }
+  });
+}
+function route() {
+  var name = (location.hash || "#/dashboard").replace(/^#\//, "") || "dashboard";
+  if (!ROUTES[name]) name = "dashboard";
+  clearAuto(); closeModal(); okmsg("");
+  $("crumb-view").textContent = ROUTES[name].title;
+  var links = document.querySelectorAll("#nav a");
+  for (var i = 0; i < links.length; i++)
+    links[i].classList.toggle("active", links[i].getAttribute("data-route") === name);
+  ROUTES[name].render();
+}
+window.addEventListener("hashchange", route);
+
+/* ============ ① 概览 Dashboard ============ */
+function renderDashboard() {
+  $("view").innerHTML =
+    "<h2 class='view'>概览</h2><p class='sub'>GET /api/v1/admin/overview · 聚合端点（今日 = 服务端 UTC 当天；错误率分母仅计真实执行终态，干跑不计）</p>" +
+    "<div class='stats' id='ov-stats'><div class='stat'><div class='k'>在线设备</div><div class='v' id='ov-online'>—</div></div>" +
+    "<div class='stat acc'><div class='k'>今日指令</div><div class='v' id='ov-cmds'>—</div></div>" +
+    "<div class='stat' id='ov-rate-card'><div class='k'>今日错误率</div><div class='v' id='ov-rate'>—</div></div>" +
+    "<div class='stat'><div class='k'>待决议审批</div><div class='v' id='ov-appr'>—</div></div>" +
+    "<div class='stat'><div class='k'>排队指令</div><div class='v' id='ov-queue'>—</div></div>" +
+    "<div class='stat'><div class='k'>待投递回调</div><div class='v' id='ov-cbs'>—</div></div></div>" +
+    "<section class='card'><h3>最近回调触发 <span class='hint'>outbox 投递行（最近 10 条）</span></h3>" +
+    "<div class='row'><button id='ov-refresh' class='mini'>刷新</button><label><input type='checkbox' id='ov-auto'> 每 5s 自动刷新</label></div>" +
+    "<table><thead><tr><th>更新时间</th><th>kind</th><th>commandId</th><th>状态</th><th>尝试</th><th>最近错误</th></tr></thead>" +
+    "<tbody id='ov-cb-body'><tr><td colspan='6' class='empty'>尚未加载</td></tr></tbody></table></section>";
+  function load() {
+    api("GET", "/api/v1/admin/overview").then(function (j) {
+      $("ov-online").innerHTML = j.devicesOnline + "<small> / " + j.devicesTotal + " 台</small>";
+      $("ov-cmds").innerHTML = j.todayCommands + "<small> 成功 " + j.todaySucceeded + " · 失败 " + j.todayFailed + "</small>";
+      var pct = (j.todayErrorRate * 100);
+      $("ov-rate").innerHTML = (pct ? pct.toFixed(1) : "0") + "%";
+      $("ov-rate-card").className = "stat " + (pct >= 50 ? "err" : pct > 0 ? "" : "ok");
+      $("ov-appr").textContent = j.pendingApprovals;
+      $("ov-queue").textContent = j.queuedCommands;
+      $("ov-cbs").textContent = j.pendingCallbacks;
+      var rows = (j.recentCallbacks || []).map(function (c) {
+        return "<tr><td class='mono'>" + fmtMs(c.updatedAtMs) + "</td><td>" + esc(c.kind) + "</td>" +
+          "<td>" + (c.commandId ? shortId(c.commandId) : "<span class='dim'>—</span>") + "</td>" +
+          "<td><span class='pill st-" + esc(c.status) + "'>" + esc(c.status) + "</span></td>" +
+          "<td>" + c.attempts + "</td><td class='mono'>" + esc(c.lastError || "—") + "</td></tr>";
+      });
+      $("ov-cb-body").innerHTML = rows.join("") || "<tr><td colspan='6' class='empty'>暂无回调记录（未配置接收器时 outbox 保持 pending）</td></tr>";
+    }).catch(function () {});
+  }
+  $("ov-refresh").onclick = load;
+  bindAuto("ov-auto", load);
+  load();
 }
 
-// —— 审批 ——
-function decide(id, decision) {
-  var approver = $("approver").value.trim();
-  if (!approver) { banner("请先填写决议人（approver）；与申请人相同会被自批拒绝。"); return; }
-  api("POST", "/api/v1/admin/approvals/" + encodeURIComponent(id) + "/decision", {
-    approver: approver, decision: decision, reason: $("ap-reason").value.trim()
-  }).then(function () {
-    $("ap-reason").value = "";
-    loadApprovals();
-  }).catch(function () {});
+/* ============ ② 设备管理 ============ */
+function renderDevices() {
+  $("view").innerHTML =
+    "<h2 class='view'>设备管理</h2><p class='sub'>GET /api/v1/admin/devices · 操作 POST /api/v1/admin/devices/{id}/pause|resume|unbind（全部落审计）</p>" +
+    "<section class='card'><h3>配对码签发 <span class='hint'>POST /api/v1/admin/pairing-codes · 6 位数字 · TTL 10 分钟 · 单次有效（spec §5.1.1）</span></h3>" +
+    "<div class='row'><button id='issue-code' class='primary'>签发配对码</button><span class='dim'>签发后把 6 位码填入 App 配对面；一次成功配对即作废。</span></div>" +
+    "<div id='code-result' hidden><div id='code-big'>000000</div><div><div>有效期至 <span id='code-exp' class='mono'></span></div><div id='code-countdown' class='dim mono'></div></div></div></section>" +
+    "<section class='card'><h3>设备列表 <span class='hint'>型号含于设备名（App 上报 “厂商 型号”）；Android/企微版本配对面未上报，如实标 —</span></h3>" +
+    "<div class='row'><button id='refresh-devices' class='mini'>刷新</button><label><input type='checkbox' id='auto-devices'> 每 5s 自动刷新</label>" +
+    "<span class='dim'>最近活跃 = 最近一次会话痕迹（hello），非逐帧心跳。</span></div>" +
+    "<table><thead><tr><th>deviceId</th><th>robotId</th><th>名称/型号</th><th>状态</th><th>在线</th><th>最近活跃</th><th>配对时间</th><th>epoch</th><th>操作</th></tr></thead>" +
+    "<tbody id='devices-body'><tr><td colspan='9' class='empty'>尚未加载</td></tr></tbody></table>" +
+    "<p class='note'>暂停语义：管理面提交门拒收该设备新指令（409 DEVICE_PAUSED）；网关连接层强制待接线（见 admin/README「边界与后续」）。解绑 = 清空 v1 兼容面绑定（重配对同语义）。</p></section>";
+  var codeTimer = null;
+  $("issue-code").onclick = function () {
+    api("POST", "/api/v1/admin/pairing-codes", {}).then(function (j) {
+      $("code-result").hidden = false;
+      $("code-big").textContent = j.pairingCode;
+      $("code-exp").textContent = fmtMs(j.expiresAt);
+      if (codeTimer) clearInterval(codeTimer);
+      codeTimer = setInterval(function () {
+        var left = Math.floor((j.expiresAt - Date.now()) / 1000);
+        $("code-countdown").textContent = left > 0 ? "剩余 " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") : "已过期（未使用即作废）";
+        if (left <= 0) clearInterval(codeTimer);
+      }, 500);
+    }).catch(function () {});
+  };
+  function deviceAction(id, action, label) {
+    if (!confirm("确认对设备 " + id + " 执行「" + label + "」？")) return;
+    api("POST", "/api/v1/admin/devices/" + encodeURIComponent(id) + "/" + action, {}).then(function (j) {
+      okmsg("设备 " + id + " " + label + " 已执行（changed=" + j.changed + "）");
+      loadDevices();
+    }).catch(function () {});
+  }
+  window.__deviceAction = deviceAction;
+  function loadDevices() {
+    api("GET", "/api/v1/admin/devices").then(function (j) {
+      var rows = (j.devices || []).map(function (d) {
+        var pauseBtn = d.status === "paused"
+          ? "<button class='ok mini' data-resume='" + esc(d.deviceId) + "'>恢复</button>"
+          : "<button class='warn mini' data-pause='" + esc(d.deviceId) + "'>暂停</button>";
+        return "<tr><td class='mono'>" + esc(d.deviceId) + "</td>" +
+          "<td class='mono'>" + esc(d.robotId || "—") + "</td>" +
+          "<td>" + esc(d.deviceName || "—") + "</td>" +
+          "<td><span class='pill st-" + esc(d.status) + "'>" + esc(d.status) + "</span></td>" +
+          "<td><span class='pill " + (d.online ? "on" : "off") + "'>" + (d.online ? "在线" : "离线") + "</span></td>" +
+          "<td class='mono'>" + fmtMs(d.lastSessionMs) + "</td>" +
+          "<td class='mono'>" + fmtMs(d.pairedAtMs) + "</td>" +
+          "<td>" + d.epoch + "</td>" +
+          "<td>" + pauseBtn + " <button class='no mini' data-unbind='" + esc(d.deviceId) + "'>解绑</button></td></tr>";
+      });
+      $("devices-body").innerHTML = rows.join("") || "<tr><td colspan='9' class='empty'>无已配对设备</td></tr>";
+      forEach("[data-pause]", function (b) { b.onclick = function () { deviceAction(b.getAttribute("data-pause"), "pause", "暂停"); }; });
+      forEach("[data-resume]", function (b) { b.onclick = function () { deviceAction(b.getAttribute("data-resume"), "resume", "恢复"); }; });
+      forEach("[data-unbind]", function (b) { b.onclick = function () { deviceAction(b.getAttribute("data-unbind"), "unbind", "解绑"); }; });
+    }).catch(function () {});
+  }
+  $("refresh-devices").onclick = loadDevices;
+  bindAuto("auto-devices", loadDevices);
+  loadDevices();
 }
-function loadApprovals() {
-  api("GET", "/api/v1/admin/approvals?status=pending").then(function (j) {
-    var rows = (j.approvals || []).map(function (a) {
-      return "<tr><td class='mono'>" + esc(a.approvalId.slice(0, 13)) + "…</td>" +
-        "<td>" + esc(a.actor) + "</td>" +
-        "<td class='mono'>" + esc(a.target) + "</td>" +
-        "<td>" + a.type + (a.recurring ? "（常设）" : "") + "</td>" +
-        "<td>" + esc(a.reason || "—") + "</td>" +
-        "<td class='mono'>" + fmtMs(a.createdAtMs) + "</td>" +
-        "<td class='ap-cell'><button class='ok' data-approve='" + esc(a.approvalId) + "'>通过</button> " +
-        "<button class='no' data-reject='" + esc(a.approvalId) + "'>拒绝</button></td></tr>";
-    });
-    $("approvals-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>无待决议审批</td></tr>";
-    Array.prototype.forEach.call(document.querySelectorAll("[data-approve]"), function (b) {
-      b.onclick = function () { decide(b.getAttribute("data-approve"), "approve"); };
-    });
-    Array.prototype.forEach.call(document.querySelectorAll("[data-reject]"), function (b) {
-      b.onclick = function () { decide(b.getAttribute("data-reject"), "reject"); };
-    });
-  }).catch(function () {});
+function forEach(sel, fn) {
+  Array.prototype.forEach.call(document.querySelectorAll(sel), fn);
 }
 
-// —— 事件与自动刷新 ——
+/* ============ ③a 指令发送 ============ */
+function renderSend() {
+  var opts = CATALOG.slice().sort(function (a, b) { return a.t - b.t; }).map(function (c) {
+    return "<option value='" + c.t + "'>" + c.t + " · " + esc(c.n) + "（" + riskOf(c.t) + "）</option>";
+  }).join("");
+  $("view").innerHTML =
+    "<h2 class='view'>指令发送</h2><p class='sub'>POST /api/v1/admin/commands · 与兼容面同一条统一管线（scheduler.Submit：幂等/熔断/审批/白名单/限速/风险冻结全链生效）</p>" +
+    "<section class='card'><h3>提交表单 <span class='hint'>L2 指令会先登记待审批（202 + approvalId），决议后携 approvalId 重新提交</span></h3>" +
+    "<div class='row'><label>目标 target <input id='send-target' placeholder='deviceId 或 v1:robotId' size='26'></label>" +
+    "<label>指令类型 <select id='send-type'>" + opts + "</select></label>" +
+    "<label>提交人 actor <input id='send-actor' placeholder='默认 admin' size='12'></label>" +
+    "<label><input type='checkbox' id='send-dry'> 干跑 dryRun（FR-54：不下发设备，仅产出报告）</label></div>" +
+    "<div id='send-fields'></div>" +
+    "<div class='row'><label>审批号 approvalId（L2 决议后回填） <input id='send-approval' placeholder='可选' size='30'></label></div>" +
+    "<div class='row'><button id='send-go' class='primary'>提交指令</button><span id='send-risk-hint' class='dim'></span></div>" +
+    "<div id='send-result'></div>" +
+    "<p class='note'>常用载荷字段：targetRoom / receivedContent / receivedName / groupMembers / addMembers（以 spec §4.4 为准）；未知类型按 L2 fail-closed（FR-53 裁决②）。分级实时口径可到「设置 → 分级查询」验证。</p></section>";
+  function fields() {
+    var t = parseInt($("send-type").value, 10);
+    var c = catByType(t);
+    $("send-risk-hint").innerHTML = "当前类型分级（本地目录口径）：" + riskPill(riskOf(t));
+    if (c && c.p.length) {
+      $("send-fields").innerHTML = "<div class='row'>" + c.p.map(function (f) {
+        return "<label>" + esc(f) + " <input data-param='" + esc(f) + "' placeholder='" + esc(f) + "' size='18'></label>";
+      }).join("") + "</div>";
+    } else {
+      $("send-fields").innerHTML = "<div class='row'><label style='width:100%'>载荷 JSON（type 字段自动注入）<textarea id='send-json' rows='3' placeholder='{\"targetRoom\":\"群名\"}'>{}</textarea></label></div>";
+    }
+  }
+  $("send-type").onchange = fields;
+  fields();
+  $("send-go").onclick = function () {
+    var t = parseInt($("send-type").value, 10);
+    var body = { target: $("send-target").value.trim(), type: t, dryRun: $("send-dry").checked, actor: $("send-actor").value.trim() || "admin" };
+    if ($("send-approval").value.trim()) body.approvalId = $("send-approval").value.trim();
+    var c = catByType(t);
+    if (c && c.p.length) {
+      var params = {};
+      forEach("#send-fields [data-param]", function (i) { if (i.value.trim() !== "") params[i.getAttribute("data-param")] = i.value.trim(); });
+      body.params = params;
+    } else {
+      // CR ADM-2：合并注入 type（服务端对缺 type 的 payload 亦兜底注入，此处先行
+      // 注入使标签「type 字段自动注入」严格成立；显式写了不一致的 type 仍会被服务端拒绝）
+      var parsed;
+      try { parsed = JSON.parse($("send-json").value || "{}"); }
+      catch (e) { banner("载荷 JSON 解析失败：" + e.message); return; }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        banner("载荷 JSON 须为对象（如 {} 或 {\"targetRoom\":\"群名\"}）"); return;
+      }
+      if (parsed.type === undefined) parsed.type = t;
+      body.payload = parsed;
+    }
+    body.idempotencyKey = sendIdemKey(); // CR ADM-4：本次提交的幂等键（失败重试复用，成功后轮换）
+    var btn = $("send-go");
+    btn.disabled = true; // CR ADM-4：防双击（响应返回前不可再点）
+    api("POST", "/api/v1/admin/commands", body).then(function (j) {
+      sendIdemDone(); // 受理成功（含待审批）：轮换幂等键，下一次提交是新指令
+      if (j.state === "awaiting_approval") {
+        $("send-result").innerHTML = "<p class='note' style='color:var(--warn)'>已登记待审批（L2，FR-53）：<span class='mono'>" + esc(j.approvalId) + "</span><br>到「L2 审批」视图决议通过后，把该审批号填入上方 approvalId 重新提交。</p>";
+        okmsg("L2 指令待审批：" + esc(j.approvalId));
+      } else {
+        $("send-result").innerHTML = "<p class='note'>已受理：<span class='mono'>" + esc(j.commandId) + "</span> 状态=" + esc(j.state) +
+          (j.replay ? "（幂等重放）" : "") + " · 在「指令历史」查看轨迹与结果。</p>";
+        okmsg("指令已受理（" + esc(j.state) + "）");
+      }
+    }).catch(function () {
+      // 失败保留幂等键：网络丢失后重试同键同参 → 服务端重放返回原指令，不重复入队
+    }).then(function () { btn.disabled = false; });
+  };
+}
+// CR ADM-4：提交幂等键管理（受理成功轮换 / 失败保留复用）
+var SEND_IDEM_KEY = null;
+function uuid4() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  // 非安全上下文兜底（http://IP 部署）：时间戳+随机数拼 36 位 UUID 形态
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (ch) {
+    var r = Math.random() * 16 | 0;
+    return (ch === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+function sendIdemKey() { if (!SEND_IDEM_KEY) SEND_IDEM_KEY = uuid4(); return SEND_IDEM_KEY; }
+function sendIdemDone() { SEND_IDEM_KEY = null; }
+
+/* ============ ③b 指令历史（分页/过滤/详情） ============ */
+var cmdOffset = 0;
+function renderCommands() {
+  $("view").innerHTML =
+    "<h2 class='view'>指令历史</h2><p class='sub'>GET /api/v1/admin/commands?state=&type=&target=&limit=&offset= · 详情 GET /api/v1/admin/commands/{commandId}（载荷与结果 JSON 仅详情面展示）</p>" +
+    "<section class='card'><div class='row'>" +
+    "<label>状态 <select id='cmd-state'>" + STATES.map(function (s) { return "<option value='" + s + "'>" + (s ? STNAME[s] : "全部") + "</option>"; }).join("") + "</select></label>" +
+    "<label>类型 <input id='cmd-type' placeholder='如 203' size='6'></label>" +
+    "<label>目标 <input id='cmd-target' placeholder='deviceId / v1:robotId' size='18'></label>" +
+    "<label>每页 <select id='cmd-limit'><option>20</option><option selected>50</option><option>100</option></select></label>" +
+    "<button id='cmd-refresh' class='mini'>查询</button><label><input type='checkbox' id='cmd-auto'> 5s 自动</label>" +
+    "<span class='dim' id='cmd-total'></span></div>" +
+    "<div class='row'><button id='cmd-prev' class='mini'>上一页</button><button id='cmd-next' class='mini'>下一页</button><span class='dim mono' id='cmd-page'></span></div>" +
+    "<table><thead><tr><th>时间</th><th>commandId</th><th>目标</th><th>类型</th><th>状态</th><th>风险</th><th>干跑</th><th></th></tr></thead>" +
+    "<tbody id='commands-body'><tr><td colspan='8' class='empty'>尚未加载</td></tr></tbody></table></section>";
+  function load() {
+    var q = "?limit=" + $("cmd-limit").value + "&offset=" + cmdOffset;
+    if ($("cmd-state").value) q += "&state=" + encodeURIComponent($("cmd-state").value);
+    if ($("cmd-type").value.trim()) q += "&type=" + encodeURIComponent($("cmd-type").value.trim());
+    if ($("cmd-target").value.trim()) q += "&target=" + encodeURIComponent($("cmd-target").value.trim());
+    api("GET", "/api/v1/admin/commands" + q).then(function (j) {
+      $("cmd-total").textContent = "共 " + j.total + " 条";
+      var size = parseInt($("cmd-limit").value, 10);
+      $("cmd-page").textContent = "offset " + j.offset + "–" + (j.offset + j.count);
+      $("cmd-prev").disabled = j.offset <= 0;
+      $("cmd-next").disabled = j.offset + size >= j.total;
+      var rows = (j.commands || []).map(function (c) {
+        return "<tr><td class='mono'>" + fmtMs(c.createdAtMs) + "</td>" +
+          "<td>" + shortId(c.commandId) + "</td><td class='mono'>" + esc(c.target) + "</td>" +
+          "<td>" + c.type + "</td><td>" + stPill(c.state) + (c.terminalState && c.terminalState !== c.state ? " → " + stPill(c.terminalState) : "") + "</td>" +
+          "<td>" + riskPill(c.riskClass) + "</td>" +
+          "<td>" + (c.dryRun ? "<span class='pill dry'>干跑</span>" : "<span class='dim'>—</span>") + "</td>" +
+          "<td><button class='mini' data-detail='" + esc(c.commandId) + "'>详情</button></td></tr>";
+      });
+      $("commands-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>无匹配指令</td></tr>";
+      forEach("[data-detail]", function (b) { b.onclick = function () { showCommandDetail(b.getAttribute("data-detail")); }; });
+    }).catch(function () {});
+  }
+  $("cmd-refresh").onclick = function () { cmdOffset = 0; load(); };
+  $("cmd-prev").onclick = function () { cmdOffset = Math.max(0, cmdOffset - parseInt($("cmd-limit").value, 10)); load(); };
+  $("cmd-next").onclick = function () { cmdOffset += parseInt($("cmd-limit").value, 10); load(); };
+  forEach("select#cmd-state, select#cmd-limit", function (s) { s.onchange = function () { cmdOffset = 0; load(); }; });
+  bindAuto("cmd-auto", load);
+  load();
+}
+function showCommandDetail(id) {
+  api("GET", "/api/v1/admin/commands/" + encodeURIComponent(id)).then(function (j) {
+    var c = j.command;
+    var head = "<h3>指令详情 <button class='mini' onclick='closeModal()'>关闭</button></h3>" +
+      "<table><tr><th>commandId</th><td class='mono'>" + esc(c.commandId) + "</td><th>目标</th><td class='mono'>" + esc(c.target) + "</td></tr>" +
+      "<tr><th>类型</th><td>" + c.type + " " + esc((catByType(c.type) || { n: "" }).n) + "</td><th>状态</th><td>" + stPill(c.state) + "</td></tr>" +
+      "<tr><th>风险</th><td>" + riskPill(c.riskClass) + "</td><th>干跑</th><td>" + (c.dryRun ? "是" : "否") + "</td></tr>" +
+      "<tr><th>创建</th><td class='mono'>" + fmtMs(c.createdAtMs) + "</td><th>终态</th><td class='mono'>" + fmtMs(c.terminalAtMs) + " " + esc(c.terminalState || "") + "</td></tr>" +
+      "<tr><th>epoch/seq</th><td class='mono'>" + c.epoch + " / " + c.seq + "</td><th>ACK 截止</th><td class='mono'>" + fmtMs(c.ackDeadlineMs) + "</td></tr></table>" +
+      "<h3 style='margin-top:12px'>载荷</h3><pre class='json'>" + esc(prettyJSON(c.payload)) + "</pre>" +
+      "<h3 style='margin-top:12px'>状态轨迹（E01→E18）</h3><div class='tl'>" +
+      (j.events || []).map(function (e) {
+        return "<div class='item " + (EDGE_TERM[e.edge] ? "term" : EDGE_UNK[e.edge] ? "unk" : "") + "'>" +
+          "<div class='head'>" + edgePill(e.edge) + "<span>" + esc(e.fromState) + " → " + esc(e.toState) + "</span>" +
+          "<span class='pill'>" + esc(e.event) + "</span><span class='meta mono'>" + fmtMs(e.atMs) + "</span></div>" +
+          "<div class='detail'>" + esc(e.detail) + "</div></div>";
+      }).join("") + "</div>" +
+      "<h3 style='margin-top:12px'>结果 JSON（outbox exec_result）</h3>" +
+      ((j.results || []).length ? j.results.map(function (r) {
+        return "<div class='row'><span class='pill st-" + esc(r.status) + "'>" + esc(r.status) + "</span><span class='dim'>尝试 " + r.attempts + " · " + fmtMs(r.createdAtMs) + "</span></div>" +
+          "<pre class='json'>" + esc(prettyJSON(r.payload)) + "</pre>";
+      }).join("") : "<p class='empty'>暂无结果（未终态或未产生回执）</p>");
+    openModal(head);
+  }).catch(function () {});
+}
+function prettyJSON(v) {
+  if (v == null) return "";
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return v; } }
+  try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); }
+}
+
+/* ============ ③c 队列视图 ============ */
+function renderQueue() {
+  $("view").innerHTML =
+    "<h2 class='view'>队列视图</h2><p class='sub'>GET /api/v1/admin/queue · 插队 POST …/queue/{id}/priority · 移除 DELETE …/queue/{id} · 清空 DELETE …/queue?target=（被清指令逐条落 101018 回执）</p>" +
+    "<section class='card'><div class='row'><label>目标过滤 <input id='q-target' placeholder='留空 = 全部目标' size='24'></label>" +
+    "<button id='q-refresh' class='mini'>刷新</button><label><input type='checkbox' id='q-auto'> 5s 自动</label>" +
+    "<label>清空指定目标队列 <input id='q-clear-target' placeholder='target' size='20'></label><button id='q-clear' class='no mini'>清空</button></div>" +
+    "<table><thead><tr><th>序位</th><th>commandId</th><th>目标</th><th>类型</th><th>风险</th><th>入队时间</th><th>操作</th></tr></thead>" +
+    "<tbody id='queue-body'><tr><td colspan='7' class='empty'>尚未加载</td></tr></tbody></table>" +
+    "<p class='note'>插队语义：队列序键抬至队首前（原序键留痕审计）；仅 queued 待执行指令可操作。</p></section>";
+  function load() {
+    var q = "";
+    if ($("q-target").value.trim()) q = "?target=" + encodeURIComponent($("q-target").value.trim());
+    api("GET", "/api/v1/admin/queue" + q).then(function (j) {
+      var rows = (j.queue || []).map(function (c) {
+        return "<tr><td>" + c.position + "</td><td>" + shortId(c.commandId) + "</td>" +
+          "<td class='mono'>" + esc(c.target) + "</td><td>" + c.type + "</td>" +
+          "<td>" + riskPill(c.riskClass) + "</td><td class='mono'>" + fmtMs(c.createdAtMs) + "</td>" +
+          "<td><button class='mini' data-prio='" + esc(c.commandId) + "'>插队</button> " +
+          "<button class='no mini' data-rm='" + esc(c.commandId) + "'>移除</button></td></tr>";
+      });
+      $("queue-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>队列为空（无 queued 待执行指令）</td></tr>";
+      forEach("[data-prio]", function (b) {
+        b.onclick = function () {
+          api("POST", "/api/v1/admin/queue/" + encodeURIComponent(b.getAttribute("data-prio")) + "/priority", {})
+            .then(function (j2) {
+              okmsg("插队完成：" + (j2.adjusted ? "已抬至队首（原序位 " + j2.previousPosition + "）" : "已在队首"));
+              load();
+            }).catch(function () {});
+        };
+      });
+      forEach("[data-rm]", function (b) {
+        b.onclick = function () {
+          if (!confirm("移除指令 " + b.getAttribute("data-rm") + "？（落 101018 取消回执）")) return;
+          api("DELETE", "/api/v1/admin/queue/" + encodeURIComponent(b.getAttribute("data-rm")))
+            .then(function () { okmsg("指令已移除（cancelled）"); load(); }).catch(function () {});
+        };
+      });
+    }).catch(function () {});
+  }
+  $("q-refresh").onclick = load;
+  $("q-target").onchange = load;
+  bindAuto("q-auto", load);
+  $("q-clear").onclick = function () {
+    var t = $("q-clear-target").value.trim();
+    if (!t) { banner("清空须指定 target。"); return; }
+    if (!confirm("清空目标 " + t + " 的全部待执行指令？")) return;
+    api("DELETE", "/api/v1/admin/queue?target=" + encodeURIComponent(t))
+      .then(function (j) { okmsg("已清空 " + j.cleared + " 条"); load(); }).catch(function () {});
+  };
+  load();
+}
+
+/* ============ L2 审批（沿袭最小面能力） ============ */
+function renderApprovals() {
+  $("view").innerHTML =
+    "<h2 class='view'>L2 审批</h2><p class='sub'>GET /api/v1/admin/approvals + POST …/decision · approver 必须独立于申请人（自批拒绝 403，FR-53）</p>" +
+    "<section class='card'><div class='row'><button id='refresh-approvals' class='mini'>刷新</button>" +
+    "<label>决议人 <input id='approver' placeholder='approver（≠申请人）' size='14'></label>" +
+    "<label>理由 <input id='ap-reason' placeholder='可选' size='20'></label>" +
+    "<label>状态 <select id='ap-status'><option value='pending'>pending</option><option value='approved'>approved</option><option value='rejected'>rejected</option><option value='consumed'>consumed</option></select></label></div>" +
+    "<table><thead><tr><th>approvalId</th><th>申请人</th><th>目标</th><th>类型</th><th>理由</th><th>登记时间</th><th>决议</th></tr></thead>" +
+    "<tbody id='approvals-body'><tr><td colspan='7' class='empty'>尚未加载</td></tr></tbody></table>" +
+    "<p class='note'>决议人名记住在本浏览器（localStorage）。</p></section>";
+  $("approver").value = localStorage.getItem(APPROVER_KEY) || "";
+  $("approver").addEventListener("change", function () { localStorage.setItem(APPROVER_KEY, $("approver").value.trim()); });
+  function decide(id, decision) {
+    var approver = $("approver").value.trim();
+    if (!approver) { banner("请先填写决议人（approver）；与申请人相同会被自批拒绝。"); return; }
+    api("POST", "/api/v1/admin/approvals/" + encodeURIComponent(id) + "/decision",
+      { approver: approver, decision: decision, reason: $("ap-reason").value.trim() })
+      .then(function () { $("ap-reason").value = ""; okmsg("决议完成：" + id); load(); }).catch(function () {});
+  }
+  function load() {
+    api("GET", "/api/v1/admin/approvals?status=" + $("ap-status").value).then(function (j) {
+      var rows = (j.approvals || []).map(function (a) {
+        var act = a.status === "pending"
+          ? "<button class='ok mini' data-approve='" + esc(a.approvalId) + "'>通过</button> <button class='no mini' data-reject='" + esc(a.approvalId) + "'>拒绝</button>"
+          : "<span class='dim mono'>" + esc(a.approver || "—") + "</span>";
+        return "<tr><td>" + shortId(a.approvalId) + "</td><td>" + esc(a.actor) + "</td>" +
+          "<td class='mono'>" + esc(a.target) + "</td><td>" + a.type + (a.recurring ? "（常设）" : "") + "</td>" +
+          "<td>" + esc(a.reason || "—") + "</td><td class='mono'>" + fmtMs(a.createdAtMs) + "</td><td>" + act + "</td></tr>";
+      });
+      $("approvals-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>无该状态审批</td></tr>";
+      forEach("[data-approve]", function (b) { b.onclick = function () { decide(b.getAttribute("data-approve"), "approve"); }; });
+      forEach("[data-reject]", function (b) { b.onclick = function () { decide(b.getAttribute("data-reject"), "reject"); }; });
+    }).catch(function () {});
+  }
+  $("refresh-approvals").onclick = load;
+  $("ap-status").onchange = load;
+  load();
+}
+
+/* ============ ④a 回调配置 ============ */
+function renderCallbacks() {
+  $("view").innerHTML =
+    "<h2 class='view'>回调配置</h2><p class='sub'>/api/v1/admin/callbacks · 与兼容面同源表 openapi_callbacks（单一事实源）· 绑定校验：目标须以 200 + application/json 应答（3s）· 默认仅 loopback（SR-09）</p>" +
+    "<section class='card'><h3>绑定列表 <span class='hint'>绑定即启用，删除即停用（表无独立 enabled 列，如实映射）</span></h3>" +
+    "<div class='row'><button id='cb-refresh' class='mini'>刷新</button></div>" +
+    "<table><thead><tr><th>robotId</th><th>type</th><th>事件类型</th><th>回调 URL</th><th>状态</th><th>操作</th></tr></thead>" +
+    "<tbody id='cb-body'><tr><td colspan='6' class='empty'>尚未加载</td></tr></tbody></table></section>" +
+    "<section class='card'><h3>新增 / 编辑绑定</h3>" +
+    "<div class='row'><label>robotId <input id='cb-robot' size='16'></label>" +
+    "<label>type <select id='cb-type'><option value='1'>1 · 指令结果回调</option><option value='0'>0 · 群二维码回调</option><option value='5'>5 · 上线回调</option><option value='6'>6 · 下线回调</option><option value='11'>11 · 消息回调</option></select></label>" +
+    "<label>callBackUrl <input id='cb-url' placeholder='http://127.0.0.1:…/cb' size='34'></label>" +
+    "<button id='cb-add' class='primary mini'>新增（POST）</button><button id='cb-edit' class='mini'>编辑（PUT）</button></div></section>" +
+    "<section class='card'><h3>测试回调地址 <span class='hint'>POST /api/v1/admin/callbacks/test · 探测不落库</span></h3>" +
+    "<div class='row'><label>URL <input id='cbt-url' size='34' placeholder='http://127.0.0.1:…/cb'></label>" +
+    "<button id='cb-test' class='mini'>测试</button><span id='cbt-result' class='dim'></span></div></section>";
+  function load() {
+    api("GET", "/api/v1/admin/callbacks").then(function (j) {
+      var rows = (j.callbacks || []).map(function (c) {
+        return "<tr><td class='mono'>" + esc(c.robotId) + "</td><td>" + c.type + "</td><td>" + esc(c.typeName) + "</td>" +
+          "<td class='mono'>" + esc(c.callbackUrl) + "</td>" +
+          "<td><span class='pill " + (c.enabled ? "on" : "off") + "'>" + (c.enabled ? "启用" : "停用") + "</span></td>" +
+          "<td><button class='no mini' data-cbdel='" + esc(c.robotId) + "|" + c.type + "'>删除</button></td></tr>";
+      });
+      $("cb-body").innerHTML = rows.join("") || "<tr><td colspan='6' class='empty'>暂无绑定</td></tr>";
+      forEach("[data-cbdel]", function (b) {
+        b.onclick = function () {
+          var parts = b.getAttribute("data-cbdel").split("|");
+          if (!confirm("删除 robot=" + parts[0] + " type=" + parts[1] + " 的绑定？")) return;
+          api("DELETE", "/api/v1/admin/callbacks?robotId=" + encodeURIComponent(parts[0]) + "&type=" + parts[1])
+            .then(function () { okmsg("绑定已删除"); load(); }).catch(function () {});
+        };
+      });
+    }).catch(function () {});
+  }
+  function bind(op) {
+    var body = { robotId: $("cb-robot").value.trim(), type: parseInt($("cb-type").value, 10), callBackUrl: $("cb-url").value.trim() };
+    api(op === "bind" ? "POST" : "PUT", "/api/v1/admin/callbacks", body)
+      .then(function (j) { okmsg("绑定已" + (op === "bind" ? "新增" : "更新") + "（探测通过）"); load(); }).catch(function () {});
+  }
+  $("cb-add").onclick = function () { bind("bind"); };
+  $("cb-edit").onclick = function () { bind("update"); };
+  $("cb-refresh").onclick = load;
+  $("cb-test").onclick = function () {
+    $("cbt-result").textContent = "探测中…";
+    api("POST", "/api/v1/admin/callbacks/test", { callBackUrl: $("cbt-url").value.trim() })
+      .then(function (j) { $("cbt-result").textContent = (j.reachable ? "✅ " : "❌ ") + j.message; }).catch(function () {});
+  };
+  load();
+}
+
+/* ============ ④b 回调日志 ============ */
+function renderCallbackLogs() {
+  $("view").innerHTML =
+    "<h2 class='view'>回调日志</h2><p class='sub'>GET /api/v1/admin/callbacks/logs · 最近触发记录 / 成功 / 失败 / 重试次数（重试 1s/2s/4s，第 4 次死信）</p>" +
+    "<section class='card'><div class='row'>" +
+    "<label>状态 <select id='cl-status'><option value=''>全部</option><option>pending</option><option>delivered</option><option>dead</option></select></label>" +
+    "<label>每页 <select id='cl-limit'><option>50</option><option>100</option><option>200</option></select></label>" +
+    "<button id='cl-refresh' class='mini'>查询</button><label><input type='checkbox' id='cl-auto'> 5s 自动</label></div>" +
+    "<table><thead><tr><th>更新时间</th><th>id</th><th>kind</th><th>commandId</th><th>状态</th><th>尝试</th><th>下次尝试</th><th>最近错误</th></tr></thead>" +
+    "<tbody id='cl-body'><tr><td colspan='8' class='empty'>尚未加载</td></tr></tbody></table></section>";
+  function load() {
+    var q = "?limit=" + $("cl-limit").value;
+    if ($("cl-status").value) q += "&status=" + $("cl-status").value;
+    api("GET", "/api/v1/admin/callbacks/logs" + q).then(function (j) {
+      var rows = (j.logs || []).map(function (l) {
+        return "<tr><td class='mono'>" + fmtMs(l.updatedAtMs) + "</td><td>" + l.id + "</td><td>" + esc(l.kind) + "</td>" +
+          "<td>" + (l.commandId ? shortId(l.commandId) : "<span class='dim'>—</span>") + "</td>" +
+          "<td><span class='pill st-" + esc(l.status) + "'>" + esc(l.status) + "</span></td>" +
+          "<td>" + l.attempts + "</td><td class='mono'>" + fmtMs(l.nextAttemptMs) + "</td>" +
+          "<td class='mono'>" + esc(l.lastError || "—") + "</td></tr>";
+      });
+      $("cl-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>暂无投递记录</td></tr>";
+    }).catch(function () {});
+  }
+  $("cl-refresh").onclick = load;
+  forEach("select#cl-status, select#cl-limit", function (s) { s.onchange = load; });
+  bindAuto("cl-auto", load);
+  load();
+}
+
+/* ============ ⑤a 指令执行日志（时间线） ============ */
+function renderExecLogs() {
+  $("view").innerHTML =
+    "<h2 class='view'>指令执行日志</h2><p class='sub'>GET /api/v1/admin/logs/executions · command_events 全局流（E01→E18 状态流转轨迹；●蓝=过程边 ●黄=终态边 ●红=对账登记边）</p>" +
+    "<section class='card'><div class='row'>" +
+    "<label>目标过滤 <input id='el-target' placeholder='deviceId / v1:robotId' size='20'></label>" +
+    "<label>commandId <input id='el-cmd' placeholder='精确' size='24'></label>" +
+    "<label>每页 <select id='el-limit'><option>50</option><option>100</option><option>200</option></select></label>" +
+    "<button id='el-refresh' class='mini'>查询</button><label><input type='checkbox' id='el-auto'> 5s 自动</label></div>" +
+    "<div class='tl' id='el-body'><div class='empty'>尚未加载</div></div></section>";
+  function load() {
+    var q = "?limit=" + $("el-limit").value;
+    if ($("el-target").value.trim()) q += "&target=" + encodeURIComponent($("el-target").value.trim());
+    if ($("el-cmd").value.trim()) q += "&commandId=" + encodeURIComponent($("el-cmd").value.trim());
+    api("GET", "/api/v1/admin/logs/executions" + q).then(function (j) {
+      var items = (j.events || []).map(function (e) {
+        return "<div class='item " + (EDGE_TERM[e.edge] ? "term" : EDGE_UNK[e.edge] ? "unk" : "") + "'>" +
+          "<div class='head'>" + edgePill(e.edge) +
+          "<span>" + esc(e.fromState) + " → " + esc(e.toState) + "</span><span class='pill'>" + esc(e.event) + "</span>" +
+          (e.type ? "<span class='pill L" + (e.riskClass || "").slice(1) + "'>type " + e.type + "</span>" : "") +
+          "<span class='meta mono'>" + fmtMs(e.atMs) + "</span>" +
+          "<button class='mini' data-goto='" + esc(e.commandId) + "'>" + esc(String(e.commandId).slice(0, 10)) + "…</button></div>" +
+          "<div class='detail'>" + esc(e.detail) + "</div></div>";
+      });
+      $("el-body").innerHTML = items.join("") || "<div class='empty'>无匹配事件</div>";
+      forEach("[data-goto]", function (b) { b.onclick = function () { showCommandDetail(b.getAttribute("data-goto")); }; });
+    }).catch(function () {});
+  }
+  $("el-refresh").onclick = load;
+  forEach("select#el-limit", function (s) { s.onchange = load; });
+  bindAuto("el-auto", load);
+  load();
+}
+
+/* ============ ⑤b 系统审计日志 ============ */
+function renderAuditLogs() {
+  $("view").innerHTML =
+    "<h2 class='view'>系统审计日志</h2><p class='sub'>GET /api/v1/admin/logs/audit · 谁在什么时候做了什么（SR-12：门拒绝/决议/管理操作全留痕）</p>" +
+    "<section class='card'><div class='row'>" +
+    "<label>kind 过滤 <input id='al-kind' placeholder='如 admin_command_submitted' size='26'></label>" +
+    "<label>每页 <select id='al-limit'><option>50</option><option>100</option><option>200</option></select></label>" +
+    "<button id='al-refresh' class='mini'>查询</button></div>" +
+    "<table><thead><tr><th>时间</th><th>kind</th><th>subject</th><th>detail</th></tr></thead>" +
+    "<tbody id='al-body'><tr><td colspan='4' class='empty'>尚未加载</td></tr></tbody></table></section>";
+  function load() {
+    var q = "?limit=" + $("al-limit").value;
+    if ($("al-kind").value.trim()) q += "&kind=" + encodeURIComponent($("al-kind").value.trim());
+    api("GET", "/api/v1/admin/logs/audit" + q).then(function (j) {
+      var rows = (j.entries || []).map(function (e) {
+        return "<tr><td class='mono'>" + fmtMs(e.atMs) + "</td><td><span class='pill'>" + esc(e.kind) + "</span></td>" +
+          "<td class='mono'>" + esc(e.subject || "—") + "</td><td class='mono'>" + esc(e.detail) + "</td></tr>";
+      });
+      $("al-body").innerHTML = rows.join("") || "<tr><td colspan='4' class='empty'>无匹配审计记录</td></tr>";
+    }).catch(function () {});
+  }
+  $("al-refresh").onclick = load;
+  $("al-limit").onchange = load;
+  load();
+}
+
+/* ============ ⑥ 设置 ============ */
+function renderSettings() {
+  $("view").innerHTML =
+    "<h2 class='view'>设置</h2><p class='sub'>机器人配置（限流/白名单/熔断）· API Token 管理 · 通讯加密开关（FR-43）</p>" +
+    "<div class='grid2'>" +
+    "<section class='card'><h3>限流与白名单策略（guard） <span class='hint'>PUT /api/v1/admin/settings/guard</span></h3>" +
+    "<div class='row'><label>L1 限速窗口(秒) <input id='g-window' size='6'></label>" +
+    "<label>窗口内条数/目标 <input id='g-max' size='6'></label>" +
+    "<label><input type='checkbox' id='g-deny'> 未配置白名单默认拒收（WhitelistDefaultDeny）</label></div>" +
+    "<div class='row'><button id='g-save' class='primary mini'>保存并即时生效</button><span class='dim' id='g-src'></span></div>" +
+    "<p class='note'>即时应用至管线并持久化；服务重启经装配处 ApplyPersistedSettings 重放（见 admin/README）。</p></section>" +
+    "<section class='card'><h3>全局熔断器（breaker，FR-53）</h3>" +
+    "<div id='bk-info' class='dim'>加载中…</div>" +
+    "<div class='row'><button id='bk-reset' class='warn mini'>人工复位为 closed</button></div>" +
+    "<p class='note'>状态为进程内实时值（重启回 closed）；参数调整 scheduler 未导出入口（dodDeferred）。</p></section>" +
+    "<section class='card'><h3>风险分级查询 <span class='hint'>GET /api/v1/admin/risk/{type} · 单一事实源 scheduler.ClassifyRisk</span></h3>" +
+    "<div class='row'><label>指令类型 <input id='rk-type' size='6' placeholder='如 219'></label><button id='rk-go' class='mini'>查询</button><span id='rk-out'></span></div>" +
+    "<p class='note'>L1 = 批量发送/转发、建群、拉人；L2 = 解散群、删联系人、清队列；未登记类型 L2 fail-closed（FR-53 裁决②③）。</p></section>" +
+    "<section class='card'><h3>通讯加密开关（FR-43）</h3>" +
+    "<div class='row'><span id='enc-state' class='dim'>加载中…</span>" +
+    "<button id='enc-toggle' class='primary mini'>切换</button></div>" +
+    "<p class='note' id='enc-note'></p></section>" +
+    "<section class='card'><h3>L1 接收人白名单 <span class='hint'>/api/v1/admin/whitelist（配置即强制，FR-53）</span></h3>" +
+    "<div class='row'><label>目标 <input id='wl-target' size='20'></label><button id='wl-load' class='mini'>查看</button></div>" +
+    "<div class='row'><label>接收人 <input id='wl-item' size='20'></label><button id='wl-add' class='ok mini'>添加</button></div>" +
+    "<div id='wl-list' class='dim'>先查目标。</div></section>" +
+    "<section class='card'><h3>API Token 管理 <span class='hint'>列表仅显示 hash 前 8 位；原始值签发时一次返回</span></h3>" +
+    "<div class='row'><button id='tk-refresh' class='mini'>刷新列表</button>" +
+    "<label>签发 robot 令牌 robotId <input id='tk-robot' size='14'></label><label>tenant <input id='tk-tenant' placeholder='留空 = default' size='12'></label>" +
+    "<button id='tk-issue' class='primary mini'>签发</button></div>" +
+    "<div id='tk-issued'></div>" +
+    "<table><thead><tr><th>hash 前 8 位</th><th>scope</th><th>tenant</th><th>状态</th><th>签发时间</th><th>最近使用</th><th>操作</th></tr></thead>" +
+    "<tbody id='tk-body'><tr><td colspan='7' class='empty'>尚未加载</td></tr></tbody></table>" +
+    "<p class='note'>吊销按 robot 全量旋转（active 全部失效）；管理面令牌（scope=admin）经 SQL/IssueAdminToken 签发，不走本表操作。</p></section>" +
+    "</div>";
+  function loadSettings() {
+    api("GET", "/api/v1/admin/settings").then(function (j) {
+      $("g-window").value = j.guard.l1WindowSeconds;
+      $("g-max").value = j.guard.l1MaxPerTx;
+      $("g-deny").checked = !!j.guard.whitelistDefaultDeny;
+      $("g-src").textContent = "当前来源：" + j.guard.source;
+      $("bk-info").innerHTML = "状态 <span class='pill st-" + esc(j.breaker.state) + "'>" + esc(j.breaker.state) + "</span> · 窗口 " + j.breaker.windowSeconds + "s / 最少样本 " + j.breaker.minSamples + " / 失败率阈值 " + (j.breaker.threshold * 100) + "% / 冷却 " + j.breaker.cooldownSeconds + "s / 试探闭合 " + j.breaker.closeSamples + " 连成";
+      setEncState(!!j.encryption.enabled);
+      $("enc-note").textContent = j.encryption.note;
+    }).catch(function () {});
+  }
+  $("g-save").onclick = function () {
+    api("PUT", "/api/v1/admin/settings/guard", {
+      l1WindowSeconds: parseInt($("g-window").value, 10) || 60,
+      l1MaxPerTx: parseInt($("g-max").value, 10) || 10,
+      whitelistDefaultDeny: $("g-deny").checked
+    }).then(function (j) { okmsg("限流/白名单策略已应用并持久化"); loadSettings(); }).catch(function () {});
+  };
+  $("bk-reset").onclick = function () {
+    if (!confirm("人工复位全局熔断为 closed？")) return;
+    api("POST", "/api/v1/admin/breaker/reset", {}).then(function (j) { okmsg("熔断已复位（changed=" + j.changed + "）"); loadSettings(); }).catch(function () {});
+  };
+  $("rk-go").onclick = function () {
+    var t = $("rk-type").value.trim();
+    if (!t) return;
+    api("GET", "/api/v1/admin/risk/" + encodeURIComponent(t)).then(function (j) {
+      $("rk-out").innerHTML = "type " + j.type + " → " + riskPill(j.riskClass);
+    }).catch(function () {});
+  };
+  var encOn = false;
+  function setEncState(on) {
+    encOn = on;
+    $("enc-state").innerHTML = "当前：<span class='pill " + (on ? "on" : "off") + "'>" + (on ? "开" : "关（默认）") + "</span>";
+  }
+  $("enc-toggle").onclick = function () {
+    api("PUT", "/api/v1/admin/settings/encryption", { enabled: !encOn })
+      .then(function () { okmsg("通讯加密开关已更新（强制执行边界见注释）"); loadSettings(); }).catch(function () {});
+  };
+  var wlTarget = "";
+  function wlRender(list) {
+    $("wl-list").innerHTML = (list && list.length)
+      ? list.map(function (r) { return "<span class='pill' style='margin:2px'>" + esc(r) + " <button class='mini no' data-wlrm='" + esc(r) + "'>×</button></span>"; }).join(" ")
+      : "<span class='dim'>该目标未配置白名单（未配置不拦截，靠限速兜底；勾选默认拒收可收紧）</span>";
+    forEach("[data-wlrm]", function (b) {
+      b.onclick = function () {
+        api("DELETE", "/api/v1/admin/whitelist?target=" + encodeURIComponent(wlTarget) + "&recipient=" + encodeURIComponent(b.getAttribute("data-wlrm")))
+          .then(function () { okmsg("已移除"); wlLoad(); }).catch(function () {});
+      };
+    });
+  }
+  function wlLoad() {
+    wlTarget = $("wl-target").value.trim();
+    if (!wlTarget) { banner("先填写目标。"); return; }
+    api("GET", "/api/v1/admin/whitelist?target=" + encodeURIComponent(wlTarget)).then(function (j) { wlRender(j.recipients); }).catch(function () {});
+  }
+  $("wl-load").onclick = wlLoad;
+  $("wl-add").onclick = function () {
+    wlTarget = $("wl-target").value.trim();
+    var item = $("wl-item").value.trim();
+    if (!wlTarget || !item) { banner("目标与接收人均必填。"); return; }
+    api("POST", "/api/v1/admin/whitelist", { target: wlTarget, recipient: item })
+      .then(function () { okmsg("白名单已添加"); $("wl-item").value = ""; wlLoad(); }).catch(function () {});
+  };
+  function tkLoad() {
+    api("GET", "/api/v1/admin/tokens").then(function (j) {
+      var rows = (j.tokens || []).map(function (t) {
+        var revoke = t.scope.indexOf("admin") === 0 ? "<span class='dim'>—</span>"
+          : "<button class='no mini' data-tkrev='" + esc(t.robotId) + "'>吊销全部</button>";
+        return "<tr><td class='mono'>" + esc(t.hashPrefix8) + "…</td><td>" + esc(t.scope) + "</td><td>" + esc(t.tenant) + "</td>" +
+          "<td><span class='pill st-" + esc(t.status) + "'>" + esc(t.status) + "</span></td>" +
+          "<td class='mono'>" + fmtMs(t.createdMs) + "</td><td class='mono'>" + fmtMs(t.lastUsedMs) + "</td><td>" + revoke + "</td></tr>";
+      });
+      $("tk-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>暂无令牌</td></tr>";
+      forEach("[data-tkrev]", function (b) {
+        b.onclick = function () {
+          if (!confirm("吊销 robot=" + b.getAttribute("data-tkrev") + " 的全部 active 令牌？")) return;
+          api("DELETE", "/api/v1/admin/robots/" + encodeURIComponent(b.getAttribute("data-tkrev")) + "/openapi-tokens")
+            .then(function (j2) { okmsg("已吊销 " + j2.revoked + " 枚"); tkLoad(); }).catch(function () {});
+        };
+      });
+    }).catch(function () {});
+  }
+  $("tk-refresh").onclick = tkLoad;
+  $("tk-issue").onclick = function () {
+    var robot = $("tk-robot").value.trim();
+    if (!robot) { banner("robotId 必填。"); return; }
+    // CR ADM-1：tenant 留空 = 默认租户 default——不发请求体（服务端亦对 {} 体回落
+    // default，双层修复；此前空租户体 {} 会被 400 拒绝）
+    var tenant = $("tk-tenant").value.trim();
+    var req = tenant
+      ? api("POST", "/api/v1/admin/robots/" + encodeURIComponent(robot) + "/openapi-tokens", { tenant: tenant })
+      : api("POST", "/api/v1/admin/robots/" + encodeURIComponent(robot) + "/openapi-tokens");
+    req.then(function (j) {
+      $("tk-issued").innerHTML = "<p class='note' style='color:var(--warn)'>robot " + esc(j.robotId) + " 令牌（仅此一次显示，仅存 hash）：<span class='mono'>" + esc(j.token) + "</span></p>";
+      okmsg("令牌已签发（原始值仅此一次）"); tkLoad();
+    }).catch(function () {});
+  };
+  loadSettings();
+  tkLoad();
+}
+
+/* ============ 令牌栏与启动 ============ */
 $("save-token").onclick = function () {
   token = $("token").value.trim();
   localStorage.setItem(TOKEN_KEY, token);
-  loadDevices(); loadCommands(); loadApprovals();
+  route(); // 重新加载当前视图（带新令牌）
 };
 $("clear-token").onclick = function () {
   token = ""; localStorage.removeItem(TOKEN_KEY); $("token").value = "";
 };
 $("token").value = token;
-$("approver").value = localStorage.getItem(APPROVER_KEY) || "";
-$("approver").addEventListener("change", function () {
-  localStorage.setItem(APPROVER_KEY, $("approver").value.trim());
-});
-$("refresh-devices").onclick = loadDevices;
-$("refresh-commands").onclick = loadCommands;
-$("refresh-approvals").onclick = loadApprovals;
-$("cmd-limit").onchange = loadCommands;
-$("cmd-state").onchange = loadCommands;
-function bindAuto(boxId, fn) {
-  var h = null;
-  $(boxId).addEventListener("change", function () {
-    if (h) { clearInterval(h); h = null; }
-    if ($(boxId).checked) { fn(); h = setInterval(fn, 5000); }
-  });
-}
-bindAuto("auto-devices", loadDevices);
-bindAuto("auto-commands", loadCommands);
-if (token) { loadDevices(); loadCommands(); loadApprovals(); }
+route();
 </script>
 </body>
 </html>

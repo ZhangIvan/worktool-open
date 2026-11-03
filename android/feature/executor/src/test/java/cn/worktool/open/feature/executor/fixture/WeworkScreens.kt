@@ -427,6 +427,8 @@ class GroupListFixture(
     pages: List<List<String>>,
     /** true = 每次滚动都追加新群（护栏 VERIFY_FAILED 场景）。 */
     private val infinite: Boolean = false,
+    /** true = 群条目可点击（508 逐群进详情场景；501 只读保持 false）。 */
+    private val itemClickable: Boolean = false,
 ) {
     private val pagesInternal: List<List<String>> = pages
     private var nextPage: Int = 1
@@ -460,6 +462,7 @@ class GroupListFixture(
         text = name,
         resId = "com.tencent.wework:id/group_list_item_name",
         cls = TEXT_VIEW,
+        clickable = itemClickable,
     )
 
     val screen: FakeScreen = FakeScreen(

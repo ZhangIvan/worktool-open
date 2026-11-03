@@ -32,6 +32,9 @@
 | 226 | 撤回消息 | FR-07 | L1 | ❌ v1.0 | — |
 | 221/222/223/233 | 待办/打卡/切企业/扫码 | FR-24~27 | L0 | ❌ v1.0 | — |
 | 301/302 | 运行日志上报 | FR-49 | — | ❌ v0.2 | 默认脱敏可关 |
+| 235 | 点击聊天推荐条（收款/企业名片/推荐客服/商品图册） | — | **L2**（未登记 fail-closed） | ❌ v0.2 | **缓期登记（REV-SRV-03，2026-11-03）**：官方指令页已定案（doc-9564531 §235），排期 W-M6/B3——实现批次前 openapi 注册表不收（提交即 101002），收时须同步 scheduler 分级表（FR-53 裁决③） |
+| 243 | 二维码图片 URL 入群（个微扫码入群流） | FR-56 | **L2**（未登记 fail-closed） | ❌ v0.2 | **缓期登记（REV-SRV-03，2026-11-03）**：官方指令页已定案（doc-9564531 §243），依赖 FR-56 WeChat 规则包，排期 W-M6——注册表排除集防漂移断言 TestOpenAPIRegistryExclusionSetLocked 锁定 |
+| 305/306 | 清除指定指令 / 队列查询 | FR-37 | **L2**(305)/L0(306) | ⬜（REST 等价面已交付） | **REST 承接登记（REV-SRV-03/05，2026-11-03）**：305 经 `DELETE /openapi/v1/robots/{id}/queue/{commandId}`、306 经 `GET …/queue` 等价交付（不作为可提交指令类型注册）；305 语义经 L2 审批门（与 304 同门，未携审批 202 登记 → 决议后携 `X-WT-Approval-Id` 执行）。**管理面豁免**：`/api/v1/admin/queue*` 同语义操作不设审批门——admin scope 即授权决议面且落审计（SR-12），差异显式登记于此。真机端到端随批次证据回填 |
 
 ## 事件与平台能力
 
@@ -41,5 +44,7 @@
 | 图片接收（录屏路） | FR-08 | ⬜ | FileObserver 默认禁用（E11） |
 | OCR 兜底 | FR-45 | ⬜ | R5 评估未决 |
 | 音视频自动拒接 | FR-51 | ⬜ | — |
+| 文件上传 `POST /fileUpload/upload`（B2 交付=自建文件 API） | FR-34/37 | ⬜（服务端面已交付） | **已交付（REV-SRV-02，2026-11-03）**：multipart part 名 `file`、≤50MiB、sha256 校验、Bearer+幂等键；取回 `GET /files/{fileId}`（能力 URL：fileId 为 128-bit UUID 不可枚举，设备端无 HTTP Bearer 凭据故不带鉴权——需收紧的部署置于反代层）；`url` 可被 218 fileUrl 闭环引用。真机端到端随 B2 批次证据回填 |
+| 机器人消息回调配置 `POST /robot/robotInfo/update`（b2 §2.1 QA 面） | FR-35 | ⬜（服务端面已交付） | **已交付（REV-SRV-02，2026-11-03）**：openCallback(0/1)/replyAll 必填、callbackUrl 选填（SR-09 loopback 纪律同回调绑定）；配置落 `openapi_robot_settings`。**dodDeferred**：openCallback=1 时新消息推送到 callbackUrl 的实际分发属网关/事件车道（与回调组 type 5/6 同口径） |
 
 > 未列出的其余历史指令（对应 FR-21~23/30~32 等）随版本滚动补入本表；历史全集以 `local-private/audit/02` D 表与 apifox 文档为准，双线共用编号映射见 `docs/07-EXISTING-CODE-MAPPING.md`。

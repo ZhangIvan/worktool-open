@@ -50,19 +50,24 @@ type Deps struct {
 	Online func(target string) bool
 	// UIDir 为单页 UI 目录（仓库 admin/）。空 = 不伺服 UI（仅 API）。
 	UIDir string
+	// AllowNonLoopbackCallbacks 放行外网回调绑定/探测（默认 false：仅 loopback，
+	// 与 api.Server.AllowNonLoopbackCallbacks 同纪律，SR-09；部署侧须 TLS，SR-01）。
+	AllowNonLoopbackCallbacks bool
 }
 
-// Server 为管理端最小面服务。
+// Server 为管理端服务（v0.1 最小面 + W-P0 完整管理后台数据面 console.go）。
 type Server struct {
-	db       *sqlite.DB
-	pipeline *scheduler.Service
-	now      func() time.Time
-	log      Logger
-	online   func(target string) bool
-	uiDir    string
+	db                        *sqlite.DB
+	pipeline                  *scheduler.Service
+	now                       func() time.Time
+	log                       Logger
+	online                    func(target string) bool
+	uiDir                     string
+	allowNonLoopbackCallbacks bool
 }
 
-// New 构建管理端服务（缺省 Now/Log 注入默认值）。
+// New 构建管理端服务（缺省 Now/Log 注入默认值；自治设置表幂等建表——失败
+// 即 panic，与 api.NewServeMux ensureOpenAPISchema 同 fail-fast 纪律）。
 func New(d Deps) *Server {
 	now := d.Now
 	if now == nil {
@@ -76,23 +81,69 @@ func New(d Deps) *Server {
 	if online == nil {
 		online = func(string) bool { return false }
 	}
-	return &Server{db: d.DB, pipeline: d.Pipeline, now: now, log: lg, online: online, uiDir: d.UIDir}
+	s := &Server{
+		db: d.DB, pipeline: d.Pipeline, now: now, log: lg, online: online,
+		uiDir: d.UIDir, allowNonLoopbackCallbacks: d.AllowNonLoopbackCallbacks,
+	}
+	if err := s.ensureSchema(); err != nil {
+		panic(err)
+	}
+	return s
 }
 
 // Register 把管理端路由挂到 mux（Go 1.22 方法+路径模式）。
 // 集成方在 server 主装配处调用一次；未挂载时本包端点不可达（默认不暴露）。
 func (s *Server) Register(mux *http.ServeMux) {
+	// —— v0.1 最小面（原四端点 + 审批/令牌生命周期，行为不变）——
 	mux.HandleFunc("POST /api/v1/admin/pairing-codes", s.handlePairingCodes)
 	mux.HandleFunc("GET /api/v1/admin/devices", s.handleDevices)
 	mux.HandleFunc("GET /api/v1/admin/commands", s.handleCommands)
 	mux.HandleFunc("GET /api/v1/admin/approvals", s.handleApprovals)
 	mux.HandleFunc("POST /api/v1/admin/approvals/{approvalId}/decision", s.handleApprovalDecision)
+	mux.HandleFunc("/api/v1/admin/robots/{robotId}/openapi-tokens", s.handleOpenAPITokens)
+	// —— W-P0 完整管理后台数据面（console.go）——
+	mux.HandleFunc("GET /api/v1/admin/overview", s.handleOverview)
+	mux.HandleFunc("POST /api/v1/admin/devices/{deviceId}/{action}", s.handleDeviceAction)
+	mux.HandleFunc("POST /api/v1/admin/commands", s.handleCommandSubmit)
+	mux.HandleFunc("GET /api/v1/admin/commands/{commandId}", s.handleCommandDetail)
+	mux.HandleFunc("GET /api/v1/admin/queue", s.handleQueueList)
+	mux.HandleFunc("DELETE /api/v1/admin/queue", s.handleQueueClear)
+	mux.HandleFunc("DELETE /api/v1/admin/queue/{commandId}", s.handleQueueRemove)
+	mux.HandleFunc("POST /api/v1/admin/queue/{commandId}/priority", s.handleQueuePriority)
+	mux.HandleFunc("/api/v1/admin/callbacks", s.handleCallbacks)
+	mux.HandleFunc("POST /api/v1/admin/callbacks/test", s.handleCallbackTest)
+	mux.HandleFunc("GET /api/v1/admin/callbacks/logs", s.handleCallbackLogs)
+	mux.HandleFunc("GET /api/v1/admin/logs/executions", s.handleExecutionLogs)
+	mux.HandleFunc("GET /api/v1/admin/logs/audit", s.handleAuditLogs)
+	mux.HandleFunc("GET /api/v1/admin/settings", s.handleSettings)
+	mux.HandleFunc("PUT /api/v1/admin/settings/guard", s.handleGuardSettings)
+	mux.HandleFunc("PUT /api/v1/admin/settings/encryption", s.handleEncryptionSettings)
+	mux.HandleFunc("POST /api/v1/admin/breaker/reset", s.handleBreakerReset)
+	mux.HandleFunc("GET /api/v1/admin/risk/{type}", s.handleRiskQuery)
+	mux.HandleFunc("/api/v1/admin/whitelist", s.handleWhitelist)
+	mux.HandleFunc("GET /api/v1/admin/tokens", s.handleTokensList)
 	if s.uiDir != "" {
 		// GET /admin → /admin/（相对解析）；/admin/ 下静态文件（index.html 等）。
 		mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/admin/", http.StatusFound)
 		})
 		mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir(s.uiDir))))
+	}
+}
+
+// handleOpenAPITokens 兼容面令牌生命周期路由（方法守卫内派发；W-M5 日常使用
+// 闭环：签发 → 只读列表 → 吊销旋转）。
+func (s *Server) handleOpenAPITokens(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.handleOpenAPITokenIssue(w, r)
+	case http.MethodGet:
+		s.handleOpenAPITokenList(w, r)
+	case http.MethodDelete:
+		s.handleOpenAPITokenRevoke(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST, DELETE")
+		(&adminError{http.StatusMethodNotAllowed, "METHOD", "仅 GET/POST/DELETE"}).write(w)
 	}
 }
 
@@ -230,20 +281,23 @@ func (s *Server) handlePairingCodes(w http.ResponseWriter, r *http.Request) {
 // ---- GET /api/v1/admin/devices ----
 
 type deviceItem struct {
-	DeviceID     string `json:"deviceId"`
-	RobotID      string `json:"robotId"`
-	DeviceName   string `json:"deviceName"`
-	Status       string `json:"status"`
-	TokenVersion int64  `json:"tokenVersion"`
-	Epoch        int64  `json:"epoch"`
-	PairedAtMs   int64  `json:"pairedAtMs"`
-	UpdatedAtMs  int64  `json:"updatedAtMs"`
-	Online       bool   `json:"online"`
+	DeviceID      string `json:"deviceId"`
+	RobotID       string `json:"robotId"`
+	DeviceName    string `json:"deviceName"`
+	Status        string `json:"status"`
+	TokenVersion  int64  `json:"tokenVersion"`
+	Epoch         int64  `json:"epoch"`
+	PairedAtMs    int64  `json:"pairedAtMs"`
+	UpdatedAtMs   int64  `json:"updatedAtMs"`
+	Online        bool   `json:"online"`
+	LastSessionMs int64  `json:"lastSessionMs"`
 }
 
 // handleDevices 设备列表 + 在线状态（online 经 Deps.Online 探测；nil = 未接线
 // 恒 false）。robotId 为空 = 配对面绑定被重配对清空（W-M3R 运维注意 1），
-// 如实展示不代填。
+// 如实展示不代填。lastSessionMs = 最近一次会话痕迹（device_sessions 的
+// opened_at/created_at 最大值，≈最近 hello）——devices 表无逐帧心跳列，
+// 此为最近活跃证据的诚实口径（型号/系统版本字段配对面未上报，UI 如实标未上报）。
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -258,11 +312,12 @@ FROM devices ORDER BY paired_at`)
 	items := make([]deviceItem, 0, len(rows))
 	for _, row := range rows {
 		d := deviceItem{
-			DeviceID:   row[0],
-			RobotID:    row[1],
-			DeviceName: row[2],
-			Status:     row[3],
-			Online:     s.online(row[0]),
+			DeviceID:      row[0],
+			RobotID:       row[1],
+			DeviceName:    row[2],
+			Status:        row[3],
+			Online:        s.online(row[0]),
+			LastSessionMs: s.lastSessionMs(r.Context(), row[0]),
 		}
 		d.TokenVersion, _ = strconv.ParseInt(row[4], 10, 64)
 		d.Epoch, _ = strconv.ParseInt(row[5], 10, 64)
@@ -288,8 +343,9 @@ type commandItem struct {
 }
 
 // handleCommands 指令审计流（commands 表只读投影，时间倒序）。
-// 查询参数：limit（默认 50，1..500）、state（可选精确过滤）、target（可选）。
-// dryRun=FR-54 干跑标记：同引擎同路径仅产出报告，绝不下发设备。
+// 查询参数：limit（默认 50，1..500）、offset（分页，默认 0）、state（可选精确
+// 过滤）、type（可选精确过滤）、target（可选）。dryRun=FR-54 干跑标记：同引擎
+// 同路径仅产出报告，绝不下发设备。
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -304,23 +360,46 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	query := `
-SELECT command_id, target, command_type, state, risk_class, dry_run, created_at, terminal_at, terminal_state
-FROM commands`
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			(&adminError{http.StatusBadRequest, "INVALID_OFFSET", "offset 须为 ≥0 整数"}).write(w)
+			return
+		}
+		offset = n
+	}
+	var conds []string
 	var args []any
 	if st := q.Get("state"); st != "" {
-		query += ` WHERE state = ?`
+		conds = append(conds, "state = ?")
 		args = append(args, st)
-		if tg := q.Get("target"); tg != "" {
-			query += ` AND target = ?`
-			args = append(args, tg)
-		}
-	} else if tg := q.Get("target"); tg != "" {
-		query += ` WHERE target = ?`
+	}
+	if tg := q.Get("target"); tg != "" {
+		conds = append(conds, "target = ?")
 		args = append(args, tg)
 	}
-	query += ` ORDER BY created_at DESC, command_id LIMIT ?`
-	args = append(args, limit)
+	if tv := q.Get("type"); tv != "" {
+		n, err := strconv.Atoi(tv)
+		if err != nil {
+			(&adminError{http.StatusBadRequest, "INVALID_TYPE", "type 须为整数"}).write(w)
+			return
+		}
+		conds = append(conds, "command_type = ?")
+		args = append(args, n)
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = ` WHERE ` + strings.Join(conds, " AND ")
+	}
+	total := 0
+	if trows, err := s.db.QueryDump(r.Context(), `SELECT COUNT(*) FROM commands`+where, args...); err == nil && len(trows) == 1 {
+		total, _ = strconv.Atoi(trows[0][0])
+	}
+	query := `
+SELECT command_id, target, command_type, state, risk_class, dry_run, created_at, terminal_at, terminal_state
+FROM commands` + where + ` ORDER BY created_at DESC, command_id LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryDump(r.Context(), query, args...)
 	if err != nil {
 		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
@@ -335,7 +414,7 @@ FROM commands`
 		c.TerminalState = row[8]
 		items = append(items, c)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"commands": items, "count": len(items)})
+	writeJSON(w, http.StatusOK, map[string]any{"commands": items, "count": len(items), "total": total, "limit": limit, "offset": offset})
 }
 
 // ---- GET /api/v1/admin/approvals ----
@@ -478,4 +557,121 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"approvalId": approvalID, "status": status, "approver": req.Approver, "actor": a.Actor,
 	})
+}
+
+// ---- /api/v1/admin/robots/{robotId}/openapi-tokens（兼容面令牌生命周期） ----
+//
+// 管理后台日常使用闭环（W-M5）：配对设备 → 此处签发 robot 兼容面令牌 → 用户持
+// Bearer token 打 /openapi/v1/* 全量面。签发纪律与 api.IssueOpenAPIToken 同源：
+// 随机 256-bit hex、仅存 SHA-256 hash、原始值一次返回；保留名 admin 硬拒
+//（CR ADM-1：不得为名叫 admin 的 v1 robot 铸出第二个 admin-scope 令牌）。
+
+type openapiTokenResponse struct {
+	Token     string `json:"token"` // 原始值仅此一次返回（仅存 hash）
+	RobotID   string `json:"robotId"`
+	Tenant    string `json:"tenant"`
+	CreatedMs int64  `json:"createdMs"`
+}
+
+// handleOpenAPITokenIssue POST /api/v1/admin/robots/{robotId}/openapi-tokens
+// body 可选 {"tenant":"..."}；空体 / {} / tenant 留空 → 回落 default（CR ADM-1：
+// UI 留空占位符「default」即默认租户，不再 400）。仅体解析失败才 400。
+func (s *Server) handleOpenAPITokenIssue(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	robotID := r.PathValue("robotId")
+	if robotID == "" || robotID == adminScopeRobotID {
+		(&adminError{http.StatusForbidden, "ROBOT_FORBIDDEN",
+			"robotId 为空或管理面保留名 admin——不得签发兼容面令牌（CR ADM-1）"}).write(w)
+		return
+	}
+	tenant := "default"
+	if body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10)); len(bytes.TrimSpace(body)) > 0 {
+		var req struct {
+			Tenant string `json:"tenant"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			(&adminError{http.StatusBadRequest, "INVALID_BODY", "请求体须为 JSON 对象 {tenant}（tenant 留空 = 默认租户 default）"}).write(w)
+			return
+		}
+		if t := strings.TrimSpace(req.Tenant); t != "" {
+			tenant = t
+		}
+	}
+	raw, err := wire.RandomHex(32)
+	if err != nil {
+		(&adminError{http.StatusInternalServerError, "KEYGEN", err.Error()}).write(w)
+		return
+	}
+	now := s.now().UTC()
+	if err := s.db.InsertAPIToken(r.Context(), sha256Hex(raw), robotID, tenant, now); err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	if err := s.db.InsertAudit(r.Context(), nil, "admin_openapi_token_issued", robotID,
+		fmt.Sprintf("兼容面令牌签发 tenant=%s（仅存 hash，原始值一次返回）", tenant), now); err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	s.log.Printf("admin: 签发兼容面令牌 robot=%s tenant=%s（仅存 hash）", robotID, tenant)
+	writeJSON(w, http.StatusCreated, openapiTokenResponse{Token: raw, RobotID: robotID, Tenant: tenant, CreatedMs: now.UnixMilli()})
+}
+
+// handleOpenAPITokenList GET /api/v1/admin/robots/{robotId}/openapi-tokens
+// 只读投影：hash 前缀 12 hex + 状态/时间（原始值不可再生，永不出现在响应）。
+func (s *Server) handleOpenAPITokenList(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	robotID := r.PathValue("robotId")
+	rows, err := s.db.QueryDump(r.Context(), `
+SELECT substr(token_hash,1,12), tenant, status, created_ms, COALESCE(last_used_ms,0)
+FROM api_tokens WHERE robot_id = ? ORDER BY created_ms DESC`, robotID)
+	if err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	items := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		created, _ := strconv.ParseInt(row[3], 10, 64)
+		used, _ := strconv.ParseInt(row[4], 10, 64)
+		item := map[string]any{
+			"hashPrefix": row[0], "tenant": row[1], "status": row[2], "createdMs": created,
+		}
+		if used > 0 {
+			item["lastUsedMs"] = used
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"robotId": robotID, "tokens": items, "count": len(items)})
+}
+
+// handleOpenAPITokenRevoke DELETE /api/v1/admin/robots/{robotId}/openapi-tokens
+// 吊销该 robot 全部 active 兼容面令牌（旋转令牌的运维路径；管理面令牌不受影响
+// ——其 robot_id 为保留名 admin，不匹配业务 robotId）。
+func (s *Server) handleOpenAPITokenRevoke(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	robotID := r.PathValue("robotId")
+	if robotID == "" || robotID == adminScopeRobotID {
+		(&adminError{http.StatusForbidden, "ROBOT_FORBIDDEN",
+			"robotId 为空或管理面保留名 admin——兼容面吊销不适用于管理面令牌"}).write(w)
+		return
+	}
+	res, err := s.db.Exec(r.Context(),
+		`UPDATE api_tokens SET status='revoked' WHERE robot_id = ? AND status='active'`, robotID)
+	if err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	revoked, _ := res.RowsAffected()
+	now := s.now().UTC()
+	if err := s.db.InsertAudit(r.Context(), nil, "admin_openapi_token_revoked", robotID,
+		fmt.Sprintf("吊销 active 兼容面令牌 %d 枚", revoked), now); err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"robotId": robotID, "revoked": revoked})
 }

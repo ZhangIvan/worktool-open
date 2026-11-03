@@ -1,9 +1,17 @@
-// /openapi/v1/* 端点（FR-34 apifox 兼容面 P0 子集；任务卡 T3.2）：
+// /openapi/v1/* 端点（FR-34 apifox 兼容面；任务卡 T3.2 + W-M5 全量扩容）：
 //
 //	POST /openapi/v1/robots/{robotId}/commands            提交指令（指令报文 = v1
 //	                                                     WeworkMessageBean 单条；
 //	                                                     幂等键 Idempotency-Key 强制）
 //	GET  /openapi/v1/robots/{robotId}/commands/{commandId} RAW_CONFIRM 结果查询
+//
+// 扩展分组（openapi_rest.go）：机器人配置（info/online/logs/corps）、回调配置
+// CRUD（callbacks）、历史查询（history/commands|results|callbacks|messages）、
+// 群列表（groups）、队列管理（queue GET/DELETE、queue/{commandId} DELETE、
+// queue/priority POST）。
+// b2 补齐组（openapi_upload.go，REV-SRV-02）：文件上传 POST /fileUpload/upload
+// （multipart part=file）+ 取回 GET /files/{fileId}（218 fileUrl 闭环）+ 机器人
+// 消息回调配置 POST /robot/robotInfo/update（QA 面 openCallback/replyAll）。
 //
 // 响应信封沿用旧面形态 {code, message, data}（code=0 成功；错误码族见
 // openapi_registry.go 注释）。干跑：X-WT-Dry-Run: true（FR-54，服务端沿同一
@@ -17,6 +25,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"cn.worktool.open/server/internal/scheduler"
 )
@@ -35,16 +44,17 @@ func (s *Server) HandleOpenAPICommand(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.Now().UTC()
 
-	// 60QPM 限流（NFR §2.2，apifox 限制值对齐；先于鉴权计数按 robot 维度）
+	// 鉴权先行 → 60QPM 限流（NFR §2.2，apifox 限制值对齐；仅对已认证 robot 计数，
+	// REV-SRV-04：未认证请求不进限流 map、不消耗配额）
+	token, ae := s.authenticate(ctx, r, robotID)
+	if ae != nil {
+		writeOpenAPIErr(w, ae.Status, openapiHTTPCode(ae), ae.Message)
+		return
+	}
 	if !s.openapiLimiter.allow(robotID, now) {
 		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited,
 			fmt.Sprintf("请求超出限流 %d 次/%s（60QPM，对齐 apifox 限制值）",
 				s.openapiCfg.RateLimitPerMinute, s.openapiCfg.RateWindow))
-		return
-	}
-	token, ae := s.authenticate(ctx, r, robotID)
-	if ae != nil {
-		writeOpenAPIErr(w, ae.Status, openapiHTTPCode(ae), ae.Message)
 		return
 	}
 
@@ -87,10 +97,32 @@ func (s *Server) HandleOpenAPICommand(w http.ResponseWriter, r *http.Request) {
 		writeOpenAPIErr(w, ae.Status, openapiHTTPCode(ae), ae.Message)
 		return
 	}
+	payload, _ := json.Marshal(probe) // 原文回写（键序规范化，语义不变）
+	// 入队去重（上游 101014 指令重复语义）：同目标同 type 同载荷仍有 queued 指令
+	// 时拒绝重复入队（防同内容双发坐队；幂等键重放不受影响——本键重放目标指令
+	// 被排除，重放在 Submit 幂等判定命中后原样返回）。终态指令不比对（失败后重发合法）。
+	replayKey := strings.Join([]string{token.Tenant, "openapi:" + robotID, intent, idemKey}, "|")
+	_, replayCmd, _, replayAt, replayHit, err := s.DB.IdempotencyGet(ctx, nil, replayKey)
+	if err != nil {
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, err.Error())
+		return
+	}
+	// 与 Submit 同窗判定：窗外旧键不算重放（新提交），不排除其旧指令
+	if !replayHit || now.Sub(replayAt) > time.Duration(s.Machine.Policy().Idempotency.WindowHours)*time.Hour {
+		replayCmd = ""
+	}
+	if dup, derr := s.queuedDuplicate(ctx, target, commandType, string(payload), replayCmd); derr != nil {
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, derr.Error())
+		return
+	} else if dup != "" {
+		writeOpenAPIErrData(w, http.StatusBadRequest, openapiUpstreamRepeatInstruct,
+			"指令重复（101014）：同目标同 type 同载荷指令仍在队列中（上游入队去重语义）",
+			map[string]any{"queuedCommandId": dup})
+		return
+	}
 	dryRun := isDryRunHeader(r.Header.Get("X-WT-Dry-Run"))
 	// L2 指令携审批提交（第一次提交返回的 approvalId；FR-53 审批门）
 	approvalID := strings.TrimSpace(r.Header.Get("X-WT-Approval-Id"))
-	payload, _ := json.Marshal(probe) // 原文回写（键序规范化，语义不变）
 
 	res, err := s.Pipeline.Submit(ctx, scheduler.SubmitRequest{
 		Tenant:      token.Tenant,
@@ -176,12 +208,12 @@ func (s *Server) HandleOpenAPIResult(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.Now().UTC()
 
-	if !s.openapiLimiter.allow(robotID, now) {
-		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited, "请求超出限流（60QPM）")
-		return
-	}
 	if _, ae := s.authenticate(ctx, r, robotID); ae != nil {
 		writeOpenAPIErr(w, ae.Status, openapiHTTPCode(ae), ae.Message)
+		return
+	}
+	if !s.openapiLimiter.allow(robotID, now) {
+		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited, "请求超出限流（60QPM）")
 		return
 	}
 	target, ae := s.resolveTarget(ctx, robotID)
@@ -228,6 +260,11 @@ func (s *Server) HandleOpenAPIResult(w http.ResponseWriter, r *http.Request) {
 				data["timeCost"] = cb["timeCost"]
 				data["successList"] = cb["successList"]
 				data["failList"] = cb["failList"]
+				if ec, ok := cb["errorCode"].(float64); ok {
+					if name := OpenAPICodeName(int(ec)); name != "" {
+						data["errorCodeName"] = name // 上游业务码注解（含扩展码 101016/101017/101018/201017~201021）
+					}
+				}
 			}
 			break
 		}

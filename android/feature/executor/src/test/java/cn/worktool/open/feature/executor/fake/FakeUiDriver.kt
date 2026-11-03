@@ -119,6 +119,20 @@ class FakeUiDriver(
         return result
     }
 
+    /** 长按：与 click 同一跳转注册表（长按菜单：回复/转发/撤回/多选），否则走原子长按。 */
+    override fun longClick(node: UiNode): Boolean {
+        actionLog += "longclick(${describe(node)})"
+        val hit = transitions.firstOrNull { it.screen == current?.name && it.node === node }
+        val result = if (hit != null && node.isClickable) {
+            hit.effect(this)
+            true
+        } else {
+            atomic.longClick(node) is OpResult.Ok
+        }
+        onAfterAction?.invoke()
+        return result
+    }
+
     override fun inputText(node: UiNode, text: String): Boolean {
         actionLog += "input(${describe(node)}, \"${text.take(24)}\")"
         val ok = atomic.inputText(node, text) is OpResult.Ok

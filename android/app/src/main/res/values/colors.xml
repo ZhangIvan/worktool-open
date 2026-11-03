@@ -1,4 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  色板（产品冲刺 A 车道）：Material 3 色彩角色（light 方案）在本仓「零外部 UI 库」
+  约束（ask ④）下的平台落地——M3 设计令牌取值、平台 android:Theme.Material 挂载
+  （Material Components 库 = 外部 UI 库，禁引入；见 themes.xml 注）。
+-->
 <resources>
+    <!-- M3 primary（品牌蓝） -->
     <color name="primary">#1E6FFF</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="primary_container">#D8E2FF</color>
+    <!-- M3 surface 族 -->
+    <color name="surface">#F7F8FC</color>
+    <color name="surface_container">#FFFFFF</color>
+    <color name="on_surface">#1A1C20</color>
+    <color name="on_surface_variant">#44474E</color>
+    <color name="outline">#DDDFE5</color>
+    <!-- 语义文本色（布局引用别名） -->
+    <color name="text_primary">#1A1C20</color>
+    <color name="text_secondary">#5A5E66</color>
+    <!-- 状态卡圆点 -->
+    <color name="status_online">#1FA463</color>
+    <color name="status_offline">#9AA0A8</color>
 </resources>

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"cn.worktool.open/server/internal/store/sqlite"
@@ -68,7 +69,15 @@ func NewOutboxWorker(db *sqlite.DB, cfg OutboxConfig, logger interface{ Printf(s
 	}
 	client := cfg.Client
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		// 重定向纪律（REV-SRV-01 / SR-09）：投递绝不跟随 3xx——loopback 接收器
+		// 返回 307/308 指向外网时，Go 默认跟随会把 POST body+HMAC 签名原样重放
+		// 到外网地址。禁随后 30x 终态按非 2xx 处理（retry → 死信），body 不出 loopback。
+		client = &http.Client{
+			Timeout: 5 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	return &OutboxWorker{db: db, cfg: cfg, client: client, now: time.Now, log: logger}, nil
 }
@@ -112,9 +121,12 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 }
 
 // DeliverDue 投递一批到期行（幂等可重入；测试可直接调用）。
+// 投递目标解析优先级：per-robot 回调绑定（openapi_callbacks type=1 指令结果，
+// apifox 兼容面 CRUD 登记处）> 部署级全局 CallbackURL；两者皆空 → 行保持
+// pending（禁外网缺省形态不变）。
 func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
-	if w.cfg.CallbackURL == "" {
-		return nil // 未配置接收器：行保持 pending（禁外网缺省形态）
+	if w.cfg.CallbackURL == "" && !w.hasRobotCallbacks(ctx) {
+		return nil // 未配置任何接收器：行保持 pending（禁外网缺省形态）
 	}
 	now := w.now().UTC()
 	items, err := w.db.DueOutbox(ctx, now, 32)
@@ -129,10 +141,53 @@ func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
 	return nil
 }
 
+// hasRobotCallbacks 是否存在任意 per-robot 回调绑定（全局 URL 未配置时的
+// 唯一投递来源探测；一次 COUNT 查询）。
+func (w *OutboxWorker) hasRobotCallbacks(ctx context.Context) bool {
+	rows, err := w.db.QueryDump(ctx, `SELECT COUNT(*) FROM openapi_callbacks`)
+	if err != nil || len(rows) != 1 {
+		return false // 表未建（老库未装配兼容面）→ 视为无绑定
+	}
+	n, _ := strconv.Atoi(rows[0][0])
+	return n > 0
+}
+
+// callbackURLFor 解析本行的投递目标：exec_result 行且其 robot 登记了 type=1
+// 回调绑定 → 该 URL；否则部署级全局 URL（可能为空 = 本行不投递）。
+// robot 归属：commands.target 为 deviceId（→ devices.robot_id）或 v1:robotId。
+func (w *OutboxWorker) callbackURLFor(ctx context.Context, it sqlite.OutboxItem) string {
+	if it.Kind != "exec_result" || it.CommandID == "" {
+		return w.cfg.CallbackURL
+	}
+	rows, err := w.db.QueryDump(ctx, `SELECT target FROM commands WHERE command_id = ?`, it.CommandID)
+	if err != nil || len(rows) != 1 {
+		return w.cfg.CallbackURL
+	}
+	target := rows[0][0]
+	robotID := strings.TrimPrefix(target, "v1:")
+	if robotID == target { // v2 deviceId → 反查 devices.robot_id
+		drows, derr := w.db.QueryDump(ctx, `SELECT COALESCE(robot_id,'') FROM devices WHERE device_id = ?`, target)
+		if derr != nil || len(drows) != 1 || drows[0][0] == "" {
+			return w.cfg.CallbackURL
+		}
+		robotID = drows[0][0]
+	}
+	crows, cerr := w.db.QueryDump(ctx,
+		`SELECT callback_url FROM openapi_callbacks WHERE robot_id = ? AND type = 1 LIMIT 1`, robotID)
+	if cerr != nil || len(crows) != 1 || crows[0][0] == "" {
+		return w.cfg.CallbackURL
+	}
+	return crows[0][0]
+}
+
 func (w *OutboxWorker) deliverOne(ctx context.Context, it sqlite.OutboxItem, now time.Time) error {
+	target := w.callbackURLFor(ctx, it)
+	if target == "" {
+		return nil // 本行无投递目标（全局未配置且 robot 未绑定）：保持 pending
+	}
 	ts := now.UnixMilli()
 	body := []byte(it.Payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.cfg.CallbackURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

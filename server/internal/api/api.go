@@ -59,6 +59,15 @@ type Server struct {
 	// apifox 兼容面（FR-34，T3.2）：配置与按 robot 限流器（默认 60QPM）。
 	openapiCfg     OpenAPIConfig
 	openapiLimiter *openapiLimiter
+
+	// AllowNonLoopbackCallbacks 放行外网回调接收器（默认 false：仅 loopback，
+	// SR-09 同 outbox 纪律；部署侧须 TLS，SR-01）。影响回调绑定的地址校验。
+	AllowNonLoopbackCallbacks bool
+	// FileDir 上传文件存储目录（POST /fileUpload/upload；空 = ./wt-files，
+	// REV-SRV-02 b2 补齐）。测试注入临时目录。
+	FileDir string
+	// callbackProbe 绑定校验探测客户端（懒建；测试可注入）。
+	callbackProbe *http.Client
 }
 
 // NewServer 装配 API 服务。
@@ -108,6 +117,31 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 	// apifox 兼容面（FR-34，ADR-08；方法守卫在 handler）
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands", s.HandleOpenAPICommand)
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands/{commandId}", s.HandleOpenAPIResult)
+	// 兼容面扩展组（apifox 全量面：配置/回调/历史/群/队列；openapi_rest.go）
+	// + b2 补齐组（文件上传/取回、robotInfo/update；openapi_upload.go，REV-SRV-02）
+	if err := s.ensureOpenAPISchema(context.Background()); err != nil {
+		// 建表失败不静默：装配即拒绝（fail-fast），避免半可用面
+		panic(err)
+	}
+	if err := s.ensureOpenAPIUploadSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	mux.HandleFunc("/fileUpload/upload", s.HandleFileUpload)
+	mux.HandleFunc("/robot/robotInfo/update", s.HandleRobotInfoUpdate)
+	mux.HandleFunc("GET /files/{fileId}", s.HandleFileGet)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/info", s.HandleOpenAPIRobotInfo)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/online", s.HandleOpenAPIRobotOnline)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/logs", s.HandleOpenAPIRobotLogs)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/corps", s.HandleOpenAPIRobotCorps)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/callbacks", s.HandleOpenAPICallbacks)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/groups", s.HandleOpenAPIGroups)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue", s.HandleOpenAPIQueue)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue/priority", s.HandleOpenAPIQueuePriority)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue/{commandId}", s.HandleOpenAPIQueueItem)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/commands", s.HandleOpenAPIHistoryCommands)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/results", s.HandleOpenAPIHistoryResults)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/callbacks", s.HandleOpenAPIHistoryCallbacks)
+	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/messages", s.HandleOpenAPIHistoryMessages)
 	return mux
 }
 

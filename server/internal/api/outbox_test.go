@@ -216,6 +216,53 @@ func TestOutboxNoURLStaysPending(t *testing.T) {
 	}
 }
 
+// TestOutboxDeliveryDoesNotFollowRedirect：REV-SRV-01 负例——投递目标（loopback）
+// 返回 307 指向第二接收器时，投递客户端禁跟随：POST body+HMAC 不出第一跳
+// （第二接收器 0 命中），行转重试（lastError=http 307）。密闭等价：被测行为是
+// 「客户端绝不跟随重定向」；真实外网目标同理收不到任何字节。
+func TestOutboxDeliveryDoesNotFollowRedirect(t *testing.T) {
+	db := newOutboxDB(t)
+	const secret = "cb-redir"
+
+	var mu sync.Mutex
+	leaked := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		leaked++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(second.Close)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 307/308 会原样重放 POST body——若客户端跟随，签名载荷即外泄至 Location 目标
+		http.Redirect(w, r, second.URL+"/leaked", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(first.Close)
+
+	w, err := NewOutboxWorker(db, OutboxConfig{
+		CallbackURL:    first.URL + "/callback",
+		CallbackSecret: secret,
+		RetryDelays:    []time.Duration{time.Hour, time.Hour, time.Hour}, // 拉长重试间隔，单轮只投一次
+	}, testLogger{t})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueueOutboxRow(t, db, "cmd-redir-1")
+	if err := w.DeliverDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if leaked != 0 {
+		t.Fatalf("投递跟随了 307（载荷外泄至重定向目标 %d 次）——SR-09 可被重定向打穿", leaked)
+	}
+	pending, _ := db.OutboxByStatus(context.Background(), "pending")
+	if len(pending) != 1 || pending[0].Attempts != 1 || pending[0].LastError != "http 307" {
+		t.Fatalf("30x 终态应按失败处理转重试: %+v", pending)
+	}
+}
+
 type testLogger struct{ t *testing.T }
 
 func (l testLogger) Printf(format string, args ...any) { l.t.Logf("[outbox] "+format, args...) }

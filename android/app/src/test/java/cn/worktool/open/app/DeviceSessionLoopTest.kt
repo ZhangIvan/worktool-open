@@ -177,6 +177,7 @@ class DeviceSessionLoopTest {
         clicks: AtomicInteger,
         pause: PauseManager = NeverPausedPauseManager(),
         events: MutableList<String> = mutableListOf(),
+        dryRunGate: (() -> Boolean)? = null,
     ): DeviceSessionLoop {
         val credentials = DeviceCredentials(
             deviceId = "device-9f2c7b41",
@@ -197,6 +198,7 @@ class DeviceSessionLoopTest {
             pauseManager = pause,
             transportFactory = FakeTransport.Factory(transport),
             onEvent = { events.add(it) },
+            dryRunGate = dryRunGate,
         )
         return loop
     }
@@ -385,6 +387,95 @@ class DeviceSessionLoopTest {
         assertTrue(
             "暂停指令不得产生 RAW_CONFIRM",
             transport.sent.none { it.contains("\"socketType\":3") },
+        )
+        loop.stop()
+    }
+
+    // ---- ⑦ FR-54 端侧干跑门（主界面快捷操作开关）：零副作用 + 回执同构 + 审计标记 ----
+
+    @Test
+    fun `端侧干跑-指令零执行-回执同构携带deviceDryRun标记`() {
+        val transport = FakeTransport()
+        val journal = InMemoryJournalStore()
+        val clicks = AtomicInteger()
+        val events = mutableListOf<String>()
+        val loop = newLoop(transport, journal, clicks, events = events, dryRunGate = { true })
+        loop.start()
+        transport.serverMessage(helloAckText())
+        val commandId = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+        transport.serverMessage(commandFrame(commandId, epoch = 1))
+
+        assertEquals("干跑门开：真实执行面不得触碰", 0, clicks.get())
+
+        // 回执：socketType=3、errorCode=0、metaJson.deviceDryRun=true（审计标记）
+        val confirm = transport.sent.drop(1).single()
+        val confirmObj = Json.parseToJsonElement(confirm).jsonObject
+        assertEquals(3, confirmObj["socketType"]!!.jsonPrimitive.content.toInt())
+        val bean = codec.beans(confirmObj["list"]!!).single()
+        assertEquals(MessageTypes.SEND_MESSAGE, bean.type)
+        assertEquals(0, bean.errorCode)
+        val metaJson = Json.parseToJsonElement(bean.metaJson!!).jsonObject
+        assertEquals(commandId, metaJson["dispatchId"]!!.jsonPrimitive.content)
+        assertEquals(true, metaJson["deviceDryRun"]!!.jsonPrimitive.content.toBoolean())
+
+        // 事件面：干跑留痕（含将要做什么 = 计划步骤）
+        assertTrue(events.any { it.contains("端侧干跑") && it.contains("零副作用") })
+
+        // 台账：outcome=device_dry_run（904 补报可见干跑事实）
+        loop.sendJournalReplay()
+        val replayObj = Json.parseToJsonElement(transport.sent.last()).jsonObject
+        val entry = (codec.beans(replayObj["list"]!!).single().extras["entries"]
+            as kotlinx.serialization.json.JsonArray).first().jsonObject
+        assertEquals("device_dry_run", entry["outcome"]!!.jsonPrimitive.content)
+        loop.stop()
+    }
+
+    @Test
+    fun `端侧干跑-门关时正常执行-门为null同`() {
+        val transport = FakeTransport()
+        val journal = InMemoryJournalStore()
+        val clicks = AtomicInteger()
+        val loop = newLoop(transport, journal, clicks, dryRunGate = { false })
+        loop.start()
+        transport.serverMessage(helloAckText())
+        transport.serverMessage(commandFrame("3c4d5e6f-7a8b-4c9d-0e1f-2a3b4c5d6e7f", epoch = 1))
+        assertEquals("干跑门关：正常真实执行", 1, clicks.get())
+        val confirm = transport.sent.drop(1).single()
+        val bean = codec.beans(Json.parseToJsonElement(confirm).jsonObject["list"]!!).single()
+        assertTrue(
+            "非干跑回执不得携带 deviceDryRun 标记",
+            Json.parseToJsonElement(bean.metaJson!!).jsonObject["deviceDryRun"] == null,
+        )
+        loop.stop()
+    }
+
+    @Test
+    fun `端侧干跑-暂停态仍出干跑回执-干跑属安全操作不经暂停门`() {
+        val transport = FakeTransport()
+        val journal = InMemoryJournalStore()
+        val clicks = AtomicInteger()
+        // AlwaysPaused 下真实执行被暂停拦截（见⑥）；干跑无副作用 = 安全操作，
+        // 语义与 feature:executor CommandRunner.dryRun 一致（不受暂停门拦截）
+        val loop = newLoop(
+            transport, journal, clicks,
+            pause = AlwaysPaused(),
+            dryRunGate = { true },
+        )
+        loop.start()
+        transport.serverMessage(helloAckText())
+        transport.serverMessage(commandFrame("4d5e6f7a-8b9c-4d0e-1f2a-3b4c5d6e7f8a", epoch = 1))
+        assertEquals(0, clicks.get())
+        // 暂停 + 干跑门开：须产出干跑 RAW_CONFIRM（errorCode=0 + deviceDryRun 标记）。
+        // metaJson 在帧内为 JSON 字符串值（引号转义）——须解码后断言，不做子串匹配。
+        val confirmObj = transport.sent
+            .map { Json.parseToJsonElement(it).jsonObject }
+            .first { it["socketType"]?.jsonPrimitive?.content == "3" }
+        val bean = codec.beans(confirmObj["list"]!!).single()
+        assertEquals(0, bean.errorCode)
+        assertEquals(
+            true,
+            Json.parseToJsonElement(bean.metaJson!!).jsonObject["deviceDryRun"]!!
+                .jsonPrimitive.content.toBoolean(),
         )
         loop.stop()
     }

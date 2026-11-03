@@ -1,43 +1,276 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 空引导页（T1.2）：纯静态占位，无交互逻辑。 -->
+<!--
+  主界面（产品冲刺 A 车道）：顶部状态卡 + 中部快捷操作 + 底部标签页（状态|指令|设置）。
+  全 Android 原生组件（无第三方 UI 库，G3 零遥测）。旧空引导页（T1.2）由本布局取代；
+  节点树调试页入口保留在设置 tab（guide_open_debug）。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center"
-    android:padding="24dp">
+    android:background="@color/surface">
 
-    <TextView
-        android:id="@+id/guide_title"
-        android:layout_width="wrap_content"
+    <!-- 顶部状态卡：机器人在线/离线 + server 地址 + 最后心跳 -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/guide_title"
-        android:textColor="@color/primary"
-        android:textSize="24sp"
-        android:textStyle="bold" />
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:padding="16dp">
 
-    <TextView
-        android:id="@+id/guide_stage"
-        android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/main_status_dot"
+                android:layout_width="12dp"
+                android:layout_height="12dp"
+                android:background="@drawable/dot_offline" />
+
+            <TextView
+                android:id="@+id/main_status_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/main_status_offline"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/main_status_server"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/main_status_heartbeat"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 中部快捷操作：暂停/恢复（FR-52）+ 干跑开关（FR-54 端侧干跑门） -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/guide_stage"
-        android:textSize="14sp" />
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-    <TextView
-        android:id="@+id/guide_body"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
-        android:gravity="center"
-        android:text="@string/guide_body"
-        android:textSize="13sp" />
+        <Button
+            android:id="@+id/main_btn_pause"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/main_pause" />
 
-    <Button
-        android:id="@+id/guide_open_debug"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="@string/guide_open_debug" />
+        <Button
+            android:id="@+id/main_btn_cancel_resume"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/main_resume_cancel"
+            android:visibility="gone" />
 
+        <Switch
+            android:id="@+id/main_switch_dry_run"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:text="@string/main_dry_run_switch"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 标签内容区 -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp">
+
+        <!-- 状态 tab -->
+        <ScrollView
+            android:id="@+id/main_tab_status_content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:id="@+id/main_session_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/main_event_log_title"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/main_event_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- 指令 tab：容器承接标签显隐，内层 ListView 承接适配器（id 供 MainActivity 绑定） -->
+        <FrameLayout
+            android:id="@+id/main_tab_commands_content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <ListView
+                android:id="@+id/main_command_list"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:divider="@color/outline"
+                android:dividerHeight="1dp"
+                android:padding="8dp" />
+        </FrameLayout>
+
+        <!-- 设置 tab -->
+        <ScrollView
+            android:id="@+id/main_tab_settings_content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_server_title"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/main_settings_server_value"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/main_btn_change_server"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/settings_change_server" />
+
+                <Button
+                    android:id="@+id/main_btn_unpair"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/settings_unpair" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/settings_log_switch"
+                        android:textColor="@color/text_primary" />
+
+                    <Switch
+                        android:id="@+id/main_settings_log_switch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/main_btn_open_debug"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/guide_open_debug" />
+
+                <!-- 关于 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/about_title"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/main_about_body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <!-- 底部标签栏：状态|指令|设置 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/main_tab_btn_status"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/main_tab_status"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/main_tab_btn_commands"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/main_tab_commands"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/main_tab_btn_settings"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/main_tab_settings"
+            android:textSize="14sp" />
+    </LinearLayout>
 </LinearLayout>

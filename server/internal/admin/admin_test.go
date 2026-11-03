@@ -435,9 +435,20 @@ func TestUIServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(pageBytes)
-	for _, marker := range []string{"WorkTool-Open", "pairing-codes", "approvals"} {
+	for _, marker := range []string{
+		"WorkTool-Open", "pairing-codes", "approvals",
+		// W-P0 完整管理后台视图与 API 面对齐（概览/队列/回调/日志/设置）。
+		"admin/overview", "admin/queue", "admin/callbacks", "admin/whitelist",
+		"logs/executions", "logs/audit", "settings/guard", "settings/encryption",
+	} {
 		if !strings.Contains(page, marker) {
 			t.Fatalf("index.html 应含 %q（UI 与 API 面对齐）", marker)
+		}
+	}
+	// 零外部资源纪律（G3/G4）：无 CDN/外链字体/图片引用。
+	for _, banned := range []string{"http://cdn", "https://cdn", "googleapis", "jsdelivr", "unpkg", "<img ", "background-image:url(http"} {
+		if strings.Contains(page, banned) {
+			t.Fatalf("index.html 不得含外部资源引用 %q（零第三方资源纪律）", banned)
 		}
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
@@ -510,5 +521,83 @@ func TestAdminTokenRejectedOnOpenAPIFace(t *testing.T) {
 	// 对照：同一 admin 令牌打管理面仍正常（硬拒只影响兼容面）
 	if st, b := f.call(t, http.MethodGet, "/api/v1/admin/devices", "", true); st != http.StatusOK {
 		t.Fatalf("admin 令牌打管理面应 200，got %d %v", st, b)
+	}
+}
+
+// TestOpenAPITokenLifecycleViaAdmin（W-M5 日常使用闭环）：管理面签发兼容面令牌
+// → 令牌可打 /openapi/v1 全量面 → 列表只读（hash 前缀，无原始值）→ 吊销后
+// 兼容面 401。保留名 admin 签发硬拒（CR ADM-1）；无管理令牌 401。
+func TestOpenAPITokenLifecycleViaAdmin(t *testing.T) {
+	f := newFixture(t)
+	machine := statemachine.Default()
+	pipeline := scheduler.New(f.db, machine)
+	pipeline.Now = func() time.Time { return *f.now }
+	hub := gateway.New(f.db, pipeline, machine, testLogger{t})
+	apiSrv := api.NewServer(f.db, hub, pipeline, machine, testLogger{t})
+	apiSrv.Now = func() time.Time { return *f.now }
+	mux := api.NewServeMux(api.Options{Server: apiSrv})
+	openapiSrv := httptest.NewServer(mux)
+	t.Cleanup(openapiSrv.Close)
+
+	// 1) 签发（tenant 可选参数）
+	st, body := f.call(t, http.MethodPost, "/api/v1/admin/robots/robot-daily/openapi-tokens",
+		`{"tenant":"t1"}`, true)
+	if st != http.StatusCreated {
+		t.Fatalf("签发应 201，got %d %v", st, body)
+	}
+	token, _ := body["token"].(string)
+	if len(token) != 64 { // 256-bit hex
+		t.Fatalf("令牌应为 64 hex，got %q", token)
+	}
+
+	// 2) 集成：该令牌打兼容面 info → 200（鉴权归属核对通过）
+	req, _ := http.NewRequest(http.MethodGet, openapiSrv.URL+"/openapi/v1/robots/robot-daily/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("管理面签发令牌应可打兼容面，got %d", resp.StatusCode)
+	}
+
+	// 3) 列表只读：hash 前缀 + 状态；原始值不得再现
+	st, body = f.call(t, http.MethodGet, "/api/v1/admin/robots/robot-daily/openapi-tokens", "", true)
+	if st != http.StatusOK {
+		t.Fatalf("列表应 200，got %d %v", st, body)
+	}
+	if count, _ := body["count"].(float64); count != 1 {
+		t.Fatalf("应 1 枚令牌: %v", body)
+	}
+	raw, _ := json.Marshal(body)
+	if strings.Contains(string(raw), token) {
+		t.Fatal("列表响应不得包含令牌原始值")
+	}
+
+	// 4) 吊销 → 兼容面即 401（旋转路径生效）
+	st, body = f.call(t, http.MethodDelete, "/api/v1/admin/robots/robot-daily/openapi-tokens", "", true)
+	if st != http.StatusOK || body["revoked"].(float64) != 1 {
+		t.Fatalf("吊销应 revoked=1: %d %v", st, body)
+	}
+	req, _ = http.NewRequest(http.MethodGet, openapiSrv.URL+"/openapi/v1/robots/robot-daily/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("吊销后兼容面应 401，got %d", resp.StatusCode)
+	}
+
+	// 5) 保留名硬拒：为 admin 签发兼容面令牌 → 403（CR ADM-1）
+	if st, _ := f.call(t, http.MethodPost, "/api/v1/admin/robots/"+sqlite.ReservedAdminScopeRobotID+"/openapi-tokens", "", true); st != http.StatusForbidden {
+		t.Fatalf("保留名签发应 403，got %d", st)
+	}
+
+	// 6) 鉴权负例：无管理令牌 → 401
+	if st, _ := f.call(t, http.MethodGet, "/api/v1/admin/robots/robot-daily/openapi-tokens", "", false); st != http.StatusUnauthorized {
+		t.Fatalf("无鉴权应 401，got %d", st)
 	}
 }

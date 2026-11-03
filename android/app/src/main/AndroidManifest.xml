@@ -3,9 +3,10 @@
   app 模块清单（T1.2）。
   SR-10 组件最小化：
   - allowBackup=false（禁止 adb 备份导出应用数据）
-  - 零 uses-permission（壳工程无网络/存储/位置等任何权限；未设置 usesCleartextTraffic，
-    targetSdk 28+ 默认禁明文，满足 SR-01/SR-09）
-  - 唯一组件 MainActivity，exported=true 仅为 LAUNCHER 入口必需
+  - 零 uses-permission（产品源集无网络/存储/位置等任何权限；网络访问归 labDebug
+    源集声明；未设置 usesCleartextTraffic，targetSdk 28+ 默认禁明文，满足 SR-01/SR-09）
+  - 组件：MainActivity（LAUNCHER 入口，exported=true 仅为启动必需）+ 内部页
+    （PairingActivity 配对引导 / NodeTreeDebugActivity 节点树调试，均 exported=false）
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -30,6 +31,11 @@
             android:name=".NodeTreeDebugActivity"
             android:exported="false"
             android:label="@string/debug_title" />
+
+        <!-- 产品冲刺 A 车道：配对引导流（未配对/重配对入口，exported=false，SR-10/G10 组件最小化）。 -->
+        <activity
+            android:name=".PairingActivity"
+            android:exported="false" />
     </application>
 
 </manifest>

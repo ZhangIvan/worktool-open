@@ -3,6 +3,7 @@
  */
 package cn.worktool.open.feature.executor.runtime
 
+import cn.worktool.open.core.accessibility.tree.NodeAction
 import cn.worktool.open.core.accessibility.tree.ScrollDirection
 import cn.worktool.open.core.accessibility.tree.UiNode
 
@@ -52,6 +53,14 @@ interface UiDriver {
 
     /** 点击节点（真机实现转发原子操作库 click，含手势回退）。 */
     fun click(node: UiNode): Boolean
+
+    /**
+     * 长按节点（消息长按菜单：回复/转发/撤回/多选入口，204/205/226/227/228 用）。
+     *
+     * 默认实现直发 LONG_CLICK 节点动作（与 core:accessibility AtomicOperations.longClick
+     * 的首选路径同源）；真机实现可覆写为转发原子操作库（含手势长按回退）。
+     */
+    fun longClick(node: UiNode): Boolean = node.performAction(NodeAction.LONG_CLICK, null)
 
     /** 在节点上输入文本（真机实现转发原子操作库 inputText，含剪贴板回退）。 */
     fun inputText(node: UiNode, text: String): Boolean

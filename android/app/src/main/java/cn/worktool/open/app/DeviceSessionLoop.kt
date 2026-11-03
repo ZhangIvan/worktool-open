@@ -83,6 +83,21 @@ class DeviceSessionLoop(
     private val onCredentialRevoked: (() -> Unit)? = null,
     /** 回路事件观察口（审计/日志面；不参与控制流）。 */
     private val onEvent: ((String) -> Unit)? = null,
+    /**
+     * 执行回执结构化观察口（产品冲刺 A 车道：主界面指令列表「上次执行状态」数据源）。
+     * 与 onEvent 的行文本解耦（文本面向日志，本回调面向 UI 状态机）；不参与控制流。
+     */
+    private val onExecResult: ((commandId: String, commandType: Int, errorCode: Int, success: Boolean) -> Unit)? = null,
+    /**
+     * FR-54 端侧干跑门（产品冲刺 A 车道：主界面快捷操作「干跑开关」经
+     * SessionRuntime.dryRunEnabled 注入；null/false = 真实执行）。
+     * 开 = 指令经 feature:executor CommandRunner.dryRun（同引擎同路径仅构建计划，
+     * 零副作用）产出报告，并回 RAW_CONFIRM（errorCode=0）+ metaJson.deviceDryRun=true
+     * 标记。口径：干跑无副作用属安全操作，不经暂停门拦截（与 CommandRunner.dryRun
+     * 语义一致）；端侧干跑为设备主人的本地预览决定，与服务端「干跑绝不下发设备」
+     * （server scheduler pipeline，FR-54）互不冲突——服务端干跑指令不会到达本门。
+     */
+    private val dryRunGate: (() -> Boolean)? = null,
 ) {
 
     private val codec = EnvelopeCodec()
@@ -238,6 +253,21 @@ class DeviceSessionLoop(
             reportResult(commandId, type, code, reason, null, clock() - startedAt, success = false)
             return
         }
+        // FR-54 端侧干跑门（主界面快捷操作开关）：同引擎同路径仅构建计划，零副作用。
+        // 回执结构同真实成功路径（docs/04 §5.1「干跑报告与真实路径同构」），另携
+        // metaJson.deviceDryRun=true 审计标记；台账 outcome=device_dry_run。
+        if (dryRunGate?.invoke() == true) {
+            val dry = runner.dryRun(normalized.intent, registry)
+            ledger(commandId, epoch, started = false, outcome = "device_dry_run")
+            reportResult(
+                commandId, type, 0, null, dry.target,
+                clock() - startedAt, success = true, deviceDryRun = true,
+            )
+            onEvent?.invoke(
+                "端侧干跑 commandId=$commandId type=$type target=${dry.target} 步骤=${dry.plannedSteps}（零副作用，FR-54）",
+            )
+            return
+        }
         val report = runner.execute(normalized.intent, registry)
         val target = normalized.intent.targetDescription
         when (report.status) {
@@ -348,6 +378,7 @@ class DeviceSessionLoop(
         target: String?,
         timeCostMillis: Long,
         success: Boolean,
+        deviceDryRun: Boolean = false,
     ) {
         val bean = WeworkMessageBean(
             type = commandType,
@@ -357,9 +388,13 @@ class DeviceSessionLoop(
             timeCost = timeCostMillis,
             successList = if (success && target != null) listOf(target) else emptyList(),
             failList = if (!success && target != null) listOf(target) else emptyList(),
-            metaJson = buildJsonObject { put("dispatchId", commandId) }.toString(),
+            metaJson = buildJsonObject {
+                put("dispatchId", commandId)
+                if (deviceDryRun) put("deviceDryRun", true) // FR-54 端侧干跑审计标记
+            }.toString(),
         )
         session.sendExecResult(commandId, bean)
+        onExecResult?.invoke(commandId, commandType, errorCode, success)
         onEvent?.invoke("RAW_CONFIRM commandId=$commandId type=$commandType errorCode=$errorCode")
     }
 
