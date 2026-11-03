@@ -115,11 +115,11 @@ class FacadeBranchTest {
             },
         )
         session2.start()
-        // 2026-11-03 重连拨死 URL 修复：无 wsPath 时改拨**会话重建入口**
-        // /api/v2/device-sessions（服务端按持久凭据重开 deviceId 会话），
-        // 不再拼一次性 sessionId 尾巴（旧会话路径关流后 404 → 永久离线）。
+        // 2026-11-03 重连修复 v2（cf57a61）：无 wsPath 时同步 POST /api/v2/device-sessions
+        // 创建新会话拿新 wsPath。测试环境 httpClient 无法连 example.com → rebuildSessionUrl
+        // 走 catch → 返回 /api/v2/device-sessions/retry（无效路径，让 WS 失败→退避→下轮重试）。
         assertEquals(
-            "wss://example.com/api/v2/device-sessions",
+            "wss://example.com/api/v2/device-sessions/retry",
             urlCapture.url,
         )
         // 无 journal 直发分支
