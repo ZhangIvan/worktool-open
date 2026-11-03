@@ -130,6 +130,11 @@ object RuleConfigParser {
         if (relation == ChainRelation.SIBLING && index != null) {
             throw RuleConfigException("sibling 关系不接受 'index'（应使用 'offset'）")
         }
+        // T4.4（docs/11 B1）：child 步无谓词时必须显式 index；「缺省回退 0 号子节点」
+        // 在零匹配时静默误点，已在解析期拒绝（引擎期 stepFrom 同步拒绝，双保险）。
+        if (relation == ChainRelation.CHILD && match == null && index == null) {
+            throw RuleConfigException("child 链步必须显式 'index' 或 'match'（缺省 child0 兜底已禁止，T4.4）")
+        }
         return ChainStep(relation, index, offset, match)
     }
 

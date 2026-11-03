@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -20,6 +21,7 @@ import android.widget.ListView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import cn.worktool.open.core.accessibility.WorkToolAccessibilityService
 import cn.worktool.open.core.protocol.android.AndroidKeystoreCredentialStore
 
 /**
@@ -29,6 +31,9 @@ import cn.worktool.open.core.protocol.android.AndroidKeystoreCredentialStore
  * - 顶部状态卡：机器人在线/离线（绿/灰圆点）+ server 地址 + 最后心跳时间。
  *   在线判定 = 会话在跑 && 连接开 && 最近心跳 ≤ 心跳间隔（默认 15s，随凭据），
  *   数据源 [SessionRuntime.statusTracker]（对 core:protocol V2Session 的传输层观测）。
+ *   另有无障碍服务观测行（CR UI-02）：[WorkToolAccessibilityService.instance] 为 null
+ *   （服务未开启/未连接）时显示警示 + 跳系统设置入口——此时一切指令执行都会失败
+ *   （AccessibilityUiDriver 无通道），不提示则用户无从知道原因。
  * - 中部快捷操作：暂停/恢复（FR-52，直接绑定 task-engine PauseManager；两步恢复
  *   状态机由 [PausePanelState] 映射，不可绕过）+ 干跑开关（FR-54 端侧干跑门，
  *   [SessionRuntime.dryRunEnabled] → DeviceSessionLoop.dryRunGate：下发指令只产出
@@ -62,6 +67,8 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var statusServer: TextView
     private lateinit var statusHeartbeat: TextView
+    private lateinit var statusA11y: TextView
+    private lateinit var openA11yButton: Button
 
     // 快捷操作
     private lateinit var pauseButton: Button
@@ -162,6 +169,13 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.main_status_text)
         statusServer = findViewById(R.id.main_status_server)
         statusHeartbeat = findViewById(R.id.main_status_heartbeat)
+        statusA11y = findViewById(R.id.main_status_a11y)
+        openA11yButton = findViewById(R.id.main_btn_open_a11y)
+        // CR UI-02：服务未开启时的一键入口（系统无障碍设置页；用户开启后返回本页，
+        // 下一个 tick 即观测到连接并隐藏本入口）。
+        openA11yButton.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
     }
 
     private fun renderStatusCard() {
@@ -185,6 +199,11 @@ class MainActivity : Activity() {
         statusServer.text = settings.serverAddress.orEmpty()
         statusHeartbeat.text =
             getString(R.string.main_status_heartbeat, RobotStatusComputer.heartbeatAgeText(status.heartbeatAgeMillis))
+        // CR UI-02 无障碍服务观测：null = 未开启/未连接 → 指令通道不可用，须可见可跳转；
+        // 服务连接后（含从系统设置返回）自动隐藏。观测点与服务/调试页同源（instance）。
+        val a11yConnected = WorkToolAccessibilityService.instance != null
+        statusA11y.visibility = if (a11yConnected) View.GONE else View.VISIBLE
+        openA11yButton.visibility = if (a11yConnected) View.GONE else View.VISIBLE
     }
 
     // ---- 快捷操作（FR-52 暂停/恢复 + 悬浮窗开关）----

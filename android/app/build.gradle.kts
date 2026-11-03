@@ -67,8 +67,9 @@ android {
         // W-M3R 真机装配（D1 lab）：lab 变体 = 独立 buildType（非 flavor），保证
         // debug/release 产品变体任务名与源集零改动（CI assembleDebug 不受影响，
         // G12 精神），产物任务名 assembleLabDebug。lab 专属内容全部在
-        // src/labDebug/ 源集：INTERNET 权限 + networkSecurityConfig 信任 lab CA +
-        // 配对最小 UI；applicationId 加 .lab 后缀与产品安装共存。
+        // src/labDebug/ 源集：networkSecurityConfig 信任 lab CA + 配对最小 UI
+        // （INTERNET 权限已上移产品 main 源集，CR UI-01 修复，2026-11-03）；
+        // applicationId 加 .lab 后缀与产品安装共存。
         create("labDebug") {
             initWith(getByName("debug"))
             isDebuggable = true

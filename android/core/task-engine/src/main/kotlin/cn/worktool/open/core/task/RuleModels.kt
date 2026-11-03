@@ -47,6 +47,16 @@ data class FriendAcceptMatch(
 )
 
 /**
+ * 好友请求处置策略（FR-15 增强：通讯录通知事件→过滤→**通过/拒绝**）。
+ *
+ * - [ACCEPT]：命中即产出 PASS_FRIEND 意图（212）——原语义；
+ * - [REJECT]：命中即**拒绝通过**（黑名单式：不产意图、留决策记录；「拒绝」的端侧动作
+ *   如点击拒绝按钮——协议无对应指令 type，执行面归 feature:* 车道，本层只做决策）。
+ */
+@Serializable
+enum class FriendDecisionPolicy { ACCEPT, REJECT }
+
+/**
  * 规则动作（判别字段 `type`）。当前本地模式两种动作：
  * - [SendMessageAction] → 协议 type 203 SEND_MESSAGE（spec §4.2）
  * - [PassFriendAction] → 协议 type 212 PASS_ALL_FRIEND_REQUEST（FR-15，T3.1 执行器）
@@ -72,6 +82,16 @@ data class PassFriendAction(
     val greeting: String? = null,
 ) : RuleAction
 
+/** 冷却窗口作用域（FR-39 增强：原实现仅按 ruleId 计水位，跨会话互相误抑制）。 */
+@Serializable
+enum class CooldownScope {
+    /** 全局按规则计（默认=原行为：任一会话触发即全局进入冷却）。 */
+    RULE,
+
+    /** 按「规则+会话」计（同一规则在不同会话独立冷却；会话名 null 归并为全局桶）。 */
+    RULE_AND_ROOM,
+}
+
 /** 关键词自动回复规则（FR-39）。 */
 @Serializable
 data class KeywordRule(
@@ -83,6 +103,8 @@ data class KeywordRule(
     val action: RuleAction,
     /** 同规则两次触发最小间隔（防刷屏/账号风控 R2；0 = 不限）。 */
     val cooldownMillis: Long = 0,
+    /** 冷却窗口作用域（默认 [CooldownScope.RULE] 保持既有行为不变）。 */
+    val cooldownScope: CooldownScope = CooldownScope.RULE,
 )
 
 /** 新好友自动通过规则（FR-15，纯端侧，无需服务端）。 */
@@ -91,6 +113,8 @@ data class FriendAcceptRule(
     val ruleId: String,
     val enabled: Boolean = true,
     val match: FriendAcceptMatch = FriendAcceptMatch(),
+    /** 处置策略（默认 [FriendDecisionPolicy.ACCEPT]；REJECT=命中即拒绝通过）。 */
+    val decision: FriendDecisionPolicy = FriendDecisionPolicy.ACCEPT,
     /** 必须为 [PassFriendAction]（[RuleConfigParser] 解析期校验；多态字段统一 `type` 判别）。 */
     val action: RuleAction,
 )

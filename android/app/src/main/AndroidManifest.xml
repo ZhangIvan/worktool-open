@@ -3,12 +3,20 @@
   app 模块清单（T1.2）。
   SR-10 组件最小化：
   - allowBackup=false（禁止 adb 备份导出应用数据）
-  - 零 uses-permission（产品源集无网络/存储/位置等任何权限；网络访问归 labDebug
-    源集声明；未设置 usesCleartextTraffic，targetSdk 28+ 默认禁明文，满足 SR-01/SR-09）
+  - uses-permission 仅 INTERNET 一项（CR UI-01 修复，2026-11-03）：产品变体的网络面
+    （PairingActivity→PairingClient.pair / SessionRuntime→OkHttpWsTransport）全在 main
+    源集，无 INTERNET 时配对 socket 在系统层被拒 → 用户永远卡在第 2 步配对。
+    INTERNET 是 normal 级权限（安装即授、无运行时弹窗），不触碰 G3 零遥测（本权限
+    只服务用户自配 server 的会话通道）与 G12 零 hook；除网络外仍零权限
+    （无存储/位置/相机等；未设 usesCleartextTraffic，targetSdk 28+ 默认禁明文，
+    满足 SR-01/SR-09）。labDebug 叠加层另声明 networkSecurityConfig 信任 lab CA。
   - 组件：MainActivity（LAUNCHER 入口，exported=true 仅为启动必需）+ 内部页
     （PairingActivity 配对引导 / NodeTreeDebugActivity 节点树调试，均 exported=false）
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 产品变体唯一权限：WSS/HTTPS 配对与会话通道（见上方注释，CR UI-01）。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"

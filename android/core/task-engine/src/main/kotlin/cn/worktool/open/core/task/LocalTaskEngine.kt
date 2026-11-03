@@ -41,6 +41,7 @@ class LocalTaskEngine(
     private val fallbackArbiter = FallbackArbiter(config, clock)
     private val keywordEngine = KeywordRuleEngine(clock)
     private val friendHook = FriendAutoAcceptHook()
+    private val friendNotificationParser = FriendRequestNotificationParser()
     private val cronScheduler = LocalCronScheduler(rules.cronJobs, zone, clock)
     private val ledger = LocalEventLedger(InMemoryLocalEventStore())
     private val dryRunRunner = DryRunRunner(clock)
@@ -52,6 +53,12 @@ class LocalTaskEngine(
             val commandType: Int,
             val errorCode: Int,
             val errorReason: String?,
+            /**
+             * T4.1 暂停三分法：执行器被暂停切断时非 null（原回执字段保留，additive）；
+             * 上层（服务端终态/重试决策）据此区分 NOT_STARTED 可重投 / PARTIALLY_EXECUTED
+             * 可续跑 / EFFECT_UNKNOWN 须先效果探测。
+             */
+            val pausePhase: PauseManager.PausePhase? = null,
         ) : Outcome
 
         data class DryRun(val report: DryRunRunner.DryRunReport) : Outcome
@@ -114,6 +121,33 @@ class LocalTaskEngine(
             )
             dispatchLocal(m.intent, roomType = null, hash, dryRun)
         }
+    }
+
+    /**
+     * 通讯录通知事件（FR-15 增强：通知→过滤→通过/拒绝）。
+     *
+     * 过滤在 [FriendRequestNotificationParser.parse]（包名门+文案形态+好友名提取，
+     * 非好友请求返回 null）→ 命中 [FriendAutoAcceptHook.decide] 的 **Accept** 决策
+     * 才走执行；**Reject**（黑名单命中）与 NoMatch 零副作用返回（reject 无协议指令，
+     * 端侧拒绝动作归 feature:* 车道）。
+     */
+    fun onContactNotification(
+        notification: ContactNotification,
+        dryRun: Boolean = config.dryRun,
+    ): List<Outcome> {
+        val event = synchronized(lock) { friendNotificationParser.parse(notification) } ?: return emptyList()
+        val decision = synchronized(lock) { friendHook.decide(event, rules.friendAcceptRules) }
+        val accept = (decision as? FriendAutoAcceptHook.Decision.Accept) ?: return emptyList()
+        val intent = accept.intent
+        val hash = EventHashes.compute(
+            ruleId = accept.ruleId,
+            commandType = intent.commandType,
+            targetRoom = event.friendName,
+            senderNames = listOf(event.friendName),
+            text = event.leavingMsg ?: "",
+            eventTimeMillis = event.eventTimeMillis,
+        )
+        return listOf(dispatchLocal(intent, roomType = null, hash, dryRun))
     }
 
     /**
@@ -292,7 +326,14 @@ class LocalTaskEngine(
         val executor = synchronized(lock) { executors[intent.commandType] }
             ?: return Outcome.NoExecutor(intent.commandType, intent.ruleId)
         val outcome = executor.execute(intent) // 锁外：执行器可在安全断点轮询暂停态
-        return Outcome.Executed(intent.ruleId, intent.commandType, outcome.errorCode, outcome.errorReason)
+        // T4.1 三分法：暂停切断回执透传 pausePhase（原回执字段保留）。
+        return Outcome.Executed(
+            intent.ruleId,
+            intent.commandType,
+            outcome.errorCode,
+            outcome.errorReason,
+            outcome.pausePhase,
+        )
     }
 
     companion object {

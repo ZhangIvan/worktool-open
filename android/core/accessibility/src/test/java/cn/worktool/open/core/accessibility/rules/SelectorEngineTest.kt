@@ -157,14 +157,20 @@ class SelectorEngineTest {
 
     // ---------- chain 关系矩阵 ----------
 
-    /** #12 child 链默认 index=0。 */
+    /** #12 child 链无 match 且无 index → 拒绝（T4.4：原 child0 兜底已移除，零匹配不误点）。 */
     @Test
-    fun chainChildDefaultIndexZero() {
+    fun chainChildWithoutIndexRejected() {
         val hits = engine.resolveAll(
             tree(),
             SelectorDef("t", MatchSpec(resourceId = "app:id/item"), listOf(ChainStep(ChainRelation.CHILD))),
         )
-        assertEquals(listOf("张三", "李四"), hits.map { it.text })
+        assertTrue(hits.isEmpty()) // 不再兜底取 0 号子节点（docs/11 B1）
+        // 严格入口给出显式 Invalid 原因
+        val strict = engine.resolveStrict(
+            tree(),
+            SelectorDef("t", MatchSpec(resourceId = "app:id/item"), listOf(ChainStep(ChainRelation.CHILD))),
+        )
+        assertTrue(strict is StrictMatch.Invalid)
     }
 
     /** #13 child 链显式 index=1。 */

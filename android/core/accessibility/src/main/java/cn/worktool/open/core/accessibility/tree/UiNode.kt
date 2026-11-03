@@ -52,6 +52,18 @@ interface UiNode {
      * @return 动作是否被节点接受并执行成功（框架语义：不支持的动作返回 false）
      */
     fun performAction(action: Int, textArgument: String? = null): Boolean
+
+    /**
+     * 节点稳定身份键（T4.4 同一性检查，docs/11 B1：同底层节点不同 wrapper 不得误判为不同目标）。
+     *
+     * 值语义：`className|viewIdResourceName|text|contentDescription|bounds` 拼接。
+     * 真机侧同一 `AccessibilityNodeInfo` 经多次查询会得到**不同 wrapper 对象**（引用比较
+     * 失效），但上述值域在同帧内一致 → 值键即同一性。Android 实现可在框架暴露更强键
+     * （如稳定的 entry/hash）时覆写本方法；测试 Fake 不需覆写（默认实现即正确）。
+     */
+    fun identityKey(): String =
+        listOf(className, viewIdResourceName, text, contentDescription, bounds.toString())
+            .joinToString("|")
 }
 
 /** 纯 Kotlin 矩形（避免依赖 android.graphics.Rect，保持 JVM 可测）。 */

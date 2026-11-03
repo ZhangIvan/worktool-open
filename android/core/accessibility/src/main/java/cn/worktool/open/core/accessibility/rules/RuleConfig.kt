@@ -46,8 +46,10 @@ enum class ChainRelation { CHILD, SIBLING }
 /**
  * 锚点→目标 的单步平移。
  *
- * - CHILD：`match` 优先（第一个命中的子节点）；否则取 `index`（缺省 0）。
- * - SIBLING：`match` 优先（同父下第一个命中且非自身的兄弟节点）；否则按 `offset`（缺省 +1）。
+ * - CHILD：`match` 优先（第一个命中的子节点）；否则取 `index`（**必填**——T4.4/docs/11 B1：
+ *   原「缺省 0」零匹配回退会在目标缺失时静默误点 0 号子节点，解析期与引擎期双重拒绝）。
+ * - SIBLING：`match` 优先（同父下第一个命中且**身份键不同于自身**的兄弟节点——T4.4 同一性
+ *   检查：同底层节点不同 wrapper 不算兄弟目标）；否则按 `offset`（缺省 +1）。
  * - `match` 与 `index`/`offset` 互斥（解析期校验），避免歧义配置。
  */
 data class ChainStep(

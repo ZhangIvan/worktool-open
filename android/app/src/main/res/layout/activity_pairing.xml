@@ -134,6 +134,15 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
 
+            <!-- 指令前置条件提示（CR UI-02）：配对成功 ≠ 机器人可用，无障碍服务须开启 -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/pair_done_a11y_hint"
+                android:textColor="@color/status_offline"
+                android:textSize="12sp" />
+
             <Button
                 android:id="@+id/pair_done"
                 android:layout_width="match_parent"

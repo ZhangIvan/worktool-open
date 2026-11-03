@@ -57,6 +57,26 @@
             android:layout_marginTop="2dp"
             android:textColor="@color/text_secondary"
             android:textSize="13sp" />
+
+        <!-- 无障碍服务观测（CR UI-02）：服务未连接时可见并给系统设置入口；
+             已连接时整块隐藏（默认 gone，由 MainActivity 按 tick 观测切换）。 -->
+        <TextView
+            android:id="@+id/main_status_a11y"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/main_a11y_off"
+            android:textColor="@color/status_offline"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/main_btn_open_a11y"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/main_a11y_open"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- 中部快捷操作：暂停/恢复（FR-52）+ 干跑开关（FR-54 端侧干跑门） -->
@@ -91,6 +111,18 @@
             android:text="@string/main_dry_run_switch"
             android:textSize="13sp" />
     </LinearLayout>
+
+    <!-- 干跑语义说明（FR-54）：让用户在快捷操作区即可读出开关后果，不必进指令 tab -->
+    <TextView
+        android:id="@+id/main_dry_run_summary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginTop="4dp"
+        android:text="@string/main_dry_run_summary"
+        android:textColor="@color/text_secondary"
+        android:textSize="11sp" />
 
     <!-- 标签内容区 -->
     <FrameLayout

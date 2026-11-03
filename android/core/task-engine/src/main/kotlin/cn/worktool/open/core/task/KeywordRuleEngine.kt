@@ -12,7 +12,9 @@ package cn.worktool.open.core.task
  * - 命中的全部规则按 priority 降序（同级按配置顺序稳定）产出动作意图——多规则命中
  *   逐一产出，由引擎侧 (ruleId,eventHash) 去重与暂停门禁兜底；
  * - cooldown：同规则两次触发最小间隔（防刷屏/账号风控 R2）；窗口内的重复命中跳过
- *   （不重置冷却计时）。
+ *   （不重置冷却计时）。作用域 [KeywordRule.cooldownScope]（FR-39 增强）：
+ *   默认 [CooldownScope.RULE] 全局计；[CooldownScope.RULE_AND_ROOM] 按规则+会话独立计
+ *   （修复原实现「A 会话触发把 B 会话的回复也冷却掉」的跨会话误抑制）。
  *
  * 线程模型：由 [LocalTaskEngine] 在统一锁内调用（无独立内部锁）。
  */
@@ -30,10 +32,10 @@ class KeywordRuleEngine(private val clock: () -> Long) {
             .filter { it.enabled }
             .filter { r -> scopeMatches(r.match, event) }
             .filter { r -> textMatches(r.match, event.text) }
-            .filter { r -> cooldownAllows(r, now) }
+            .filter { r -> cooldownAllows(r, event, now) }
             .sortedByDescending { it.priority } // stable：同级保持配置顺序
             .map { r -> Matched(r, r.action.toIntent(r.ruleId, fallbackTargetRoom = event.targetRoom)) }
-            .onEach { m -> if (m.rule.cooldownMillis > 0) lastFiredAt[m.rule.ruleId] = now }
+            .onEach { m -> if (m.rule.cooldownMillis > 0) lastFiredAt[cooldownKey(m.rule, event)] = now }
             .toList()
     }
 
@@ -57,9 +59,16 @@ class KeywordRuleEngine(private val clock: () -> Long) {
         }
     }
 
-    private fun cooldownAllows(rule: KeywordRule, now: Long): Boolean {
+    /** 冷却水位键：RULE=规则 ID；RULE_AND_ROOM=规则 ID+会话（会话 null 归并全局桶）。 */
+    private fun cooldownKey(rule: KeywordRule, event: MessageEvent): String =
+        when (rule.cooldownScope) {
+            CooldownScope.RULE -> rule.ruleId
+            CooldownScope.RULE_AND_ROOM -> rule.ruleId + "@" + (event.targetRoom ?: "<global>")
+        }
+
+    private fun cooldownAllows(rule: KeywordRule, event: MessageEvent, now: Long): Boolean {
         if (rule.cooldownMillis <= 0) return true
-        val last = lastFiredAt[rule.ruleId] ?: return true
+        val last = lastFiredAt[cooldownKey(rule, event)] ?: return true
         return now - last >= rule.cooldownMillis
     }
 

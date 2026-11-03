@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- SR-10 / R4：命名不含任何"官方/腾讯"暗示，无上游商标混淆。 -->
+    <!-- SR-10 / R4：命名不含任何"官方/腾讯"暗示，无上游商标混淆。
+         （旧 T1.2 空引导页占位文案 guide_title/guide_stage/guide_body 已随产品主界面
+         上线移除——产品冲刺 A 车道「不留占位」纪律；调试入口文案保留如下。） -->
     <string name="app_name">WorkTool Open</string>
-    <string name="guide_title">WorkTool-Open</string>
-    <string name="guide_stage">无障碍核心阶段（T2.4 / v%1$s）</string>
-    <string name="guide_body">引导页占位。\n服务端配置、无障碍服务启用引导与悬浮窗控制在后续版本提供。</string>
     <string name="guide_open_debug">节点树调试页（无障碍）</string>
 
     <!-- 节点树调试页（T2.4）：全部文案本地渲染，数据不出设备。 -->
@@ -32,6 +31,9 @@
     <string name="main_status_offline">机器人离线</string>
     <string name="main_status_not_started">会话未启动</string>
     <string name="main_status_heartbeat">最后心跳：%1$s</string>
+    <!-- 无障碍服务观测（CR UI-02）：服务未连接时指令必然失败，状态卡须可见并给入口 -->
+    <string name="main_a11y_off">无障碍服务未开启：机器人无法执行任何指令，请先开启</string>
+    <string name="main_a11y_open">去开启无障碍服务</string>
 
     <!-- 快捷操作（FR-52 暂停/恢复 + FR-54 干跑开关） -->
     <string name="main_pause">暂停机器人</string>
@@ -103,5 +105,7 @@
     <string name="pair_err_400">配对请求被服务端拒绝（400）</string>
     <string name="pair_err_generic">配对失败：%1$s</string>
     <string name="pair_done_detail">设备已注册：%1$s\n凭据已加密存入 AndroidKeyStore</string>
+    <!-- 配对成功页服务提示（CR UI-02）：进主界面后的指令前置条件，先一步告知 -->
+    <string name="pair_done_a11y_hint">重要：还需在 系统设置 → 无障碍 → WorkTool Open 自动化服务 开启服务，机器人才可执行指令（主界面状态卡有入口）。</string>
     <string name="pair_done">进入主界面</string>
 </resources>
