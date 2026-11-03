@@ -20,7 +20,7 @@
 任何时刻屏幕出现：验证码/滑块/人脸、"操作频繁/账号异常/风险提示"、非预期的账号选择页、登录页 → **立即终止整个会话**（不是跳过重试）：force-stop 我方应用 → 禁用无障碍 → 截图存证 → 上报所有者。检测手段：每 5 次 UI 动作做一次屏幕文本扫描（RIG dump 或 OCR 白名单词表）。
 
 ## 3. 撤离例程（会话正常/异常结束都执行）
-force-stop 我方应用 → 从 `enabled_accessibility_services` 移除我方服务 → 回到桌面 → 终态截图归档 `local-private/evidence/<date>/session-exit.png`。
+force-stop 我方应用 → **保留无障碍授权**（所有者手动开启的授权不应被自动化撤走——2026-11-03 所有者指出后修正） → 回到桌面 → 终态截图归档 `local-private/evidence/<date>/session-exit.png`。
 **急停通道**（所有者可随时人工执行）：RIG `d.application('cn.worktool.open.lab').stop()`。
 
 ## 4. 授权门（所有者确认制）
