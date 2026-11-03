@@ -41,6 +41,38 @@ PHASES = ('initial', 'revoked', 'gate-prepare', 'gate-closed', 'restart-prepare'
 STAGES = frozenset(PHASES) | {'preflight', 'pg-create', 'pg-seed', 'build', 'driver-start', 'app-start',
     'frontend-start', 'http-boundaries', 'runtime-revocation', 'expired-gate', 'app-restart', 'read-only-database', 'shutdown'}
 stage = 'preflight'
+DIAGNOSTIC_CHECKPOINTS = frozenset(('arguments selftest hosted-guard fixture-folder fixture-read fixture-schema profile-path '
+    'chrome-binary profile-create state-create session-create session-save navigate signin-assert login-tenant login-name '
+    'login-password login-submit bad-login-assert identity-assert devices-assert tenant-empty-assert owner-denied-assert '
+    'logout-click logout-assert logout-refresh logout-persisted-assert state-read existing-url reload revoked-assert '
+    'session-delete state-delete').split())
+DIAGNOSTIC_CATEGORIES = frozenset(('validation filesystem transport timeout http webdriver malformed-response assertion unexpected-url unknown').split())
+DIAGNOSTIC_ACTORS = frozenset(('none admin-bad admin operator owner other').split())
+WEBDRIVER_ERRORS = frozenset(('element click intercepted|element not interactable|insecure certificate|invalid argument|'
+    'invalid cookie domain|invalid element state|invalid selector|invalid session id|javascript error|move target out of bounds|'
+    'no such alert|no such cookie|no such element|no such frame|no such shadow root|no such window|script timeout|'
+    'session not created|stale element reference|timeout|unable to capture screen|unable to set cookie|unexpected alert open|'
+    'unknown command|unknown error|unknown method|unsupported operation|detached shadow root').split('|'))
+
+
+def browser_diagnostic(raw, phase):
+    # This is a second independent whitelist before any child output reaches CI
+    # logs. Never print driver messages, DOM, URLs, response bodies or credentials.
+    try:
+        need(len(raw) <= 4096, 'INVALID_DIAGNOSTIC')
+        value = json.loads(raw)
+        need(set(value) == {'phase', 'result', 'diagnostic'} and value['phase'] == phase
+             and value['result'] == 'FAIL', 'INVALID_DIAGNOSTIC')
+        d = value['diagnostic']
+        need(isinstance(d, dict) and {'checkpoint', 'category', 'actor'} <= set(d)
+             and set(d) <= {'checkpoint', 'category', 'actor', 'httpStatus', 'webdriverError'}, 'INVALID_DIAGNOSTIC')
+        need(d['checkpoint'] in DIAGNOSTIC_CHECKPOINTS and d['category'] in DIAGNOSTIC_CATEGORIES
+             and d['actor'] in DIAGNOSTIC_ACTORS, 'INVALID_DIAGNOSTIC')
+        need('httpStatus' not in d or (type(d['httpStatus']) is int and 100 <= d['httpStatus'] <= 599), 'INVALID_DIAGNOSTIC')
+        need('webdriverError' not in d or d['webdriverError'] in WEBDRIVER_ERRORS, 'INVALID_DIAGNOSTIC')
+        return value
+    except (ValueError, TypeError, KeyError, RuntimeError):
+        return {'phase': phase, 'result': 'FAIL', 'diagnostic': {'checkpoint': 'arguments', 'category': 'unknown', 'actor': 'none'}}
 
 
 def progress(value):
@@ -392,8 +424,11 @@ def run():
             need(value in PHASES and value not in phases and time.monotonic() < deadline, 'PHASE_OR_DEADLINE_REJECTED')
             phases.add(value)
             progress(value)
-            out = invoke(['node', str(ROOT / 'qa/go-console-browser-check.ts'), '--phase', value, '--fixture', str(folder / 'fixture.json')], timeout=50 if value == 'initial' else 25, env=runtime_env())
-            need(json.loads(out) == {'phase': value, 'result': 'PASS'}, 'BROWSER_PHASE_FAILED')
+            process = gates.invoke(['node', str(ROOT / 'qa/go-console-browser-check.ts'), '--phase', value, '--fixture', str(folder / 'fixture.json')], timeout=50 if value == 'initial' else 25, env=runtime_env(), check=False)
+            if process.returncode != 0:
+                print(json.dumps(browser_diagnostic(process.stdout, value)))
+                raise RuntimeError('BROWSER_PHASE_FAILED')
+            need(json.loads(process.stdout) == {'phase': value, 'result': 'PASS'}, 'BROWSER_PHASE_FAILED')
         # Boundary checks perform no credential disclosure and no redirects.
         progress('http-boundaries')
         need(http('/api/v1/auth/me', origin='http://127.0.0.1:9')[0] == 403, 'ORIGIN_BOUNDARY_FAILED')
@@ -472,6 +507,13 @@ def selftest():
                 raise AssertionError('unsafe identity accepted')
         assert quote("a'b") == "'a''b'"
         assert NoRedirect().redirect_request(None) is None
+        good_diagnostic = {'phase': 'initial', 'result': 'FAIL', 'diagnostic': {'checkpoint': 'session-create',
+                           'category': 'webdriver', 'actor': 'none', 'httpStatus': 500, 'webdriverError': 'session not created'}}
+        assert browser_diagnostic(json.dumps(good_diagnostic), 'initial') == good_diagnostic
+        for key, value in [('message', 'secret-do-not-emit'), ('webdriverError', 'secret-do-not-emit'),
+                           ('checkpoint', 'secret-do-not-emit'), ('httpStatus', 'secret-do-not-emit')]:
+            bad = json.loads(json.dumps(good_diagnostic)); bad['diagnostic'][key] = value
+            assert 'secret-do-not-emit' not in json.dumps(browser_diagnostic(json.dumps(bad), 'initial'))
         assert hashlib.sha256((ROOT / 'scripts/pg-integration-ci.py').read_bytes()).hexdigest() == GATES_SHA256
         assert runtime_env()['NODE_USE_ENV_PROXY'] == '0'
         assert len(MIGRATIONS) == 8 and len(CASES) == 10 and len(PHASES) == 7
