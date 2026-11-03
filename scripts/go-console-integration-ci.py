@@ -332,14 +332,16 @@ def verify_browser_binary(value):
 
 
 def browser_version(raw, driver=False):
-    need(isinstance(raw, bytes) and len(raw) <= 256, 'BROWSER_VERSION_REJECTED')
+    code = 'DRIVER_VERSION_REJECTED' if driver else 'BROWSER_VERSION_REJECTED'
+    need(isinstance(raw, bytes) and len(raw) <= 256, code)
     number = rb'([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})'
     # ChromeDriver's optional suffix is a bounded commit/source reference, not
-    # arbitrary text. Chromium has no suffix. Neither command output is logged.
+    # arbitrary text. Chromium uses --product-version to avoid the product/channel
+    # separator printed by --version even when the channel is empty. No raw output is logged.
     suffix = rb'(?: \([a-f0-9]{40}(?:-refs/(?:branch-heads/[0-9]{1,8}|heads/main)@\{#[0-9]{1,9}\})?\))?'
-    pattern = (rb'ChromeDriver ' + number + suffix if driver else rb'Chromium ' + number) + rb'\r?\n?'
+    pattern = rb'ChromeDriver ' + number + suffix + rb'\r?\n?' if driver else number + rb'(?:\r?\n)?'
     match = re.fullmatch(pattern, raw)
-    need(match is not None, 'BROWSER_VERSION_REJECTED')
+    need(match is not None, code)
     return match[1]
 
 
@@ -348,7 +350,7 @@ def browser_preflight():
     # before port probes, resource creation, PostgreSQL, or service startup.
     chrome = verify_browser_binary(CHROMIUM_BINARY)
     driver = verify_browser_binary(CHROMEDRIVER_BINARY)
-    cv = browser_version(invoke([chrome, '--version'], timeout=5))
+    cv = browser_version(invoke([chrome, '--product-version'], timeout=5))
     dv = browser_version(invoke([driver, '--version'], timeout=5), driver=True)
     need(cv.split(b'.')[:3] == dv.split(b'.')[:3], 'BROWSER_DRIVER_MISMATCH')
     return chrome, driver, cv, dv
@@ -364,7 +366,8 @@ def browser_preflight_failure(error):
     code = error.args[0] if isinstance(error, RuntimeError) and error.args else None
     return {'BROWSER_PATH_REJECTED': 'path', 'BROWSER_PATH_NONCANONICAL': 'path',
             'BROWSER_PATH_SYMLINK': 'path', 'BROWSER_NOT_EXECUTABLE': 'notexec',
-            'BROWSER_PERMISSION_REJECTED': 'permission', 'BROWSER_VERSION_REJECTED': 'versionformat',
+            'BROWSER_PERMISSION_REJECTED': 'permission', 'BROWSER_VERSION_REJECTED': 'browser-versionformat',
+            'DRIVER_VERSION_REJECTED': 'driver-versionformat',
             'BROWSER_DRIVER_MISMATCH': 'mismatch'}.get(code, 'unavailable')
 
 
@@ -550,19 +553,26 @@ def browser_preflight_selftest():
         return SimpleNamespace(st_mode=(stat.S_IFREG | 0o755) if str(path) in (CHROMIUM_BINARY, CHROMEDRIVER_BINARY) else (stat.S_IFDIR | 0o755))
     def version_invoke(args, **kw):
         calls.append((args, kw))
-        return b'Chromium 145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 145.0.7584.1 (' + b'a' * 40 + b'-refs/heads/main@{#12345})\n'
+        return b'145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 145.0.7584.1 (' + b'a' * 40 + b'-refs/heads/main@{#12345})\n'
     def no_resources(*args, **kw):
         raise AssertionError('resource reached before failed browser preflight')
     def rejected(operation):
         try:
             operation()
-        except (RuntimeError, OSError):
-            return
+        except (RuntimeError, OSError) as error:
+            return error
         raise AssertionError('unsafe browser preflight accepted')
     with patch.object(Path, 'resolve', lambda p, **kw: p), patch.object(Path, 'lstat', metadata), \
          patch.dict(globals(), {'invoke': version_invoke, 'port_free': no_resources, 'start': no_resources}):
         assert browser_preflight() == (CHROMIUM_BINARY, CHROMEDRIVER_BINARY, b'145.0.7584.0', b'145.0.7584.1')
-        assert len(calls) == 2 and all(kw == {'timeout': 5} for _, kw in calls)
+        assert calls == [([CHROMIUM_BINARY, '--product-version'], {'timeout': 5}),
+                         ([CHROMEDRIVER_BINARY, '--version'], {'timeout': 5})]
+        # Counterexample to the old parser: official --version formatting can
+        # include a trailing separator for an empty channel, which it rejected.
+        old_pattern = rb'Chromium ([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})\r?\n?'
+        assert re.fullmatch(old_pattern, b'Chromium 145.0.7584.0 \n') is None
+        for raw in (b'145.0.7584.0', b'145.0.7584.0\n', b'145.0.7584.0\r\n'):
+            assert browser_version(raw) == b'145.0.7584.0'
         for binary in (CHROMIUM_BINARY, CHROMEDRIVER_BINARY):
             for mode in (stat.S_IFREG | 0o777, stat.S_IFREG | 0o775, stat.S_IFREG | 0o757,
                          stat.S_IFREG | 0o644, stat.S_IFDIR | 0o755, stat.S_IFLNK | 0o777):
@@ -585,23 +595,41 @@ def browser_preflight_selftest():
         with patch.object(Path, 'lstat', lambda p: SimpleNamespace(st_mode=stat.S_IFLNK | 0o777) if str(p) == '/usr/local/share' else metadata(p)):
             rejected(browser_preflight)
         assert not calls
-        for raw in (b'', b'Google Chrome 145.0.7584.0\n', b'Chromium 145.0.7584.0 extra', b'x' * 257):
+        for raw in (b'', b'Google Chrome 145.0.7584.0\n', b'Chromium 145.0.7584.0 \n',
+                    b'145.0.7584.0 extra', b'145.0.7584.0 \n', b'145.0.7584.0\r',
+                    b'145.0.7584', b'145.0.7584.0.1', b'145.a.7584.0', b'145.0.7584.0\nextra',
+                    b'145.0.7584.0\n\n', b'1234567.0.7584.0', b'x' * 257):
             calls.clear()
             def bad_version(args, **kw):
                 calls.append(args)
                 return raw
             with patch.dict(globals(), {'invoke': bad_version}):
-                rejected(browser_preflight)
-            assert calls == [[CHROMIUM_BINARY, '--version']]
+                error = rejected(browser_preflight)
+            assert browser_preflight_failure(error) == 'browser-versionformat'
+            assert calls == [[CHROMIUM_BINARY, '--product-version']]
         calls.clear()
         def mismatch(args, **kw):
             calls.append(args)
-            return b'Chromium 145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 146.0.7584.0\n'
-        with patch.dict(globals(), {'invoke': mismatch}):
-            rejected(browser_preflight)
-        assert calls == [[CHROMIUM_BINARY, '--version'], [CHROMEDRIVER_BINARY, '--version']]
+            return b'145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver 146.0.7584.0\n'
+        with patch.dict(globals(), {'invoke': mismatch, 'identity': lambda: ('synthetic', 'synthetic', Path('/synthetic'))}):
+            with redirect_stdout(StringIO()) as output:
+                error = rejected(run)
+            assert json.loads(output.getvalue())['code'] == 'mismatch'
+        assert browser_preflight_failure(error) == 'mismatch'
+        assert calls == [[CHROMIUM_BINARY, '--product-version'], [CHROMEDRIVER_BINARY, '--version']]
         for raw in (b'ChromeDriver 145.0.7584.0 SECRET', b'prefix ChromeDriver 145.0.7584.0', b'ChromeDriver 145.0.7584.0 (unknown)'):
-            rejected(lambda: browser_version(raw, driver=True))
+            error = rejected(lambda: browser_version(raw, driver=True))
+            assert browser_preflight_failure(error) == 'driver-versionformat'
+        calls.clear()
+        def bad_driver(args, **kw):
+            calls.append(args)
+            return b'145.0.7584.0\n' if args[0] == CHROMIUM_BINARY else b'ChromeDriver malformed SECRET'
+        with patch.dict(globals(), {'invoke': bad_driver, 'identity': lambda: ('synthetic', 'synthetic', Path('/synthetic'))}):
+            with redirect_stdout(StringIO()) as output:
+                rejected(run)
+            assert json.loads(output.getvalue()) == {'checkpoint': 'browser-preflight', 'result': 'FAIL', 'code': 'driver-versionformat'}
+            assert 'SECRET' not in output.getvalue()
+        assert calls == [[CHROMIUM_BINARY, '--product-version'], [CHROMEDRIVER_BINARY, '--version']]
         # Run-level ordering: an unsafe binary must fail before even port probes.
         calls.clear()
         with patch.dict(globals(), {'identity': lambda: ('synthetic', 'synthetic', Path('/synthetic'))}), \
