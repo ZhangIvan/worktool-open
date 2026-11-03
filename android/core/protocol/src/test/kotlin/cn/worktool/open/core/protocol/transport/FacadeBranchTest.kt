@@ -115,8 +115,11 @@ class FacadeBranchTest {
             },
         )
         session2.start()
+        // 2026-11-03 重连拨死 URL 修复：无 wsPath 时改拨**会话重建入口**
+        // /api/v2/device-sessions（服务端按持久凭据重开 deviceId 会话），
+        // 不再拼一次性 sessionId 尾巴（旧会话路径关流后 404 → 永久离线）。
         assertEquals(
-            "wss://example.com/api/v2/device-sessions/1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "wss://example.com/api/v2/device-sessions",
             urlCapture.url,
         )
         // 无 journal 直发分支
