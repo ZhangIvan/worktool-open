@@ -220,8 +220,11 @@ class LabPairingActivity : Activity() {
     }
 
     override fun onDestroy() {
-        loop?.stop()
-        loop = null
+        // 2026-11-03 会话 6/7/8 根因修复：不再在 Activity 销毁时停 loop——
+        // Activity 后台被 MIUI 回收 → onDestroy → loop.stop() → WS 断 → 指令永不投递。
+        // 正确做法：loop 生命周期归进程级 SessionRuntimeHolder（SP-2 前台服务保活），
+        // LabPairingActivity 只是配对入口+观测面。此修复 = lab 版对齐产品版架构。
+        // loop 仍由本 Activity 持有引用，但销毁时**不停止**（服务端 45s 超时自然关闭）。
         super.onDestroy()
     }
 }
