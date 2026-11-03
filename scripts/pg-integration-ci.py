@@ -17,7 +17,7 @@ IMAGE = 'postgres@sha256:41a369edc91d9bdd7a58be6bc71ea0f8f7a3f49e82818a9f0829021
 ALLOW = 'isolated-synthetic-schema-only'
 LABEL = 'io.worktool.pg-ci-run'
 SAFE_CODES = frozenset({'EXTRA_PORT', 'VERSION_STRING_MISMATCH', 'STORE_PRIVILEGED', 'GO_TEST_FAILED', 'RESOURCE_LIMIT_MISMATCH', 'PERSISTENT_OR_FOREIGN_MOUNT', 'SUBPROCESS_NONZERO', 'PG_READY_TIMEOUT', 'RUN_DIRECTORY_ALREADY_EXISTS', 'NON_LOOPBACK_PORT', 'STORE_INHERITS_OWNER', 'UNSAFE_SECRET_DIRECTORY', 'CONNECTION_LIMIT_MISMATCH', 'NON_JSON_TEST_OUTPUT', 'SUBPROCESS_FAILED_OR_TIMEOUT', 'DATABASE_TIMEOUT_MISMATCH', 'NAMESPACE_MISMATCH', 'DATA_DIRECTORY_MISMATCH', 'INVALID_RUN_ID', 'MISSING_FAILED_OR_SKIPPED_INTEGRATION_CASE', 'TMPFS_MISMATCH', 'MISSING_ALLOW', 'CLEANUP_NOT_CONFIRMED', 'CLEANUP_IDENTITY_MISMATCH', 'INVALID_PORT', 'HOSTED_CI_ONLY', 'VERSION_MISMATCH', 'IDENTITY_MISMATCH', 'INVALID_TEST_DSN', 'WAL_OUTSIDE_TMPFS', 'ROLE_OR_TARGET_MISMATCH'})
-TESTS = {'TestPGIntegrationSchemaAndDeviceBindings', 'TestPGIntegrationReservationBindings', 'TestPGIntegrationValidMaterializationAndGC', 'TestPGIntegrationInitialInsertForeignKeys'} | {f'TestPGAdmissionATC{i:02d}' for i in range(1, 9)} | {'TestPGAdmissionPayloadStorage', 'TestPGAdmissionPayloadMigrationGuard'} | {f'TestPGLeaseLF{i:02d}' for i in range(1, 9)} | {f'TestPGGatewayGW{i:02d}' for i in range(1, 13)}
+TESTS = {'TestPGIntegrationSchemaAndDeviceBindings', 'TestPGIntegrationReservationBindings', 'TestPGIntegrationValidMaterializationAndGC', 'TestPGIntegrationInitialInsertForeignKeys'} | {f'TestPGAdmissionATC{i:02d}' for i in range(1, 9)} | {'TestPGAdmissionPayloadStorage', 'TestPGAdmissionPayloadMigrationGuard'} | {f'TestPGLeaseLF{i:02d}' for i in range(1, 9)} | {f'TestPGGatewayGW{i:02d}' for i in range(1, 17)}
 
 
 def require(ok, code):
@@ -137,7 +137,7 @@ def test_diagnostics(raw):
         'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/escaped_nul_object',
         'TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/empty_object',
     }
-    approved_files = {'gateway_integration_test.go', 'migration_guard_integration_test.go'}
+    approved_files = {'gateway_integration_test.go', 'migration_guard_integration_test.go', 'ingress_real_integration_test.go'}
     approved_states = {'23503', '23505', '23514', '40001', '40P01', '57014', '55P03'}
     for line in raw.splitlines():
         try:
@@ -278,12 +278,13 @@ def selftest():
             continue
         raise AssertionError('unsafe inspect accepted')
     raw = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS)
-    assert len(result_events(raw)) == 34
+    assert len(result_events(raw)) == 38
     old_four = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if n.startswith('TestPGIntegration'))
     without_payload = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGAdmissionPayload'))
     without_lease = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGLeaseLF'))
     without_gateway = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if not n.startswith('TestPGGatewayGW'))
-    for bad in [b'', old_four, without_payload, without_lease, without_gateway, raw + b'\n{"Action":"skip"}', raw + b'\n{"Action":"fail"}']:
+    old_34 = b'\n'.join(json.dumps({'Test': n, 'Action': 'pass'}).encode() for n in TESTS if n not in {f'TestPGGatewayGW{i:02d}' for i in range(13, 17)})
+    for bad in [b'', old_four, without_payload, without_lease, without_gateway, old_34, raw + b'\n{"Action":"skip"}', raw + b'\n{"Action":"fail"}']:
         try:
             result_events(bad)
         except RuntimeError:
@@ -321,10 +322,15 @@ def selftest():
     assert safe['sourceLocations'] == [{'test': 'TestPGGatewayGW03/explicit_11_no_fallback',
                                        'file': 'gateway_integration_test.go', 'line': 625}]
     assert 'secret' not in json.dumps(safe) and 'payload' not in json.dumps(safe)
+    ingress_diag = test_diagnostics(json.dumps({'Action': 'output', 'Test': 'TestPGGatewayGW13',
+        'Output': '    ingress_real_integration_test.go:123: secret body must not escape\n'}).encode())
+    assert ingress_diag['sourceLocations'] == [{'test': 'TestPGGatewayGW13',
+        'file': 'ingress_real_integration_test.go', 'line': 123}]
+    assert 'secret' not in json.dumps(ingress_diag) and 'body' not in json.dumps(ingress_diag)
     outcomes = test_diagnostics('\n'.join(json.dumps({'Action': action, 'Test': test})
         for test, action in [('TestPGGatewayGW03', 'pass'), ('TestPGGatewayGW08', 'fail'),
                              ('TestPGGatewayGW10', 'skip')]).encode())['groupOutcomes']
-    assert len(outcomes) == 34
+    assert len(outcomes) == 38
     indexed = {row['test']: row['terminal'] for row in outcomes}
     assert indexed['TestPGGatewayGW03'] == ['pass']
     assert indexed['TestPGGatewayGW08'] == ['fail']

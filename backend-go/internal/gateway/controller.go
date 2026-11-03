@@ -112,6 +112,9 @@ func (x *connection) hardClose() {
 	if conn != nil {
 		x.transportClose.Do(func() { _ = conn.Close() })
 	}
+	// Authority is already canceled. Only now release the transport reader;
+	// its context must not preempt the close frame on a healthy transport.
+	x.cancelIngressRead()
 }
 
 func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.SessionAuth) {
@@ -120,11 +123,13 @@ func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.Sessio
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	x := &connection{parent: c, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), seen: map[string]seenEvent{}, stops: map[string]bool{}}
+	readCtx, readCancel := context.WithCancel(r.Context()) // Sibling, not authority child.
+	x := &connection{parent: c, ctx: ctx, cancel: cancel, readCtx: readCtx, readCancel: readCancel, wake: make(chan struct{}, 1), ingress: newIngressQueue(), seen: map[string]seenEvent{}, stops: map[string]bool{}}
 	c.mu.Lock()
 	if c.closing || len(c.live) >= MaxConnections {
 		c.mu.Unlock()
 		cancel()
+		readCancel()
 		httpError(w, 503, "RESOURCE_LIMIT")
 		return
 	}
@@ -225,6 +230,8 @@ type connection struct {
 	parent             *Controller
 	ctx                context.Context
 	cancel             context.CancelFunc
+	readCtx            context.Context
+	readCancel         context.CancelFunc
 	auth               pg.SessionAuth
 	mu                 sync.Mutex
 	ws                 *websocket.Conn
@@ -240,12 +247,15 @@ type connection struct {
 	stops              map[string]bool
 	incoming, outgoing int64
 	last               atomic.Int64
-	budget             budget
+	ingress            *ingressQueue
 }
 
 func (x *connection) stop(code int, reason string) {
 	x.once.Do(func() {
 		x.cancel()
+		if x.ingress != nil {
+			x.ingress.stop()
+		}
 		x.mu.Lock()
 		ws := x.ws
 		x.mu.Unlock()
@@ -253,6 +263,7 @@ func (x *connection) stop(code int, reason string) {
 			x.work.Add(1)
 			go func() {
 				defer x.work.Done()
+				defer x.cancelIngressRead()
 				deadlineDone := make(chan struct{})
 				timer := time.AfterFunc(200*time.Millisecond, func() { x.hardClose(); close(deadlineDone) })
 				_ = ws.Close(websocket.StatusCode(code), reason)
@@ -262,6 +273,8 @@ func (x *connection) stop(code int, reason string) {
 				x.hardClose()
 				_ = ws.CloseNow()
 			}()
+		} else {
+			x.cancelIngressRead() // No socket/close worker can unblock a reader.
 		}
 	})
 }
@@ -270,7 +283,13 @@ func (x *connection) finish() {
 	x.mu.Lock()
 	ws := x.ws
 	x.mu.Unlock()
+	// stop guarantees a read-cancel path: immediate without ws, otherwise
+	// normal close completion or the joined 200ms exact-transport closer.
 	x.work.Wait()
+	x.cancelIngressRead() // Idempotent final cleanup, including failed upgrades.
+	if x.ingress != nil {
+		x.ingress.drain()
+	}
 	x.hardClose()
 	// stop synchronously registers its bounded close worker. Give that worker
 	// the opportunity to send the policy close frame before the final hard close.
@@ -291,21 +310,39 @@ func (x *connection) finish() {
 }
 func (x *connection) handle() pg.LeaseHandle { x.mu.Lock(); defer x.mu.Unlock(); return *x.lease }
 func (x *connection) run() {
-	x.budget = newBudget(x.parent.budgetNow())
-	helloCtx, cancel := context.WithTimeout(x.ctx, 5*time.Second)
-	kind, raw, e := x.ws.Read(helloCtx)
-	cancel()
-	if e != nil {
-		x.stop(1002, "HELLO_TIMEOUT")
+	// Start reading before HELLO decoding, activation PG work or HELLO ACK.
+	// The handler remains the one processor; every worker is registered before
+	// launch, and finish calls stop before joining the complete work group.
+	x.startIngress(x.ws)
+	hello, ok := x.ingress.next(x.ctx)
+	if !ok {
 		return
 	}
-	if kind != websocket.MessageText {
-		x.stop(1002, "PROTOCOL_ERROR")
+	capable, policy, active := x.activate(hello.raw)
+	x.ingress.done(&hello)
+	if !active || x.ctx.Err() != nil {
 		return
 	}
-	if !x.budget.take(x.parent.budgetNow(), len(raw)) {
-		x.stop(1008, "RESOURCE_LIMIT")
-		return
+	x.last.Store(time.Now().UnixNano())
+	x.work.Add(2)
+	go func() { defer x.work.Done(); x.writer() }()
+	go func() { defer x.work.Done(); x.pump(capable, policy) }()
+	for {
+		frame, ok := x.ingress.next(x.ctx)
+		if !ok {
+			return
+		}
+		accepted := x.applyIngress(frame.raw)
+		x.ingress.done(&frame)
+		if !accepted {
+			return
+		}
+	}
+}
+
+func (x *connection) activate(raw []byte) (bool, int64, bool) {
+	if x.ctx.Err() != nil {
+		return false, 0, false
 	}
 	hello, e := wire.DecodeHello(raw)
 	if e != nil {
@@ -314,81 +351,85 @@ func (x *connection) run() {
 		} else {
 			x.stop(1002, "PROTOCOL_ERROR")
 		}
-		return
+		return false, 0, false
+	}
+	if x.ctx.Err() != nil {
+		return false, 0, false
 	}
 	h, e := x.parent.store.AcquireConnection(x.ctx, x.auth)
 	if e != nil {
 		x.stop(1008, "LEASE_UNAVAILABLE")
-		return
+		return false, 0, false
 	}
 	x.mu.Lock()
 	x.lease = &h
 	x.mu.Unlock()
+	if x.ctx.Err() != nil {
+		return false, 0, false
+	}
 	state, e := x.parent.store.ConnectionState(x.ctx, x.auth, h)
 	if e != nil {
 		x.stop(1008, "UNAUTHENTICATED")
-		return
+		return false, 0, false
 	}
 	ack, e := wire.EncodeHelloAck(wire.HelloAck{TenantID: h.Tenant, DeviceID: h.DeviceID, SessionID: h.SessionID, PolicyVersion: state.PolicyVersion, ServerTime: time.UnixMilli(state.ServerTimeMillis).UTC().Truncate(time.Second)})
 	if e != nil {
 		x.stop(1002, "PROTOCOL_ERROR")
-		return
+		return false, 0, false
 	}
 	if e = x.write(ack); e != nil {
 		x.stop(1008, "WRITE_FAILED")
-		return
+		return false, 0, false
 	}
 	capable := false
 	for _, v := range hello.Capabilities {
 		capable = capable || v == "message.send_text"
 	}
-	x.last.Store(time.Now().UnixNano())
-	x.work.Add(2)
-	go func() { defer x.work.Done(); x.writer() }()
-	go func() { defer x.work.Done(); x.pump(capable, state.PolicyVersion) }()
-	for {
-		xkind, data, e := x.ws.Read(x.ctx)
-		if e != nil {
-			return
-		}
-		if xkind != websocket.MessageText {
-			x.stop(1002, "PROTOCOL_ERROR")
-			return
-		}
-		if !x.budget.take(x.parent.budgetNow(), len(data)) {
-			x.stop(1008, "RESOURCE_LIMIT")
-			return
-		}
-		f, e := wire.DecodeDeviceFrame(data)
-		if e != nil {
-			x.stop(1002, "PROTOCOL_ERROR")
-			return
-		}
-		prior, duplicate := x.seen[f.Header.EventID]
-		if duplicate {
-			if prior.seq != f.Header.Seq || prior.digest != f.FrameDigest {
-				x.stop(1008, "IDEMPOTENCY_CONFLICT")
-				return
-			}
-		} else if f.Header.Seq != x.incoming+1 {
-			x.stop(1008, "ILLEGAL_SEQUENCE")
-			return
-		}
-		response, e := x.parent.store.ApplyDeviceFrame(x.ctx, x.auth, x.handle(), data)
-		if e != nil {
-			x.stop(1008, "FRAME_REJECTED")
-			return
-		}
-		x.last.Store(time.Now().UnixNano())
-		if !duplicate {
-			x.incoming = f.Header.Seq
-			x.seen[f.Header.EventID] = seenEvent{f.Header.Seq, f.FrameDigest}
-		}
-		if response.Kind != "" && !x.enqueue(outbound{reply: response}) {
-			x.stop(1008, "RESOURCE_LIMIT")
-			return
-		}
+	return capable, state.PolicyVersion, x.ctx.Err() == nil
+}
+
+// applyIngress is called only by the serial handler. Returning drops decoded
+// references before its caller releases the in-flight raw-message reservation.
+func (x *connection) applyIngress(data []byte) bool {
+	if x.ctx.Err() != nil {
+		return false
 	}
+	f, e := wire.DecodeDeviceFrame(data)
+	if e != nil {
+		x.stop(1002, "PROTOCOL_ERROR")
+		return false
+	}
+	prior, duplicate := x.seen[f.Header.EventID]
+	if duplicate {
+		if prior.seq != f.Header.Seq || prior.digest != f.FrameDigest {
+			x.stop(1008, "IDEMPOTENCY_CONFLICT")
+			return false
+		}
+	} else if f.Header.Seq != x.incoming+1 {
+		x.stop(1008, "ILLEGAL_SEQUENCE")
+		return false
+	}
+	if x.ctx.Err() != nil {
+		return false
+	}
+	response, e := x.parent.store.ApplyDeviceFrame(x.ctx, x.auth, x.handle(), data)
+	if e != nil {
+		x.stop(1008, "FRAME_REJECTED")
+		return false
+	}
+	x.last.Store(time.Now().UnixNano())
+	if !duplicate {
+		x.incoming = f.Header.Seq
+		x.seen[f.Header.EventID] = seenEvent{f.Header.Seq, f.FrameDigest}
+	}
+	if x.ctx.Err() != nil {
+		return false
+	}
+	if response.Kind != "" && !x.enqueue(outbound{reply: response}) {
+		x.stop(1008, "RESOURCE_LIMIT")
+		return false
+	}
+	return true
 }
 func (x *connection) write(b []byte) error {
 	ctx, cancel := context.WithTimeout(x.ctx, 2*time.Second)
