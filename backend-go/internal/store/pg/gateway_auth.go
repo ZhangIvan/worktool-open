@@ -15,11 +15,12 @@ import (
 // GatewayStore supplies narrow authenticated HTTP/WS DB operations. It does
 // not listen or own the pool. Runtime and gate come only from trusted startup.
 type GatewayStore struct {
-	runner    *Runner
-	gate      func(context.Context) error
-	runtime   RuntimeAuthority
-	leases    *LeaseStore
-	admission *AdmissionStore
+	runner      *Runner
+	gate        func(context.Context) error
+	runtime     RuntimeAuthority
+	leases      *LeaseStore
+	admission   *AdmissionStore
+	callbackTTL time.Duration
 }
 
 func NewGatewayStore(r *Runner, gate func(context.Context) error, runtime RuntimeAuthority) (*GatewayStore, error) {
@@ -34,7 +35,7 @@ func NewGatewayStore(r *Runner, gate func(context.Context) error, runtime Runtim
 	if e != nil {
 		return nil, e
 	}
-	return &GatewayStore{r, gate, runtime, l, a}, nil
+	return &GatewayStore{runner: r, gate: gate, runtime: runtime, leases: l, admission: a}, nil
 }
 func (s *GatewayStore) run(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
 	if ctx == nil {
@@ -203,6 +204,9 @@ func (s *GatewayStore) AdmitText(ctx context.Context, p AppPrincipal, r AppTextR
 	a, e := AppAuthorityFromAuthenticated(p.tenant, p.id, r.DeviceID, p.fingerprint, p.epoch, epoch)
 	if e != nil {
 		return Accepted{}, e
+	}
+	if s.callbackTTL > 0 {
+		return s.admission.AdmitAppText(ctx, a, r)
 	}
 	return s.admission.AdmitGatewayTextF0(ctx, a, r)
 }

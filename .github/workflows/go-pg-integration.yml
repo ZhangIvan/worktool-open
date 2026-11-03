@@ -14,6 +14,8 @@ on:
       - 'backend-go/internal/store/pg/enrollment*.go'
       - 'backend-go/internal/store/pg/session*.go'
       - 'backend-go/internal/store/pg/receipt*.go'
+      - 'backend-go/internal/store/pg/callback*.go'
+      - 'backend-go/internal/callback/**'
       - 'backend-go/internal/store/pg/send_authority*.go'
       - 'backend-go/internal/auth/**'
       - 'backend-go/internal/httpapi/**'

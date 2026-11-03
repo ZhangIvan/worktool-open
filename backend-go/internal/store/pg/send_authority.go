@@ -39,7 +39,7 @@ func (s *GatewayStore) NextCommand(ctx context.Context, a SessionAuth) (*Command
 	var out *CommandHint
 	e := s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var h CommandHint
-		e := tx.QueryRow(ctx, `SELECT c.id,c.command_version FROM commands c JOIN developer_apps a ON a.tenant=c.tenant AND a.id=c.app_id JOIN devices d ON d.tenant=c.tenant AND d.id=c.device WHERE c.tenant=$1 AND c.device=$2 AND c.status='queued' AND c.actor_type='app' AND c.capability='message.send_text' AND NOT c.cancel_requested AND c.subscription_snapshot='[]'::jsonb AND c.expires>floor(extract(epoch FROM clock_timestamp())*1000)::bigint AND a.active AND a.auth_epoch=c.app_epoch AND a.token_expires>floor(extract(epoch FROM clock_timestamp())*1000)::bigint AND a.scopes ? 'commands:write' AND d.state='active' AND d.policy=c.policy AND EXISTS(SELECT 1 FROM developer_bindings b WHERE b.tenant=c.tenant AND b.app=c.app_id AND b.device=c.device) ORDER BY c.created,c.id LIMIT 1`, a.a.tenant, a.a.device).Scan(&h.ID, &h.Version)
+		e := tx.QueryRow(ctx, `SELECT c.id,c.command_version FROM commands c JOIN developer_apps a ON a.tenant=c.tenant AND a.id=c.app_id JOIN devices d ON d.tenant=c.tenant AND d.id=c.device WHERE c.tenant=$1 AND c.device=$2 AND c.status='queued' AND c.actor_type='app' AND c.capability='message.send_text' AND NOT c.cancel_requested AND ($3 OR c.subscription_snapshot='[]'::jsonb) AND c.expires>floor(extract(epoch FROM clock_timestamp())*1000)::bigint AND a.active AND a.auth_epoch=c.app_epoch AND a.token_expires>floor(extract(epoch FROM clock_timestamp())*1000)::bigint AND a.scopes ? 'commands:write' AND d.state='active' AND d.policy=c.policy AND EXISTS(SELECT 1 FROM developer_bindings b WHERE b.tenant=c.tenant AND b.app=c.app_id AND b.device=c.device) ORDER BY c.created,c.id LIMIT 1`, a.a.tenant, a.a.device, s.callbackTTL > 0).Scan(&h.ID, &h.Version)
 		if errors.Is(e, pgx.ErrNoRows) {
 			return nil
 		}
@@ -55,7 +55,7 @@ func (s *GatewayStore) Claim(ctx context.Context, a SessionAuth, h LeaseHandle, 
 	if !a.consumed || a.connection != h.ConnectionID {
 		return ClaimOutcome{}, admissionError("UNAUTHENTICATED")
 	}
-	return s.leases.claim(ctx, a.a, h, q, true)
+	return s.leases.claim(ctx, a.a, h, q, s.callbackTTL == 0)
 }
 
 // currentGateway locks physical lease/runtime/device/session, without granting
@@ -181,7 +181,7 @@ func (s *GatewayStore) AuthorizeSend(ctx context.Context, a SessionAuth, h Lease
 		if !exact || c.status != "delivered" || c.version != intent.CommandVersion || c.digest != intent.PayloadDigest || c.result != nil {
 			return admissionError("STALE_COMMAND")
 		}
-		if e = checkF0(ctx, tx, h.Tenant, c.id, false); e != nil {
+		if e = s.checkCallbackCommand(ctx, tx, h, c, false); e != nil {
 			return e
 		}
 		ms, e := s.gatewayDecision(ctx, tx, row, g)

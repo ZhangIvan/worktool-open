@@ -125,3 +125,22 @@ servers must shut down all live/replaced connections before their test-owned PG
 pools close; uncertain shutdown is failure, not cleanup evidence. Successful
 CI would prove only this 1.0 text/F0 internal slice, not browser control, export,
 1.1 fixture support, physical Android interoperability, throughput or production.
+
+## Callback vertical candidate extension (NOT_RUN, requires new batch approval)
+
+Public 14a9363 completed the preceding 38 groups, including GW13–16. The new
+candidate requires those 38 plus CB01–05: 43 exact top-level groups. A prior-only
+38-pass log is rejected. The existing named-branch trigger, official image,
+2 CPU / 1GiB memory+swap / 2GiB tmpfs, 10-minute test / 15-minute job limits,
+two ephemeral non-super roles, pool size two per sequential fixture and exact
+run-scoped cleanup are unchanged. Gateway fixtures retain their actual 2-second
+lock timeout and 10-second idle transaction timeout overrides.
+
+The additional receiver is a test-owned ephemeral loopback HTTP server. A
+compile-time test adapter maps only one synthetic reviewed HTTPS identity to
+that receiver; production transport policy still refuses private addresses.
+No DNS lookup, third-party URL, persistent secret, device or production data is
+used. HTTP response-loss is a controlled receiver socket close. CB03's expiry
+is explicit DB fault injection, while CB05 observes the actual PG retry delay.
+The real HTTP/PG groups are NOT_RUN during source preparation. Publishing would
+trigger the expanded suite and therefore requires separate exact batch approval.

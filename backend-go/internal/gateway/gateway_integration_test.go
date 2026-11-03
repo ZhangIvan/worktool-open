@@ -117,6 +117,10 @@ func (t *faultTx) Commit(ctx context.Context) error {
 }
 func newGW(t *testing.T) *gwFixture {
 	t.Helper()
+	return newGWWithStoreConstructor(t, pg.NewGatewayStore)
+}
+func newGWWithStoreConstructor(t *testing.T, factory func(*pg.Runner, func(context.Context) error, pg.RuntimeAuthority) (*pg.GatewayStore, error)) *gwFixture {
+	t.Helper()
 	gatewayGate(t)
 	oc, e := pgx.ParseConfig(os.Getenv("WORKTOOL_PGTEST_OWNER_DSN"))
 	if e != nil {
@@ -235,7 +239,7 @@ func newGW(t *testing.T) *gwFixture {
 	if e != nil {
 		t.Fatal("runtime")
 	}
-	store, e := pg.NewGatewayStore(runner, func(context.Context) error { return nil }, runtime)
+	store, e := factory(runner, func(context.Context) error { return nil }, runtime)
 	if e != nil {
 		t.Fatal("store")
 	}

@@ -155,6 +155,10 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 	reply := ackFor(f)
 	var trustedConflict bool
 	e = s.leases.run(ctx, h.Tenant, func(ctx context.Context, tx pgx.Tx) error {
+		// Destination scope precedes lease/runtime/app/device locks.
+		if e := s.callbackScopes(ctx, tx, h, id); e != nil {
+			return e
+		}
 		// Preserve lease/runtime->app->device/session ordering for execution receipts.
 		row, e := readLease(ctx, tx, h.Tenant, h.DeviceID)
 		if e != nil {
@@ -167,8 +171,9 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 			return e
 		}
 		execution := f.Header.Kind == "accepted" || f.Header.Kind == "started"
+		callbackEvidence := s.callbackTTL > 0 && f.Header.Kind == "execution_result"
 		var ef executionFacts
-		if execution {
+		if execution || callbackEvidence {
 			ef, e = lockExecutionApp(ctx, tx, h.Tenant, h.DeviceID, id)
 			if e != nil {
 				return e
@@ -179,9 +184,14 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 			return e
 		}
 		bound := false
-		if execution {
+		if execution || callbackEvidence {
 			bound, e = lockExecutionBinding(ctx, tx, h.Tenant, h.DeviceID, ef)
 			if e != nil {
+				return e
+			}
+		}
+		if callbackEvidence {
+			if e = callbackPolicyLocks(ctx, tx, h, id); e != nil {
 				return e
 			}
 		}
@@ -197,7 +207,16 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 			if c.device != h.DeviceID || c.attempt == nil || *c.attempt != attempt || c.actorType != "app" || c.capability != "message.send_text" {
 				return admissionError("NOT_FOUND")
 			}
-			if e = checkF0(ctx, tx, h.Tenant, id, true); e != nil {
+			if e = s.checkCallbackCommand(ctx, tx, h, c, true); e != nil {
+				return e
+			}
+		}
+		if callbackEvidence && c.result != nil {
+			if !bytes.Equal([]byte(*c.result), f.ResultCanonical) {
+				trustedConflict = true
+				return admissionError("RESULT_CONFLICT")
+			}
+			if e = s.validateCallbackMaterialized(ctx, tx, h, c); e != nil {
 				return e
 			}
 		}
@@ -242,6 +261,11 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 		ms, e := s.gatewayDecision(ctx, tx, row, g)
 		if e != nil {
 			return e
+		}
+		if s.callbackTTL > 0 {
+			if e = s.gate(ctx); e != nil {
+				return e
+			}
 		}
 		sent := f.Header.SentAt.UnixMilli()
 		if sent < ms-30000 || sent > ms+30000 {
@@ -341,6 +365,9 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 		}
 		if tag.RowsAffected() != 1 {
 			return admissionError("INTEGRITY_CONFLICT")
+		}
+		if e = s.materializeCallbacks(ctx, tx, h, c, r.Status, r.EffectState, ms); e != nil {
+			return e
 		}
 		_, e = tx.Exec(ctx, `INSERT INTO tombstones(tenant,device,command,digest,status,retain_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant,device,command) DO UPDATE SET retain_until=GREATEST(tombstones.retain_until,EXCLUDED.retain_until)`, h.Tenant, h.DeviceID, id, c.digest, r.Status, ms+7*86400000)
 		if e != nil {

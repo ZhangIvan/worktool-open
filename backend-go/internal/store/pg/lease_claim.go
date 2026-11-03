@@ -23,6 +23,12 @@ func readCommand(ctx context.Context, tx pgx.Tx, tenant, id string) (leaseComman
 	return c, e
 }
 func checkAdmissionGraph(ctx context.Context, tx pgx.Tx, h LeaseHandle, c leaseCommand) (string, error) {
+	return checkAdmissionGraphState(ctx, tx, h, c, "held")
+}
+func checkAdmissionGraphState(ctx context.Context, tx pgx.Tx, h LeaseHandle, c leaseCommand, ledgerState string) (string, error) {
+	if ledgerState != "held" && ledgerState != "materialized" {
+		return "", admissionError("INTEGRITY_CONFLICT")
+	}
 	bad := admissionError("INTEGRITY_CONFLICT")
 	if c.payload == nil || c.app == nil || c.appEpoch == nil || c.confirm || c.admission != "bounded-result-v1" || c.created < 0 || c.expires < c.created || c.expires > maxWireMillis || c.policy < 1 || c.policy > maxSafeInteger {
 		return "", bad
@@ -67,7 +73,7 @@ func checkAdmissionGraph(ctx context.Context, tx pgx.Tx, h LeaseHandle, c leaseC
 	}
 	var results, total int
 	var valid bool
-	e = tx.QueryRow(ctx, `SELECT count(*) FILTER(WHERE kind='result'),count(*),COALESCE(bool_and(state='held' AND event_ordinal=0 AND reserved_jobs=1 AND ((kind='result' AND reserved_bytes=196608) OR (kind='callback' AND reserved_bytes=90112))),false) FROM admission_reservations WHERE tenant=$1 AND command=$2`, h.Tenant, c.id).Scan(&results, &total, &valid)
+	e = tx.QueryRow(ctx, `SELECT count(*) FILTER(WHERE kind='result'),count(*),COALESCE(bool_and(state=$3 AND event_ordinal=0 AND reserved_jobs=1 AND ((kind='result' AND reserved_bytes=196608) OR (kind='callback' AND reserved_bytes=90112))),false) FROM admission_reservations WHERE tenant=$1 AND command=$2`, h.Tenant, c.id, ledgerState).Scan(&results, &total, &valid)
 	if e != nil {
 		return "", e
 	}
