@@ -5,6 +5,7 @@ package cn.worktool.open.core.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import cn.worktool.open.core.accessibility.android.AccessibilityScreenshotApi
 import cn.worktool.open.core.accessibility.android.AndroidUiNode
 import cn.worktool.open.core.accessibility.android.ServiceGestureDispatcher
@@ -90,6 +91,20 @@ class WorkToolAccessibilityService : AccessibilityService() {
 
     /** 当前活动窗口根节点（多窗口遍历 flagRetrieveInteractiveWindows 待 T3.x 需要时再放开）。 */
     fun rootNode(): UiNode? = rootInActiveWindow?.let(::AndroidUiNode)
+
+    /**
+     * 全部交互窗口根节点快照（2026-11-03 会话 2 观测面缺陷修复：rootInActiveWindow
+     * 只观测活动窗口；flagRetrieveInteractiveWindows 已在服务能力位开启，此处消费）。
+     * 供 UiDriver 按包名挑目标窗口；单窗口设备返回与 rootNode() 等价。
+     */
+    fun interactiveRoots(): List<AccessibilityNodeInfo> {
+        val out = mutableListOf<AccessibilityNodeInfo>()
+        val windows = windows ?: return out
+        for (w in windows) {
+            w.root?.let { out += it }
+        }
+        return out
+    }
 
     companion object {
         /** 已连接服务实例；未启用/已销毁为 null。@Volatile 供跨线程读（调试页主线程读）。 */

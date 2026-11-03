@@ -115,11 +115,29 @@ object ProtocolClient {
             AtLeastOnceQueue(it, OutboundSinkWs(), refreshForResend = ::rebuildForResend)
         }
 
+        /**
+         * 一次性 wsPath 消耗标记（2026-11-03 重连拨死 URL 修复）：
+         * 配对签发的 wsPath 绑定单次 sessionId——首连后即失效（服务端会话结束/超时后
+         * 旧路径 404）。true = 已用 wsPath 完成过至少一次连接 → urlProvider 改拨
+         * 会话重建入口 /api/v2/device-sessions（服务端按持久凭据重开 deviceId 会话）。
+         */
+        @Volatile
+        private var wsPathUsedAndExpired = false
+
         private val ws = ReconnectingWsClient(
             transportFactory = transportFactory ?: OkHttpWsTransport.Factory(httpClient),
             urlProvider = {
-                credentials.wsPath?.let { path -> baseUrl.trimEnd('/') + path }
-                    ?: baseUrl.trimEnd('/') + "/api/v2/device-sessions/" + credentials.sessionId
+                // 2026-11-03 重连拨死 URL 修复（会话 2 根因，docs/12 事故记录）：
+                // 配对时签发的 wsPath 绑定**一次性 sessionId**——服务端会话过期/45s 失联
+                // 关流后旧路径 404，重连永远拨死 URL → 设备永久离线 → 旧绕行=每迭代重配对
+                //（应用↔企微高频切换，风控暴露）。修复：重连改拨**会话重建入口**
+                // `/api/v2/device-sessions`（服务端按持久凭据复活/重开同一 deviceId 会话），
+                // 首连仍优先用配对 wsPath（零额外 RTT）。
+                val wsPath = credentials.wsPath
+                when {
+                    wsPath != null && !wsPathUsedAndExpired -> baseUrl.trimEnd('/') + wsPath
+                    else -> baseUrl.trimEnd('/') + "/api/v2/device-sessions"
+                }
             },
             greeting = {
                 // 出向计数器在构造 hello **前**复位（spec §5.4.1/§5.4.2：hello seq 恒 1，
@@ -147,6 +165,7 @@ object ProtocolClient {
                 // 出向计数复位已移至 greeting 构造处（hello=1 后帧连续 +1，见上）。
                 // spec §5.4.2 v1.2.0：端侧接收计数器以持久确认点预置（期望服务端
                 // 首帧 = lastReceivedSeq+1，即 hello_ack.seq）
+                if (!wsPathUsedAndExpired) wsPathUsedAndExpired = true // 首连消耗一次性 wsPath
                 verifier.resetForReconnect(lastReceivedSeq())
                 queue?.flushPending()
             },

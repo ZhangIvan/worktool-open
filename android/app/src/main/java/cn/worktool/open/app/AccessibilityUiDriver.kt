@@ -43,7 +43,14 @@ class AccessibilityUiDriver : UiDriver {
     }
 
     override fun currentRoot(): UiNode? {
-        val root: AccessibilityNodeInfo? = service?.rootInActiveWindow ?: return null
+        val s = service ?: return null
+        // 观测面（2026-11-03 会话 2 缺陷修复）：rootInActiveWindow 只观测**活动窗口**，
+        // 企微分屏/悬浮/多窗场景下可能拿不到目标内容树；改为先取服务缓存的
+        // 交互窗口根（flagRetrieveInteractiveWindows 已在服务配置开启），逐窗口
+        // 找 packageName 匹配企微的窗口——找不到再回退 rootInActiveWindow。
+        s.interactiveRoots().firstOrNull { it.packageName == "com.tencent.wework" }
+            ?.let { return AndroidUiNode(it) }
+        val root: AccessibilityNodeInfo? = s.rootInActiveWindow ?: return null
         return root?.let { AndroidUiNode(it) }
     }
 
