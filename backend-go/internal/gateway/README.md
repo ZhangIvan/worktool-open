@@ -115,3 +115,14 @@ network cases. The real
 transaction uncertainty injection is a wrapper around pgx.Tx.Commit: it first
 commits PostgreSQL, then returns a synthetic error; it is not merely a successful
 business callback returning an error, and it is not a network fault experiment.
+
+### Bounded close correction
+
+The pinned WebSocket library's concurrent `CloseNow` waits when a graceful `Close`
+is already in progress; it is not an interrupt in that state. The gateway now
+captures only the raw transport returned by its own successful HTTP hijack. A
+200ms close deadline closes that exact transport, then joins the close worker and
+any fired deadline callback before retiring the lease/storage cleanup. Cancellation
+still revokes authority immediately. No other connection or failed-hijack socket
+is retained. GW10 keeps a peer that does not read replies, the original 5s cleanup
+assertion and zero-inbox assertion; no test deadline was extended.

@@ -4,6 +4,7 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	wire "github.com/ZhangIvan/worktool-open/backend-go/internal/protocol/gatewaywire"
 	"github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg"
 	"github.com/coder/websocket"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -64,6 +66,54 @@ func httpError(w http.ResponseWriter, status int, code string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": code, "requestId": "req_gateway", "retryable": status == 503, "details": []string{}}})
 }
+
+// captureHijack keeps the exact transport owned by this successful upgrade.
+// CloseNow cannot interrupt an already-running Close in the pinned WS library.
+// No socket from another connection or failed Hijack is retained.
+type captureHijack struct {
+	http.ResponseWriter
+	hijacker   http.Hijacker
+	connection *connection
+}
+
+func (w *captureHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, buffer, err := w.hijacker.Hijack()
+	if err == nil && conn != nil {
+		w.connection.captureTransport(conn)
+	}
+	return conn, buffer, err
+}
+func (w *captureHijack) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func captureUpgradeWriter(w http.ResponseWriter, x *connection) http.ResponseWriter {
+	current := w
+	for {
+		if h, ok := current.(http.Hijacker); ok {
+			return &captureHijack{ResponseWriter: w, hijacker: h, connection: x}
+		}
+		u, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return w
+		} // Preserve the library's unsupported-Hijacker rejection.
+		current = u.Unwrap()
+	}
+}
+func (x *connection) captureTransport(conn net.Conn) {
+	x.mu.Lock()
+	x.transport = conn
+	x.mu.Unlock()
+	if x.ctx.Err() != nil {
+		x.hardClose()
+	}
+}
+func (x *connection) hardClose() {
+	x.mu.Lock()
+	conn := x.transport
+	x.mu.Unlock()
+	if conn != nil {
+		x.transportClose.Do(func() { _ = conn.Close() })
+	}
+}
+
 func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.SessionAuth) {
 	if !upgradeHeader(r) {
 		httpError(w, 400, "SCHEMA_INVALID")
@@ -109,7 +159,7 @@ func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.Sessio
 		httpError(w, 503, "STORAGE_UNAVAILABLE")
 		return
 	}
-	ws, e := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
+	ws, e := websocket.Accept(captureUpgradeWriter(w, x), r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
 	if e != nil {
 		return
 	}
@@ -178,6 +228,8 @@ type connection struct {
 	auth               pg.SessionAuth
 	mu                 sync.Mutex
 	ws                 *websocket.Conn
+	transport          net.Conn
+	transportClose     sync.Once
 	lease              *pg.LeaseHandle
 	queue              []outbound
 	queueBytes         int
@@ -201,9 +253,13 @@ func (x *connection) stop(code int, reason string) {
 			x.work.Add(1)
 			go func() {
 				defer x.work.Done()
-				timer := time.AfterFunc(200*time.Millisecond, func() { _ = ws.CloseNow() })
-				defer timer.Stop()
+				deadlineDone := make(chan struct{})
+				timer := time.AfterFunc(200*time.Millisecond, func() { x.hardClose(); close(deadlineDone) })
 				_ = ws.Close(websocket.StatusCode(code), reason)
+				if !timer.Stop() {
+					<-deadlineDone
+				} // Join an already-fired transport closer.
+				x.hardClose()
 				_ = ws.CloseNow()
 			}()
 		}
@@ -215,6 +271,7 @@ func (x *connection) finish() {
 	ws := x.ws
 	x.mu.Unlock()
 	x.work.Wait()
+	x.hardClose()
 	// stop synchronously registers its bounded close worker. Give that worker
 	// the opportunity to send the policy close frame before the final hard close.
 	// Authorization cancellation is still immediate; the worker has a 200ms cap.
