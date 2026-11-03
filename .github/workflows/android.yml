@@ -50,9 +50,10 @@ jobs:
       # 文件存在）。仅当 WORKTOOL_KEYSTORE_B64 配置时生效；文件只进当轮 runner 临时
       # 目录，日志无回显（set +x），job 结束随 runner 销毁。
       - name: Release 签名密钥落盘（WORKTOOL_KEYSTORE_B64 → $RUNNER_TEMP）
-        if: secrets.WORKTOOL_KEYSTORE_B64 != ''
+        if: env.WORKTOOL_KEYSTORE_B64_SET == 'true'
         env:
           WORKTOOL_KEYSTORE_B64: ${{ secrets.WORKTOOL_KEYSTORE_B64 }}
+          WORKTOOL_KEYSTORE_B64_SET: ${{ secrets.WORKTOOL_KEYSTORE_B64 != '' && 'true' || 'false' }}
         run: |
           set -e
           printf '%s' "$WORKTOOL_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/worktool-open.jks"
