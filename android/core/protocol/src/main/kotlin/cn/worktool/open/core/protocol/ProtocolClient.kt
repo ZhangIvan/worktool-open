@@ -15,6 +15,8 @@ import cn.worktool.open.core.protocol.transport.OkHttpWsTransport
 import cn.worktool.open.core.protocol.transport.ReconnectingWsClient
 import cn.worktool.open.core.protocol.transport.Scheduler
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.security.PrivateKey
 
 /**
@@ -92,6 +94,7 @@ object ProtocolClient {
         httpClient: okhttp3.OkHttpClient = OkHttpWsTransport.defaultClient(),
         transportFactory: cn.worktool.open.core.protocol.transport.WsTransport.Factory? = null,
     ) {
+        private val httpClient = httpClient
         private val codec = EnvelopeCodec()
         private val sendSequencer = SendSequencer()
         private val verifier = FrameVerifier(
@@ -127,16 +130,15 @@ object ProtocolClient {
         private val ws = ReconnectingWsClient(
             transportFactory = transportFactory ?: OkHttpWsTransport.Factory(httpClient),
             urlProvider = {
-                // 2026-11-03 重连拨死 URL 修复（会话 2 根因，docs/12 事故记录）：
-                // 配对时签发的 wsPath 绑定**一次性 sessionId**——服务端会话过期/45s 失联
-                // 关流后旧路径 404，重连永远拨死 URL → 设备永久离线 → 旧绕行=每迭代重配对
-                //（应用↔企微高频切换，风控暴露）。修复：重连改拨**会话重建入口**
-                // `/api/v2/device-sessions`（服务端按持久凭据复活/重开同一 deviceId 会话），
-                // 首连仍优先用配对 wsPath（零额外 RTT）。
+                // 2026-11-03 重连修复 v2（会话 4/5 根因）：
+                // v1 修复（a3b29e0）重连拨 `/api/v2/device-sessions`——但这是 POST 端点（创建会话）
+                // 不是 WS upgrade 路径。重连永远 404。v2 修复：**同步 POST 创建新会话**拿到新
+                // sessionId → 拨新 wsPath。首连仍优先用配对 wsPath（零额外 RTT）。
                 val wsPath = credentials.wsPath
-                when {
-                    wsPath != null && !wsPathUsedAndExpired -> baseUrl.trimEnd('/') + wsPath
-                    else -> baseUrl.trimEnd('/') + "/api/v2/device-sessions"
+                if (wsPath != null && !wsPathUsedAndExpired) {
+                    baseUrl.trimEnd('/') + wsPath
+                } else {
+                    rebuildSessionUrl()
                 }
             },
             greeting = {
@@ -177,6 +179,32 @@ object ProtocolClient {
 
         fun start() = ws.start()
         fun stop() = ws.stop()
+
+        /**
+         * 重连时同步 POST /api/v2/device-sessions 创建新会话 → 返回新 wsPath（会话 4/5 根因修复）。
+         * 阻塞式（在 urlProvider 线程调用），失败时返回无效路径（让 WS 连接失败触发下一轮退避重连）。
+         */
+        private fun rebuildSessionUrl(): String {
+            return try {
+                val request = okhttp3.Request.Builder()
+                    .url(baseUrl.trimEnd('/') + "/api/v2/device-sessions")
+                    .post(okhttp3.RequestBody.create(null, "{}"))
+                    .addHeader("Authorization", "Bearer " + credentials.deviceTokenHex)
+                    .build()
+                val response = httpClient.newCall(request).execute()
+                val body = response.body?.string() ?: "{}"
+                response.close()
+                val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
+                val wsPath = json.jsonObject["wsPath"]?.jsonPrimitive?.content
+                if (wsPath != null) {
+                    baseUrl.trimEnd('/') + wsPath
+                } else {
+                    baseUrl.trimEnd('/') + "/api/v2/device-sessions/fallback-retry"
+                }
+            } catch (e: Exception) {
+                baseUrl.trimEnd('/') + "/api/v2/device-sessions/retry"
+            }
+        }
 
         /**
          * 当前重连序号透出（docs/16 采纳项「离线态重连文案」：状态卡显示
