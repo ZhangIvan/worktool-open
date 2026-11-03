@@ -29,7 +29,8 @@ Run the focused Go test from `backend-go`:
     go test ./internal/protocol/gatewaywire -run '^TestSharedAndroid10Exchange$'
 
 Use the existing licensed Android CI toolchain for JVM tests; the shared resource
-is loaded from this directory by Gradle test sourceSets for all three variants.
+is read from this directory through a JVM-test-only Gradle system property for
+all three variants; no variant source sets are merged or packaged.
 The tests use MemoryJournal/fake DeviceLink. They do **not** prove SQLite disk
 recovery, OkHttp networking, pairing, TLS, physical-device behavior, or the whole
 callback chain. JVM execution and device validation must be reported separately.

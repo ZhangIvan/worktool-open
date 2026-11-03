@@ -25,8 +25,12 @@ android {
         }
     }
     buildFeatures { resValues = true }
-    testOptions { unitTests.isReturnDefaultValues = false }
-    sourceSets.getByName("test").resources.srcDir("../../contracts/interop")
+    testOptions {
+        unitTests.isReturnDefaultValues = false
+        unitTests.all {
+            it.systemProperty("worktool.interop.fixture", file("../../contracts/interop/android-go-1.0.json").absolutePath)
+        }
+    }
 }
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.2")

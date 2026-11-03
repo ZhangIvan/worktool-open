@@ -80,7 +80,7 @@ class NativeCommandEngineTest {
         assertTrue(h.journal.effects.isEmpty())
         assertTrue(h.engine.isPaused())
     }
-    private fun sharedExchange():JSONObject = javaClass.getResourceAsStream("/android-go-1.0.json")!!
+    private fun sharedExchange():JSONObject = java.io.File(requireNotNull(System.getProperty("worktool.interop.fixture")))
         .bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
 
     @Test fun sharedGoExchangeExecutesOnceAndAcknowledgesExactResult() {

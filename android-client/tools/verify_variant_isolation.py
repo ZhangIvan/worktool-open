@@ -9,6 +9,51 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 A='{http://schemas.android.com/apk/res/android}'
 
+ORIGINAL_CORE_TESTS = {
+    'conflictAndReverseDirectionFailClosed',
+    'defaultPausedRejectsWithoutEffect',
+    'duplicateAckReceiptCannotClearAnotherPendingResult',
+    'expiredDoesNotExecute',
+    'exportRequiresExplicitMatchingLocalScope',
+    'failedStartedSendDisconnectsBeforeAnyEffectAndPersistsFailure',
+    'interruptedRunningRecoversUnknownWithoutReplay',
+    'jcsOrderIndependentButScopeArrayOrderBound',
+    'onlySentDurableResultCanBeAcknowledged',
+    'pauseRejectsAll101AcceptedRowsBeyondRecentUiLimit',
+    'reconnectRejectsAll101AcceptedRowsBeyondRecentUiLimit',
+    'revokedPolicyPublishesPausedGateAndCannotResumeLocally',
+    'staleSentAtRejectsBeforeAcceptance',
+    'stopBeforeConfirmationCancelsWithoutEffect',
+    'textEffectDurableAndDuplicateDoesNotRepeat',
+    'validCommandWithTenSecondsRemainingMayExecute',
+    'wrongAckEventIdCannotClearDurableResult',
+    'wrongIdentityAndExtraFieldsFailClosed',
+    'wrongReferenceOrArbitraryPathRejected',
+}
+INTEROP_CORE_TESTS = {
+    'sharedGoExchangeExecutesOnceAndAcknowledgesExactResult',
+    'sharedUnackedResultSurvivesEngineReplacementWithoutEffectReplay',
+}
+
+def check_core_test_inventory(text):
+    names=re.findall(r'@Test\s+fun\s+(\w+)\s*\(',text)
+    assert len(names)==len(set(names))==21, 'exact 21 distinct core test methods required'
+    assert text.count('@Test')==21, 'unsupported or unparsed core test annotation'
+    assert set(names)==ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS, 'original 19 and reviewed 2 interop tests required'
+
+def core_inventory_selftest():
+    names=sorted(ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS)
+    source='\n'.join('@Test fun '+name+'() {}' for name in names)
+    check_core_test_inventory(source)
+    cases=[source.replace('@Test fun '+names[0]+'() {}',''),
+           source.replace(names[0], 'unreviewedReplacement'),
+           source.replace(names[0],names[1]),
+           source+'\n@Test fun unreviewedAddition() {}']
+    for bad in cases:
+        try: check_core_test_inventory(bad)
+        except AssertionError: pass
+        else: raise AssertionError('core inventory negative accepted')
+
 def verify_sources():
     src=ROOT/'app/src';gradle=(ROOT/'app/build.gradle.kts').read_text()
     assert 'create("lab")' in gradle and 'applicationIdSuffix = ".lab"' in gradle
@@ -47,8 +92,8 @@ def verify_sources():
     assert 'budget.callback(epoch)' in graph
     assert link.index('budget.inboundFrame(epoch,decodedBytes)') < link.index('val j=JSONObject(text)')
     coretests=src/'test/java/io/worktool/open/prototype/core/NativeCommandEngineTest.kt'
-    assert coretests.read_text().count('@Test')==19, 'retain the original 19 core tests'
-    return {'source_isolation':'PASS','core_tests_preserved':19,'jvm_tests':'NOT_RUN','android_build':'NOT_RUN','apk_isolation':'NOT_RUN'}
+    check_core_test_inventory(coretests.read_text())
+    return {'source_isolation':'PASS','core_tests_preserved':19,'interop_tests_present':2,'jvm_tests':'NOT_RUN','android_build':'NOT_RUN','apk_isolation':'NOT_RUN'}
 
 def parse_resources(text):
     """Read aapt2 dump resources output, retaining exact IDs/names/default strings.
@@ -143,6 +188,7 @@ def normalize_service_numbers(root):
 
 
 def resource_selftest():
+    core_inventory_selftest()
     resources=parse_resources('resource 0x7f010001 string/ui_accessibility_package_filter\n  () "io.worktool.open.prototype"\nresource 0x7f020001 xml/ui_fixture_accessibility_service\n  () (file) res/xml/ui_fixture_accessibility_service.xml')
     assert resource_string(resources,'string/ui_accessibility_package_filter')=='io.worktool.open.prototype'
     xml=ET.fromstring('<x xmlns:android="http://schemas.android.com/apk/res/android" android:packageNames="@0x7f010001" android:accessibilityEventTypes="0x820"/>')
