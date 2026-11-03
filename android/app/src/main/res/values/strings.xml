@@ -89,6 +89,11 @@
     <string name="pair_step_done_title">配对成功</string>
     <string name="pair_address_hint">wss://your-server.example.com</string>
     <string name="pair_address_next">下一步</string>
+    <string name="pair_a11y_title">无障碍服务</string>
+    <string name="pair_a11y_status_off">未开启——指令执行必需，请开启</string>
+    <string name="pair_a11y_status_on">已开启 ✓</string>
+    <string name="pair_a11y_enable">去开启</string>
+    <string name="pair_a11y_enable_done">已开启</string>
     <string name="pair_addr_error_format">地址格式：wss://host[:port]（或 https://）</string>
     <string name="pair_addr_error_host">主机名缺失或不合法</string>
     <string name="pair_addr_error_port">端口须为 1~65535</string>

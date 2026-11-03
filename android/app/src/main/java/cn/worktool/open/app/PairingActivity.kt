@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import cn.worktool.open.core.accessibility.WorkToolAccessibilityService
 import cn.worktool.open.core.protocol.DeviceCredentials
 import cn.worktool.open.core.protocol.android.AndroidKeystoreCredentialStore
 import cn.worktool.open.core.protocol.crypto.Ed25519Keys
@@ -52,6 +53,9 @@ class PairingActivity : Activity() {
     private var pairingBaseUrl: String = ""
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /** 无障碍检测卡轮询（docs/12 BP-3：设置页返回后实时刷新；5s 一次，onDestroy 停）。 */
+    private var a11yPollRunnable: Runnable? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pairing)
@@ -69,6 +73,38 @@ class PairingActivity : Activity() {
 
         findViewById<Button>(R.id.pair_address_next).setOnClickListener { onAddressNext() }
         pairButton.setOnClickListener { onPair() }
+
+        // 无障碍检测卡（BP-3/BP-7：配对前必须可见可操作——实时状态 + 一键直达系统设置）。
+        // 状态源 = WorkToolAccessibilityService.instance（AMS 绑定后才非 null，MIUI settings-put
+        // 不触发的陷阱借此天然暴露：设置页往返绑定后 instance 非空 → 绿勾）。
+        val a11yStatus = findViewById<TextView>(R.id.pair_a11y_status)
+        val a11yIcon = findViewById<TextView>(R.id.pair_a11y_icon)
+        val a11yButton = findViewById<Button>(R.id.pair_a11y_enable)
+        val poll = object : Runnable {
+            override fun run() {
+                val on = WorkToolAccessibilityService.instance != null
+                if (on) {
+                    a11yIcon.text = "✅"
+                    a11yStatus.text = getText(R.string.pair_a11y_status_on)
+                    a11yStatus.setTextColor(getColor(R.color.status_online))
+                    a11yButton.text = getText(R.string.pair_a11y_enable_done)
+                    a11yButton.isEnabled = false
+                } else {
+                    a11yIcon.text = "⚠️"
+                    a11yStatus.text = getText(R.string.pair_a11y_status_off)
+                    a11yStatus.setTextColor(getColor(R.color.status_offline))
+                    a11yButton.text = getText(R.string.pair_a11y_enable)
+                    a11yButton.isEnabled = true
+                }
+                a11yPollRunnable = this
+                mainHandler.postDelayed(this, 5_000)
+            }
+        }
+        a11yPollRunnable = poll
+        mainHandler.post(poll)
+        a11yButton.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
         findViewById<Button>(R.id.pair_done).setOnClickListener {
             startActivity(
                 Intent(this, MainActivity::class.java).apply {
@@ -77,6 +113,12 @@ class PairingActivity : Activity() {
             )
         }
         showStep(stepAddress)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        a11yPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        a11yPollRunnable = null
     }
 
     private fun showStep(step: View) {

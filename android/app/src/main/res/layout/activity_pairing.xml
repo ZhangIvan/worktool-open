@@ -62,6 +62,58 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="@string/pair_address_next" />
+
+            <!-- 无障碍检测卡（FR-56 前置 + docs/12 BP-3）：用户配对前必须开启无障碍，
+                 否则配对成功也执行不了指令（会话 2 实证）。实时状态 + 一键直达系统设置。 -->
+            <LinearLayout
+                android:id="@+id/pair_a11y_card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="12dp"
+                android:background="@android:drawable/dialog_holo_light_frame">
+
+                <TextView
+                    android:id="@+id/pair_a11y_icon"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="20sp"
+                    android:text="⚠️" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="10dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/pair_a11y_title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/pair_a11y_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/pair_a11y_status"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/pair_a11y_status_off"
+                        android:textColor="@color/status_offline"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/pair_a11y_enable"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pair_a11y_enable" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- 步骤 2：6 位配对码 -->
