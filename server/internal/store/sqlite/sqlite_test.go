@@ -62,6 +62,55 @@ func TestPairingCodeLifecycle(t *testing.T) {
 	}
 }
 
+// TestUpsertDeviceRobotIDPreserved 回归（2026-11-03 会话 9 根因）：
+// 同 Ed25519 身份重配对不得抹掉管理面 robot_id 绑定；公钥变化（身份变更）
+// 才清空；显式传值可覆盖。
+func TestUpsertDeviceRobotIDPreserved(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Date(2026, 11, 3, 23, 0, 0, 0, time.UTC)
+	const dev = "lab-device-syn"
+	pair := func(robotID, edKey string) {
+		t.Helper()
+		if err := db.UpsertDevice(ctx, Device{
+			DeviceID: dev, RobotID: robotID, DeviceName: "RIG78-lab",
+			Ed25519PublicKey:   edKey,
+			DeviceX25519Public: "f38f111a00dd5ecc102da118f84a65e9e1c47442b73a7f3711ec01745adf3809",
+			TokenHash:          sha256Hex("tok"), TokenVersion: 1,
+			Status: "active", PairedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("UpsertDevice: %v", err)
+		}
+	}
+	const keyA = "a8d297defb2115902dffe88cb81480a199a8e918fa72493ae01260bd3475aa18"
+	const keyB = "b8d297defb2115902dffe88cb81480a199a8e918fa72493ae01260bd3475aa18"
+
+	// ① 首次配对（无绑定）+ 管理面绑定
+	pair("", keyA)
+	if _, err := db.Exec(ctx, `UPDATE devices SET robot_id='lab-robot-syn' WHERE device_id=?`, dev); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	// ② 同身份重配对（pair.go 路径不传 robot_id）→ 绑定必须存活
+	pair("", keyA)
+	d, ok, err := db.GetDevice(ctx, dev)
+	if err != nil || !ok {
+		t.Fatalf("GetDevice: ok=%v err=%v", ok, err)
+	}
+	if d.RobotID != "lab-robot-syn" {
+		t.Fatalf("同身份重配对后 robot_id 应保留，实际=%q", d.RobotID)
+	}
+	// ③ 公钥变化重配对 → 绑定清空（防旧绑定指向新凭据持有者）
+	pair("", keyB)
+	if d, _, _ := db.GetDevice(ctx, dev); d.RobotID != "" {
+		t.Fatalf("公钥变化重配对后 robot_id 应清空，实际=%q", d.RobotID)
+	}
+	// ④ 显式传值覆盖（v2 轮换/v1 登记/管理面改绑路径）
+	pair("lab-driver-99", keyB)
+	if d, _, _ := db.GetDevice(ctx, dev); d.RobotID != "lab-driver-99" {
+		t.Fatalf("显式传值应覆盖，实际=%q", d.RobotID)
+	}
+}
+
 func TestInboundEventDedup(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

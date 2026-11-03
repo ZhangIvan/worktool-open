@@ -200,7 +200,9 @@ func atoiDefault(s string) int {
 //     连接层/兼容面路径未检查该状态——连接级强制待网关车道接线（dodDeferred，
 //     见 admin/README「边界与后续」）。
 //   - resume：status='active'。
-//   - unbind：robot_id 置空（v1 兼容面绑定解除；与重配对清空同语义，W-M3R）。
+//   - unbind：robot_id 置空（v1 兼容面绑定解除）。注：2026-11-03 起同身份重配对
+//     （Ed25519 公钥不变）不再清空绑定（UpsertDevice 保留规则，会话 9 根因修复）；
+//     公钥变化的重配对仍清空。
 func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return

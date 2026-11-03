@@ -486,12 +486,20 @@ func (db *DB) Tx(ctx context.Context) (*sql.Tx, error) { return db.sql.BeginTx(c
 // ---- 设备与配对码 ----
 
 // UpsertDevice 注册/覆盖设备（重复 deviceId 携新配对码 = 重新绑定，spec §5.1.2）。
+// robot_id 保留规则（2026-11-03 会话 9 根因修复）：Ed25519 签名公钥不变（同一物理
+// 设备重配对）→ 保留既有 v1 绑定（管理面 bind 不再被配对抹掉，显式传值仍可覆盖）；
+// 公钥变化（deviceId 复用/身份变更）→ 置 NULL，防旧绑定指向新凭据持有者。
 func (db *DB) UpsertDevice(ctx context.Context, d Device) error {
 	_, err := db.sql.ExecContext(ctx, `
 INSERT INTO devices(device_id, robot_id, device_name, ed25519_public_key, device_x25519_public, token_hash, token_version, status, epoch, paired_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(device_id) DO UPDATE SET
-  robot_id=excluded.robot_id, device_name=excluded.device_name,
+  robot_id=CASE
+    WHEN devices.ed25519_public_key = excluded.ed25519_public_key
+      THEN COALESCE(excluded.robot_id, devices.robot_id)
+    ELSE NULL
+  END,
+  device_name=excluded.device_name,
   ed25519_public_key=excluded.ed25519_public_key, device_x25519_public=excluded.device_x25519_public,
   token_hash=excluded.token_hash, token_version=excluded.token_version,
   status=excluded.status, epoch=MAX(devices.epoch, excluded.epoch), updated_at=excluded.updated_at`,

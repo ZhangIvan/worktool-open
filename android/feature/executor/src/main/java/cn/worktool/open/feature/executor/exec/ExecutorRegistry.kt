@@ -126,16 +126,21 @@ class ExecutorRegistry private constructor(
         fun defaultFirstBatch(
             querySink: cn.worktool.open.feature.executor.query.QueryResultSink,
             files: cn.worktool.open.feature.executor.query.LocalFilePort,
-        ): ExecutorRegistry = of(
-            SendTextExecutor(),
-            InitGroupExecutor(),
-            UpdateGroupExecutor(),
-            ModifyGroupMemberInfoExecutor(),
-            PassFriendExecutor(),
-            GetGroupListExecutor(querySink),
-            GetFriendListExecutor(querySink),
-            GetLocalFileExecutor(files, querySink),
-        )
+            /** 真机校准规则注入（2026-11-04 D1 校准：查询执行器共用；null = 占位默认）。 */
+            rules: cn.worktool.open.feature.executor.runtime.WeworkScreenRules? = null,
+        ): ExecutorRegistry {
+            val r = rules ?: cn.worktool.open.feature.executor.runtime.WeworkScreenRules()
+            return of(
+                SendTextExecutor(),
+                InitGroupExecutor(),
+                UpdateGroupExecutor(),
+                ModifyGroupMemberInfoExecutor(),
+                PassFriendExecutor(),
+                GetGroupListExecutor(querySink, r),
+                GetFriendListExecutor(querySink, r),
+                GetLocalFileExecutor(files, querySink),
+            )
+        }
 
         /**
          * 对等计划全量批注册表（docs/10 §B 68 条矩阵；B1 补齐进行中——本方法随

@@ -119,6 +119,14 @@ class DeviceSessionLoop(
      * 照常过暂停门（暂停优先于重试）。上限钳制 0~5。
      */
     private val retryCountProvider: (() -> Int)? = null,
+    /**
+     * 会话重建密钥重派器（2026-11-04 会话 9g 主根因）：服务端每会话独立 X25519
+     * 密钥对，重连重建会话后须以新 sessionId+serverX25519PublicKey 重派
+     * [SessionCrypto]（设备保留配对时同一 ephemeral 私钥）。装配层（Lab/
+     * SessionRuntime）持有私钥时注入；null = 沿用初始 crypto（重建会话后帧
+     * 将全部 decrypt_failed——仅历史行为兼容）。
+     */
+    private val cryptoRebuilder: ((sessionId: String, serverX25519PublicKeyHex: String) -> SessionCrypto?)? = null,
 ) {
 
     private val codec = EnvelopeCodec()
@@ -168,6 +176,7 @@ class DeviceSessionLoop(
             onEvent?.invoke("拒帧 rule=${r.rule} detail=${r.detail} close=${r.closeCode}")
         },
         transportFactory = transportFactory,
+        cryptoRebuilder = cryptoRebuilder,
     )
 
     fun start() {

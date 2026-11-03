@@ -70,6 +70,7 @@ class WorkToolAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        android.util.Log.i("WTSvc", "onServiceConnected instance=$this flags=${serviceInfo?.flags}")
         registerPermissionGrantWatcher()
     }
 

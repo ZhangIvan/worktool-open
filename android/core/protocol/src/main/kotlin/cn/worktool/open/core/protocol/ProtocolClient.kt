@@ -93,25 +93,57 @@ object ProtocolClient {
         onHelloAck: ((ControlFrame) -> Unit)? = null,
         httpClient: okhttp3.OkHttpClient = OkHttpWsTransport.defaultClient(),
         transportFactory: cn.worktool.open.core.protocol.transport.WsTransport.Factory? = null,
+        /**
+         * 会话重建密钥重派器（2026-11-04 会话 9g 主根因修复）：服务端每个会话行
+         * 独立 X25519 密钥对，重建会话后旧 [SessionCrypto] 必然解不开新帧——
+         * 拨新 wsPath 前以响应内新 sessionId+serverX25519PublicKey 重派密钥
+         * （设备保留配对时同一 ephemeral 私钥；null = 沿用初始 crypto 的旧行为）。
+         */
+        private val cryptoRebuilder: ((sessionId: String, serverX25519PublicKeyHex: String) -> SessionCrypto?)? = null,
     ) {
         private val httpClient = httpClient
         private val codec = EnvelopeCodec()
         private val sendSequencer = SendSequencer()
-        private val verifier = FrameVerifier(
+        private var activeCrypto: SessionCrypto? = sessionCrypto
+        private var verifier = FrameVerifier(
             codec = codec,
             deviceToken = { credentials.deviceToken },
             tokenVersion = { credentials.tokenVersion },
-            crypto = sessionCrypto,
+            crypto = activeCrypto,
             clock = clock,
         )
-        private val builder = FrameBuilder(
+        private var builder = FrameBuilder(
             codec = codec,
             deviceToken = { credentials.deviceToken },
             tokenVersion = { credentials.tokenVersion },
-            crypto = sessionCrypto,
+            crypto = activeCrypto,
             clock = clock,
             sequencer = sendSequencer,
         )
+
+        /**
+         * 重建会话后重派密钥（urlProvider 线程于拨号新 wsPath 前调用；此后
+         * greeting/hello 与入向解密都走新 crypto——hello 在新连接首帧构造，
+         * 时序上必然晚于本调用）。verifier/builder 持有 crypto 值引用 → 整体重建。
+         */
+        private fun refreshSessionCrypto(newCrypto: SessionCrypto) {
+            activeCrypto = newCrypto
+            verifier = FrameVerifier(
+                codec = codec,
+                deviceToken = { credentials.deviceToken },
+                tokenVersion = { credentials.tokenVersion },
+                crypto = newCrypto,
+                clock = clock,
+            )
+            builder = FrameBuilder(
+                codec = codec,
+                deviceToken = { credentials.deviceToken },
+                tokenVersion = { credentials.tokenVersion },
+                crypto = newCrypto,
+                clock = clock,
+                sequencer = sendSequencer,
+            )
+        }
 
         /** 出向 AtLeastOnce 队列（journal 为 null 时退化为直接发送）。 */
         private val queue: AtLeastOnceQueue? = journal?.let {
@@ -197,6 +229,22 @@ object ProtocolClient {
                 val json = kotlinx.serialization.json.Json.parseToJsonElement(respBody)
                 val wsPath = json.jsonObject["wsPath"]?.jsonPrimitive?.content
                 if (wsPath != null) {
+                    // 2026-11-04 会话 9g 主根因修复：重建会话=新 X25519 密钥对+新
+                    // sessionId（SessionCrypto 派生绑 sessionId）——不重派则所有
+                    // 重连帧 decrypt_failed（会话 9g 实证：journal seq 推进但
+                    // 全部拒帧、指令 execution_unknown）。服务端按 devices 表持久
+                    // 的设备 ephemeral 公钥派生共享密钥 → 端侧以配对时同一私钥
+                    // 重派即对齐。
+                    val sessionId = json.jsonObject["sessionId"]?.jsonPrimitive?.content
+                    val serverPubHex = json.jsonObject["serverX25519PublicKey"]?.jsonPrimitive?.content
+                    if (cryptoRebuilder != null && sessionId != null && serverPubHex != null) {
+                        try {
+                            cryptoRebuilder?.invoke(sessionId, serverPubHex)?.let(::refreshSessionCrypto)
+                        } catch (_: Exception) {
+                            // 重派失败保留旧 crypto：新会话帧将被拒（拒帧→断连→
+                            // 下一轮重建重试，自愈路径不变）。
+                        }
+                    }
                     baseUrl.trimEnd('/') + wsPath
                 } else {
                     baseUrl.trimEnd('/') + "/api/v2/device-sessions/fallback-retry"

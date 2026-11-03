@@ -152,7 +152,32 @@ class LabPairingActivity : Activity() {
         )
         loop?.stop()
         val labFileDir = File(filesDir, "lab-509").apply { mkdirs() }
+        // 2026-11-04 D1 真机校准（会话 9 系列 W-M3R 落地）：通讯录页联系人名 =
+        // id/hlo（TextView）、列表容器 = id/l_8（RecyclerView）；最近聊天名 = id/o6j
+        // （不同 id 不误收）。混淆 id 随企微构建变化——生产走外置 RuleConfig 下发，
+        // 此处为实验室基线设备的程序化注入。
+        val calibratedRules = cn.worktool.open.feature.executor.runtime.WeworkScreenRules(
+            cn.worktool.open.core.accessibility.rules.RuleConfig(
+                version = 1,
+                selectors = listOf(
+                    cn.worktool.open.core.accessibility.rules.SelectorDef(
+                        id = cn.worktool.open.feature.executor.runtime.WeworkSelectorIds.CONTACT_LIST_ITEM,
+                        match = cn.worktool.open.core.accessibility.rules.MatchSpec(
+                            resourceId = "com.tencent.wework:id/hlo",
+                            className = "android.widget.TextView",
+                        ),
+                    ),
+                    cn.worktool.open.core.accessibility.rules.SelectorDef(
+                        id = cn.worktool.open.feature.executor.runtime.WeworkSelectorIds.CONTACTS_LIST_CONTAINER,
+                        match = cn.worktool.open.core.accessibility.rules.MatchSpec(
+                            resourceId = "com.tencent.wework:id/l_8",
+                        ),
+                    ),
+                ),
+            ),
+        )
         val registry = ExecutorRegistry.defaultFirstBatch(
+            rules = calibratedRules,
             querySink = QueryResultSink { type, result ->
                 val summary = when (result) {
                     is QueryResult.GroupList -> "群×${result.groups.size}: ${result.groups.take(5)}"
@@ -172,11 +197,24 @@ class LabPairingActivity : Activity() {
             credentials = credentials,
             baseUrl = host,
             sessionCrypto = crypto,
+            // 2026-11-04 会话 9g 主根因修复：服务端每会话独立 X25519 密钥对——
+            // 重连重建会话（POST /api/v2/device-sessions）后以新 sessionId+新
+            // 服务端公钥重派会话密钥（本设备保留配对时同一 ephemeral 私钥，与
+            // 服务端 devices 表持久公钥对齐）。缺此步则重连后所有帧 decrypt_failed。
+            cryptoRebuilder = { newSessionId, serverPubHex ->
+                runCatching {
+                    SessionCrypto.derive(
+                        deviceEphemeralPrivate = ephemeralPair.private,
+                        serverX25519PublicKeyRaw = Hex.decode(serverPubHex),
+                        sessionId = newSessionId,
+                    )
+                }.getOrNull()
+            },
             journal = SqliteJournalStore(this),
             scheduler = Scheduler.shared(),
             clock = System::currentTimeMillis,
             registry = registry,
-            driverProvider = { AccessibilityUiDriver() },
+            driverProvider = { AccessibilityUiDriver(foregroundActivityContext = { this }) },
             pauseManager = NeverPausedPauseManager(),
             clientVersion = "0.1.0-lab-wm4",
             onEvent = { line -> log(line) },

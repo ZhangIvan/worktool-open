@@ -67,6 +67,40 @@ class CommandRunnerTest {
         assertEquals(0, world.driver.actionLog.size)
     }
 
+    // ---- 目标前置门（2026-11-03 会话 9 补位：企微拉起） ----
+
+    @Test
+    fun `目标前置门-拉起失败-FAILED且201010且零界面动作`() {
+        val world = SendTextWorld()
+        val refusing = object : UiDriver by world.driver {
+            override fun ensureTargetForeground(): Boolean = false
+        }
+        val report = CommandRunner(refusing, world.gate)
+            .execute(CommandIntent.SendText(world.targetRoom, world.content), registry)
+
+        assertEquals(ExecutionStatus.FAILED, report.status)
+        assertEquals(ExecutorErrorCodes.TARGET_APP_LAUNCH_FAILED, report.errorCode)
+        assertEquals("ensure-target-foreground", report.errorStepId)
+        assertEquals("拉起失败零界面动作", 0, world.driver.actionLog.size)
+    }
+
+    @Test
+    fun `目标前置门-干跑不经过（零副作用语义保持）`() {
+        val world = SendTextWorld()
+        var called = false
+        val tracking = object : UiDriver by world.driver {
+            override fun ensureTargetForeground(): Boolean {
+                called = true
+                return true
+            }
+        }
+        val dry = CommandRunner(tracking, world.gate)
+            .dryRun(CommandIntent.SendText(world.targetRoom, world.content), registry)
+
+        assertEquals(5, dry.plannedSteps.size)
+        assertTrue("dryRun 不得触发拉起（零副作用）", !called)
+    }
+
     // ---- 报告留痕 ----
 
     @Test

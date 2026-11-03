@@ -147,6 +147,20 @@ class CommandRunner(
             )
         }
 
+        // 目标前置门（2026-11-03 会话 9 补位）：企微不在前台时先拉起（对齐原 APK
+        // 行为）；无法达成（服务未连/未安装/超时）以 201010 失败——不再让计划
+        // 首步盲跑出 NODE_NOT_FOUND。dryRun 不经过本门（零副作用）。
+        if (!driver.ensureTargetForeground()) {
+            return report(
+                ExecutionStatus.FAILED,
+                ExecutorErrorCodes.TARGET_APP_LAUNCH_FAILED,
+                driver.lastTargetForegroundFailure ?: "企微未能拉起到前台（无障碍未连接/企微未安装/超时未就绪）",
+                "ensure-target-foreground",
+                plan,
+                emptyList(),
+            )
+        }
+
         val executed = ArrayList<StepRecord>(plan.steps.size)
         for ((index, step) in plan.steps.withIndex()) {
             // FR-52 安全断点：步边界重查暂停门（进行中序列执行至安全断点停止）。

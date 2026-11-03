@@ -59,6 +59,13 @@ object ExecutorErrorCodes {
     /** 二维码无效/过期（243/233 族；上游 201113 映射归 T3.2）。 */
     const val QR_CODE_INVALID = 201009
 
+    /**
+     * 目标应用（企微）无法拉起到前台（2026-11-03 会话 9 实证补位：执行器计划
+     * 首步即假定企微前台，原 APK 行为=收到指令拉起企微；缺此环节则一切 UI 指令
+     * 秒回 NODE_NOT_FOUND）。含：无障碍服务未连接 / 企微未安装 / 拉起后超时未就绪。
+     */
+    const val TARGET_APP_LAUNCH_FAILED = 201010
+
     /** 步骤内部异常（防御兜底，正常不应出现）。 */
     const val STEP_ERROR = 201099
 }

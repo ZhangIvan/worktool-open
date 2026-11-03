@@ -55,6 +55,22 @@ interface UiDriver {
     fun click(node: UiNode): Boolean
 
     /**
+     * 确保目标应用（企微）在前台且界面树可得（2026-11-03 会话 9 补位）：
+     * 已在前台→true；否则拉起并轮询至就绪。返回 false=无法达成（服务未连接/
+     * 企微未安装/超时）。JVM 默认 true（Fake 企微界面夹具假定就绪），真机由
+     * [cn.worktool.open.app.AccessibilityUiDriver] 覆写——执行计划首步由此
+     * 保障，不再隐含「企微已在前台」假设。
+     */
+    fun ensureTargetForeground(): Boolean = true
+
+    /**
+     * 最近一次 [ensureTargetForeground] 失败的具体原因（真机实现填充；
+     * JVM 默认 null → 报告用通用文案）。执行报告 errorReason 透传，供
+     * 服务端/取证区分「服务未连接/企微缺失/启动被拦/超时」分支。
+     */
+    val lastTargetForegroundFailure: String? get() = null
+
+    /**
      * 长按节点（消息长按菜单：回复/转发/撤回/多选入口，204/205/226/227/228 用）。
      *
      * 默认实现直发 LONG_CLICK 节点动作（与 core:accessibility AtomicOperations.longClick

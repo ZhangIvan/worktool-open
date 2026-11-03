@@ -131,6 +131,66 @@ class FacadeBranchTest {
     }
 
     @Test
+    fun `V2Session-重建会话解析新密钥材料并重派`() {
+        // 2026-11-04 会话 9g 主根因回归：服务端每会话独立 X25519 密钥对——
+        // rebuild 响应携带 sessionId+serverX25519PublicKey，端侧须交给
+        // cryptoRebuilder 重派密钥（缺此步重连帧全部 decrypt_failed）。
+        val server = MockWebServer()
+        server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
+        val base = "http://127.0.0.1:" + server.port
+        val newSessionId = "11111111-2222-3333-4444-555555555555"
+        val newPub = "ab".repeat(32)
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody(
+                """{"sessionId":"$newSessionId","wsPath":"/api/v2/device-sessions/$newSessionId","serverX25519PublicKey":"$newPub"}""",
+            ),
+        )
+        var rebuilt: Pair<String, String>? = null
+        val urlCapture = object : WsTransport, TransportListener by NoopListener {
+            var url = ""
+            override fun connect(url: String, listener: TransportListener) {
+                this.url = url
+                listener.onOpen()
+            }
+            override fun send(text: String) = true
+            override fun close(code: Int, reason: String) {}
+        }
+        val session = ProtocolClient.V2Session(
+            credentials = DeviceCredentials(
+                deviceId = "device-9f2c7b41",
+                deviceTokenHex = tokenHex,
+                tokenVersion = 1,
+                sessionId = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+                wsPath = null, // ← 无 wsPath：立即走 rebuild 路径
+            ),
+            baseUrl = base,
+            sessionCrypto = null,
+            journal = null,
+            scheduler = ManualScheduler(),
+            clock = { 1_793_613_600_000L },
+            capabilities = ProtocolClient.Capabilities("0.1.0", 2, listOf(203)),
+            onCommand = { _, _, _ -> },
+            onRejected = { },
+            transportFactory = object : WsTransport.Factory {
+                override fun create(): WsTransport = urlCapture
+            },
+            cryptoRebuilder = { sid, pub ->
+                rebuilt = sid to pub
+                null // 单测只验证解析+派发；真实重派由装配层实现
+            },
+        )
+        session.start()
+        assertEquals(
+            "$base/api/v2/device-sessions/$newSessionId",
+            urlCapture.url,
+        )
+        assertEquals(newSessionId to newPub, rebuilt)
+        assertEquals("/api/v2/device-sessions", server.takeRequest(2, TimeUnit.SECONDS)?.path)
+        session.stop()
+        server.shutdown()
+    }
+
+    @Test
     fun `V2Session-sendExecResult 无 journal 直发`() {
         val transport = FakeTransport()
         val scheduler = ManualScheduler()
