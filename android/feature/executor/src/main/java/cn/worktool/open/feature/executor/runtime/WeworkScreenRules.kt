@@ -206,7 +206,13 @@ object WeworkSelectorIds {
     /** 打卡页「上班打卡/下班打卡」按钮（222）。 */
     const val CLOCK_ACTION_BUTTON = "wework.clock.action_button"
 
-    /** 工作台「日历」入口（511）。 */
+    /**
+     * 工作台「日历」入口（511）。
+     * **形态差异实测（2026-11-05，session21/uitree-workbench-real.xml）**：当前测试
+     * 企业（未认证）工作台**无「日历」入口**——内部管理区仅有 打卡/审批/汇报/会议室，
+     * 客户联系区与智能办公区亦无日历。此形态下 511 首步即如实 NODE_NOT_FOUND
+     * （fail-closed 设计预期，不虚构）；「打卡」入口（222 用 CLOCK_ENTRY）已实证存在。
+     */
     const val CALENDAR_ENTRY = "wework.workbench.calendar_entry"
 
     /** 日历会议条目名称文本（511）。 */
