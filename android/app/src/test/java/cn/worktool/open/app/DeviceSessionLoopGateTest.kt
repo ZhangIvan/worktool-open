@@ -53,12 +53,17 @@ class DeviceSessionLoopGateTest {
 
     // ---- 可编排执行器（203）：失败 N 次后成功 / 恒成功 / 计数 ----
 
-    private class FlakyExecutor(val clicks: AtomicInteger, val failFirst: Int) : CommandExecutor {
+    private class FlakyExecutor(
+        val clicks: AtomicInteger,
+        val failFirst: Int,
+        /** 风险级可配（L0-only 重试护栏反例用；默认 L1=写指令形态） */
+        private val risk: cn.worktool.open.feature.executor.risk.RiskLevel = cn.worktool.open.feature.executor.risk.RiskLevel.L1,
+    ) : CommandExecutor {
         override val commandType: Int get() = MessageTypes.SEND_MESSAGE
-        override fun riskLevel(intent: CommandIntent) = cn.worktool.open.feature.executor.risk.RiskLevel.L1
+        override fun riskLevel(intent: CommandIntent) = risk
         override fun buildPlan(intent: CommandIntent): ExecutionPlan = ExecutionPlan(
             commandType = commandType,
-            riskLevel = cn.worktool.open.feature.executor.risk.RiskLevel.L1,
+            riskLevel = risk,
             target = (intent as CommandIntent.SendText).targetRoom,
             paramsSummary = "flaky",
             steps = listOf(
@@ -364,7 +369,7 @@ class DeviceSessionLoopGateTest {
     fun `重试-默认0-首错即停（历史语义保持）`() {
         val transport = FakeTransport()
         val clicks = AtomicInteger()
-        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 99))
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 99, risk = cn.worktool.open.feature.executor.risk.RiskLevel.L0))
         val loop = newLoop(
             transport, InMemoryJournalStore(), registry,
             pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),
@@ -379,10 +384,29 @@ class DeviceSessionLoopGateTest {
     }
 
     @Test
+    fun `重试护栏-L1写指令失败不自动重试（第三方二-2反例）`() {
+        val transport = FakeTransport()
+        val clicks = AtomicInteger()
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 2)) // 默认 L1
+        val events = mutableListOf<String>()
+        val loop = newLoop(
+            transport, InMemoryJournalStore(), registry,
+            pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),
+            events = events,
+            retryCount = { 5 }, // 即便配置 5 次重试，L1 也不重跑（防重复副作用）
+        )
+        loop.start()
+        transport.serverMessage(helloAckText(serverBuilder(now)))
+        transport.serverMessage(commandFrame(serverBuilder(now), "11111111-aaaa-4bbb-8ccc-00000000000a"))
+        assertEquals("L1 失败 = 只执行 1 次（不重试）", 1, clicks.get())
+        loop.stop()
+    }
+
+    @Test
     fun `重试-2次-第3次尝试成功`() {
         val transport = FakeTransport()
         val clicks = AtomicInteger()
-        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 2))
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 2, risk = cn.worktool.open.feature.executor.risk.RiskLevel.L0))
         val events = mutableListOf<String>()
         val loop = newLoop(
             transport, InMemoryJournalStore(), registry,
@@ -406,7 +430,7 @@ class DeviceSessionLoopGateTest {
     fun `重试-耗尽仍失败-终态失败回执`() {
         val transport = FakeTransport()
         val clicks = AtomicInteger()
-        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 99))
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 99, risk = cn.worktool.open.feature.executor.risk.RiskLevel.L0))
         val loop = newLoop(
             transport, InMemoryJournalStore(), registry,
             pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),

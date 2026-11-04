@@ -952,6 +952,10 @@ VALUES (?,?,?,0,?,'pending',?,?)`, commandID, kind, string(raw), at.UnixMilli(),
 }
 
 // DueOutbox 取到期待投递出站行（claim：仅 pending 且 next_attempt <= now）。
+// **部署约束（补充审计 2026-11-04）：非原子领取（普通 SELECT，无 FOR UPDATE/
+// 租约）——单进程单 worker 前提**（main.go 恰好单 goroutine Run）。多实例部署需
+// 先行改造：原子领取（UPDATE ... WHERE status='pending' 抢占）+ lease/fencing
+// （过期 worker 写入拒绝）——归 PG 存储车道（docs/11 §D T4.3）一并设计。
 func (db *DB) DueOutbox(ctx context.Context, now time.Time, limit int) ([]OutboxItem, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at

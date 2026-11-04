@@ -135,6 +135,10 @@ func VerifySign(secret string, tsMillis int64, body []byte, signatureHex string)
 	return hmac.Equal([]byte(Sign(secret, tsMillis, body)), []byte(signatureHex))
 }
 
+// errCallbackSecretMissing 投递启用前置未满足（空签名密钥）——哨兵错误：行保持
+// pending，部署侧配置 -callback-secret 后自动恢复（不终态化任何行）。
+var errCallbackSecretMissing = errors.New("api/outbox: 签名密钥未配置——拒绝投递（行保持 pending；经 -callback-secret 配置后恢复）")
+
 // Run 启动投递循环（周期 claim 待投递行 → POST → 状态机：delivered/retry/dead）。
 func (w *OutboxWorker) Run(ctx context.Context) error {
 	w.log.Printf("api/outbox: worker 启动 poll=%v global_url=%q", w.cfg.PollInterval, w.cfg.CallbackURL)
@@ -157,14 +161,25 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 // apifox 兼容面 CRUD 登记处）> 部署级全局 CallbackURL；两者皆空 → 行保持
 // pending（禁外网缺省形态不变）。
 func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
-	if w.cfg.CallbackURL == "" && !w.hasRobotCallbacks(ctx) {
-		if !w.warnedNoReceiver {
-			w.warnedNoReceiver = true
-			w.log.Printf("api/outbox: 无任何回调接收器（全局 URL 空且 openapi_callbacks 空）——行保持 pending（一次性告警）")
+	if w.cfg.CallbackURL == "" {
+		has, err := w.hasRobotCallbacks(ctx)
+		if err != nil {
+			return err // 查询失败：本轮放弃判定（行不动，错误可见）
 		}
-		return nil // 未配置任何接收器：行保持 pending（禁外网缺省形态）
+		if !has {
+			if !w.warnedNoReceiver {
+				w.warnedNoReceiver = true
+				w.log.Printf("api/outbox: 无任何回调接收器（全局 URL 空且 openapi_callbacks 空）——行保持 pending（一次性告警）")
+			}
+			return nil // 未配置任何接收器：行保持 pending（禁外网缺省形态）
+		}
 	}
 	w.warnedNoReceiver = false
+	// 补充审计（2026-11-04）：投递启用前置——签名密钥必须有效（空密钥=未鉴权
+	// 明文投递，拒绝；行保持 pending，部署侧经 -callback-secret 配置后自动恢复）。
+	if w.cfg.CallbackSecret == "" {
+		return errCallbackSecretMissing
+	}
 	now := w.now().UTC()
 	items, err := w.db.DueOutbox(ctx, now, 32)
 	if err != nil {
@@ -174,7 +189,12 @@ func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
 		w.log.Printf("api/outbox: claim %d 行待投递", len(items))
 	}
 	for _, it := range items {
-		target := w.callbackURLFor(ctx, it)
+		target, terr := w.callbackURLFor(ctx, it)
+		if terr != nil {
+			// 解析链查询失败（补充审计：不得静默终态化）——本行保持 pending 下轮重试
+			w.log.Printf("api/outbox: 行 id=%d kind=%s 目标解析失败（保持 pending）: %v", it.ID, it.Kind, terr)
+			continue
+		}
 		if target == "" {
 			// W-M6 回调闭环根因修复：无投递目标（该 kind 对应回调域未配置且无全局
 			// URL）→ **终态 skipped** 而非永久 pending——原语义下存量行按 id 序
@@ -199,13 +219,21 @@ func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
 
 // hasRobotCallbacks 是否存在任意 per-robot 回调绑定（全局 URL 未配置时的
 // 唯一投递来源探测；一次 COUNT 查询）。
-func (w *OutboxWorker) hasRobotCallbacks(ctx context.Context) bool {
+func (w *OutboxWorker) hasRobotCallbacks(ctx context.Context) (bool, error) {
 	rows, err := w.db.QueryDump(ctx, `SELECT COUNT(*) FROM openapi_callbacks`)
-	if err != nil || len(rows) != 1 {
-		return false // 表未建（老库未装配兼容面）→ 视为无绑定
+	if err != nil {
+		// 分流（补充审计）：缺表=老库结构性未装配兼容面（确定无绑定，非故障）；
+		// 其余查询失败≠未配置——上抛由 Run 记日志（行不动，不静默降级）。
+		if strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, fmt.Errorf("api/outbox: 接收器探测查询失败: %w", err)
+	}
+	if len(rows) != 1 {
+		return false, nil // 表未建（老库未装配兼容面）→ 视为无绑定
 	}
 	n, _ := strconv.Atoi(rows[0][0])
-	return n > 0
+	return n > 0, nil
 }
 
 // callbackURLFor 解析本行的投递目标（按 kind 分域；T3.5 事件面扩展）：
@@ -217,80 +245,111 @@ func (w *OutboxWorker) hasRobotCallbacks(ctx context.Context) bool {
 //     → type=11 消息回调绑定；
 //   - 各域绑定未命中或无 robot → 部署级全局 URL（可能为空 = 本行不投递，
 //     行保持 pending；E7 未配置=仅回执不推送的双轨语义）。
-func (w *OutboxWorker) callbackURLFor(ctx context.Context, it sqlite.OutboxItem) string {
+func (w *OutboxWorker) callbackURLFor(ctx context.Context, it sqlite.OutboxItem) (string, error) {
+	// 错误=解析链查询失败（调用方保持 pending 重试）；空串=查询成功且确定无绑定
+	// （skipped 终态语义只对后者成立——补充审计分流）。
 	switch it.Kind {
 	case "exec_result":
 		if it.CommandID == "" {
-			return w.cfg.CallbackURL
+			return w.cfg.CallbackURL, nil
 		}
-		robotID := w.robotIDForCommand(ctx, it.CommandID)
-		if u := w.robotCallbackURL(ctx, robotID, 1); u != "" {
-			return u
+		robotID, err := w.robotIDForCommand(ctx, it.CommandID)
+		if err != nil {
+			return "", err
 		}
-		return w.cfg.CallbackURL
+		if u, err := w.robotCallbackURL(ctx, robotID, 1); err == nil && u != "" {
+			return u, nil
+		} else if err != nil {
+			return "", err
+		}
+		return w.cfg.CallbackURL, nil
 	case outboxKindQueryResult:
 		if it.CommandID == "" {
-			return w.cfg.CallbackURL
+			return w.cfg.CallbackURL, nil
 		}
-		if u := w.robotCallbackURL(ctx, w.robotIDForCommand(ctx, it.CommandID), 11); u != "" {
-			return u
+		robotID, err := w.robotIDForCommand(ctx, it.CommandID)
+		if err != nil {
+			return "", err
 		}
-		return w.cfg.CallbackURL
+		if u, err := w.robotCallbackURL(ctx, robotID, 11); err == nil && u != "" {
+			return u, nil
+		} else if err != nil {
+			return "", err
+		}
+		return w.cfg.CallbackURL, nil
 	case outboxKindEventCallback, outboxKindImageCallback, outboxKindMessagePush:
 		// CommandID=管线目标键（"v1:<robotId>" 或 deviceId；无指令行可反查）
 		if it.CommandID == "" {
-			return w.cfg.CallbackURL
+			return w.cfg.CallbackURL, nil
 		}
-		if u := w.robotCallbackURL(ctx, w.robotIDForTarget(ctx, it.CommandID), 11); u != "" {
-			return u
+		robotID, err := w.robotIDForTarget(ctx, it.CommandID)
+		if err != nil {
+			return "", err
 		}
-		return w.cfg.CallbackURL
+		if u, err := w.robotCallbackURL(ctx, robotID, 11); err == nil && u != "" {
+			return u, nil
+		} else if err != nil {
+			return "", err
+		}
+		return w.cfg.CallbackURL, nil
 	default:
-		return w.cfg.CallbackURL
+		return w.cfg.CallbackURL, nil
 	}
 }
 
 // robotIDForCommand 由指令号反查 robot（commands.target 为 deviceId →
 // devices.robot_id，或 v1:robotId）；不可解析返回空。
-func (w *OutboxWorker) robotIDForCommand(ctx context.Context, commandID string) string {
+func (w *OutboxWorker) robotIDForCommand(ctx context.Context, commandID string) (string, error) {
 	rows, err := w.db.QueryDump(ctx, `SELECT target FROM commands WHERE command_id = ?`, commandID)
-	if err != nil || len(rows) != 1 {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("commandID→target 查询失败: %w", err)
+	}
+	if len(rows) != 1 {
+		return "", nil // 指令行缺失=确定不可路由（非错误）
 	}
 	return w.robotIDForTarget(ctx, rows[0][0])
 }
 
 // robotIDForTarget 由管线目标键解析 robot（"v1:<robotId>" 直读；v2 deviceId 反查
 // devices.robot_id）。
-func (w *OutboxWorker) robotIDForTarget(ctx context.Context, target string) string {
+func (w *OutboxWorker) robotIDForTarget(ctx context.Context, target string) (string, error) {
 	robotID := strings.TrimPrefix(target, "v1:")
 	if robotID != target {
-		return robotID
+		return robotID, nil
 	}
 	drows, derr := w.db.QueryDump(ctx, `SELECT COALESCE(robot_id,'') FROM devices WHERE device_id = ?`, target)
-	if derr != nil || len(drows) != 1 || drows[0][0] == "" {
-		return ""
+	if derr != nil {
+		return "", fmt.Errorf("deviceId→robot 反查失败: %w", derr)
 	}
-	return drows[0][0]
+	if len(drows) != 1 || drows[0][0] == "" {
+		return "", nil // 设备缺失/未绑=确定不可路由（非错误）
+	}
+	return drows[0][0], nil
 }
 
 // robotCallbackURL 取 robot 登记的指定 type 回调绑定 URL（未登记/空返回空串）。
-func (w *OutboxWorker) robotCallbackURL(ctx context.Context, robotID string, callbackType int) string {
+func (w *OutboxWorker) robotCallbackURL(ctx context.Context, robotID string, callbackType int) (string, error) {
 	if robotID == "" {
-		return ""
+		return "", nil
 	}
 	crows, cerr := w.db.QueryDump(ctx,
 		`SELECT callback_url FROM openapi_callbacks WHERE robot_id = ? AND type = ? LIMIT 1`, robotID, callbackType)
-	if cerr != nil || len(crows) != 1 || crows[0][0] == "" {
-		return ""
+	if cerr != nil {
+		return "", fmt.Errorf("robot→回调绑定查询失败: %w", cerr)
 	}
-	return crows[0][0]
+	if len(crows) != 1 || crows[0][0] == "" {
+		return "", nil // 未绑定该类型=确定无目标（非错误）
+	}
+	return crows[0][0], nil
 }
 
 func (w *OutboxWorker) deliverOne(ctx context.Context, it sqlite.OutboxItem, now time.Time) error {
-	target := w.callbackURLFor(ctx, it)
+	target, terr := w.callbackURLFor(ctx, it)
+	if terr != nil {
+		return terr // 解析链失败：保持 pending（调用方 DeliverDue 已记日志路径）
+	}
 	if target == "" {
-		return nil // 本行无投递目标（全局未配置且 robot 未绑定）：保持 pending
+		return nil // 本行无投递目标（确定无绑定且全局未配置）：保持 pending（DeliverDue 层已 skipped 化）
 	}
 	ts := now.UnixMilli()
 	// K3（T3.6）：exec_result 行分发 body 注入文档 ExecCallbackBean 双名别名
@@ -488,12 +547,23 @@ func (w *OutboxWorker) maybeReplyOnBehalf(ctx context.Context, it sqlite.OutboxI
 		drop("分发 body 无 groupName/receivedName（且指令无可回退 titleList），代回复无法定向会话")
 		return
 	}
-	// robot 反查（exec_result 行=指令号反查；message_push 行=管线目标键直读）
-	robotID := ""
+	// robot 反查（exec_result 行=指令号反查；message_push 行=管线目标键直读）；
+	// 查询失败=本轮放弃代回复（非确定不可路由，错误分流口径同投递链）。
+	var robotID string
 	if it.Kind == "exec_result" {
-		robotID = w.robotIDForCommand(ctx, it.CommandID)
+		r, err := w.robotIDForCommand(ctx, it.CommandID)
+		if err != nil {
+			drop("robot 反查查询失败（本轮放弃）")
+			return
+		}
+		robotID = r
 	} else {
-		robotID = w.robotIDForTarget(ctx, it.CommandID)
+		r, err := w.robotIDForTarget(ctx, it.CommandID)
+		if err != nil {
+			drop("robot 反查查询失败（本轮放弃）")
+			return
+		}
+		robotID = r
 	}
 	if robotID == "" {
 		drop("无法反查 robot（指令/目标键已不存在）")

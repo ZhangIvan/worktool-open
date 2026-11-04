@@ -342,11 +342,18 @@ class DeviceSessionLoop(
         // 采纳项（docs/16 #12）：失败重试可配（app 装配层整单重跑；0 = 首错即停）。
         // 重试不过暂停门捷径——每次重跑都经 CommandRunner 内置执行前/步间暂停门
         // （暂停优先于重试；PAUSED 时 report.status 已非 FAILED，不进本循环）。
-        val maxRetries = retryCountProvider?.invoke()?.coerceIn(0, MAX_RETRY_CLAMP) ?: 0
+        // **L0-only 护栏**（第三方审计二-2 采纳，2026-11-04）：自动重试仅限只读
+        // 指令——写指令部分执行后失败（如 203 已上屏后校验失败）整单重跑会重复
+        // 副作用；L1/L2 失败交由上游（服务端重发或人工）处置。
+        val maxRetries = if (report.riskLevel == cn.worktool.open.feature.executor.risk.RiskLevel.L0) {
+            retryCountProvider?.invoke()?.coerceIn(0, MAX_RETRY_CLAMP) ?: 0
+        } else {
+            0
+        }
         var attempt = 0
         while (report.status == ExecutionStatus.FAILED && attempt < maxRetries) {
             attempt += 1
-            onEvent?.invoke("commandId=$commandId 执行失败（code=${report.errorCode}）→ 第 $attempt/$maxRetries 次重试")
+            onEvent?.invoke("commandId=$commandId 执行失败（code=${report.errorCode}）→ 第 $attempt/$maxRetries 次重试（L0 只读护栏内）")
             report = runner.execute(normalized.intent, registry)
         }
         when (report.status) {
