@@ -96,15 +96,11 @@ func TestOpenAPIRegistryExclusionSetLocked(t *testing.T) {
 			t.Fatalf("type=%d 不得注册（排除集口径见注册表注释）", typ)
 		}
 	}
-	// 50x 段：501~509 注册；510~515 B3/W-M6 批未到排期
-	for typ := 501; typ <= 509; typ++ {
+	// 50x 段：501~515 注册（510~515 于 W-M6 正式批扩容，2026-11-04——fullBatch
+	// 执行器与设备端口已装配；注释见 openapi_registry.go W-M6 扩容段）
+	for typ := 501; typ <= 515; typ++ {
 		if !registered[typ] {
 			t.Fatalf("type=%d 须注册", typ)
-		}
-	}
-	for typ := 510; typ <= 515; typ++ {
-		if registered[typ] {
-			t.Fatalf("type=%d 属 B3/W-M6 批，未到排期不得预注册", typ)
 		}
 	}
 }

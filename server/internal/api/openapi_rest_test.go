@@ -88,8 +88,8 @@ func listOf(t *testing.T, env map[string]any) []any {
 // TestOpenAPIRegistryFullSurface 注册表全量断言：46 条（39 + 本批 7 条
 // 212/236/237/238/239/240/244），命名空间 intent 正确，无重复 type。
 func TestOpenAPIRegistryFullSurface(t *testing.T) {
-	if len(openapiCommandRegistry) != 46 {
-		t.Fatalf("注册表应 46 条，实际 %d", len(openapiCommandRegistry))
+	if len(openapiCommandRegistry) != 52 {
+		t.Fatalf("W-M6 扩容后注册表应 52 条，实际 %d", len(openapiCommandRegistry))
 	}
 	seen := map[int]bool{}
 	for _, it := range openapiCommandRegistry {

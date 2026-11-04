@@ -45,8 +45,11 @@ type openapiIntent struct {
 //   - 305：官方指令页已定案（api-370958736，清除指定客户端指令），但其语义由
 //     REST 等价面 DELETE /openapi/v1/robots/{id}/queue/{commandId} 承接
 //     （不作为可提交指令类型注册；305 入队无意义——取消对象是已入队指令）；
-//   - 306/307：队列查询经 GET …/queue、配置更新为端侧事件，均非提交面；
-//   - 510~515：B3/W-M6 批（docs/10 §B3），未到排期不预注册。
+//   - 306/307：队列查询经 GET …/queue、配置更新为端侧事件，均非提交面。
+//
+// W-M6 正式批扩容（2026-11-04）：+510~515（B3 运维/查询族，fullBatch 执行器已
+// 全量装配——设备侧 RuntimePortHub/DevicePortImpls 端口就绪；我方 REST 面超集，
+// 上游 apifox 无对应页不构成约束）。plannedActionNames 随本表自动派生 → L0。
 //
 // W-M5 apifox 全量面扩容（本批）：+212/236/238（B1 批）与 +237/239/240/244
 // （B3 批）。其中 212 此前经 AUD-WM3-09「刻意不注册」（端侧本地动作）；本轮按
@@ -72,6 +75,8 @@ var openapiCommandRegistry = []openapiIntent{
 	{501, "get_group_info"}, {502, "get_friend_info"}, {503, "get_my_info"},
 	{504, "get_group_qrcode"}, {505, "get_recent_list"}, {506, "get_corp_list"},
 	{507, "get_all_friend_info"}, {508, "get_all_group_info"}, {509, "get_local_file"},
+	{510, "upload_log_file"}, {511, "get_meeting_info"}, {512, "get_group_member_info"},
+	{513, "get_device_resource"}, {514, "get_log_snippet"}, {515, "get_group_name_info"},
 }
 
 // openapiIntentByType 建 type → intent 反查表（构造期一次）。
