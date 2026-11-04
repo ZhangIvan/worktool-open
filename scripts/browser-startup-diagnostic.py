@@ -332,6 +332,39 @@ def timeout_signal(*_):
     raise Failure('deadline')
 
 
+def preflight(h, checkpoint):
+    # Keep BOTH verified metadata gates ahead of EITHER version command.
+    checkpoint('browser-file')
+    h.verify_browser_binary(h.CHROMIUM_BINARY)
+    checkpoint('driver-file')
+    h.verify_browser_binary(h.CHROMEDRIVER_BINARY)
+    versions = []
+    for driver in (False, True):
+        checkpoint('driver-version-exec' if driver else 'browser-version-exec')
+        args = [h.CHROMEDRIVER_BINARY, '--version'] if driver else [h.CHROMIUM_BINARY, '--product-version']
+        try:
+            # Same subprocess.run parameters as the pinned PG helper, without
+            # collapsing distinct failure classes. Its timeout kills/waits the
+            # direct child only; version-command descendants are NOT verified
+            # by our registered-driver/profile cleanup. No process-tree rewrite.
+            result = subprocess.run(args, input=None, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, env=None, timeout=5)
+        except subprocess.TimeoutExpired:
+            raise Failure('timeout') from None
+        except OSError:
+            raise Failure('oserror') from None
+        if result.returncode != 0:
+            raise Failure('nonzero')
+        checkpoint('driver-version-parse' if driver else 'browser-version-parse')
+        try:
+            versions.append(h.browser_version(result.stdout, driver=driver))
+        except RuntimeError:
+            raise Failure('format') from None
+    checkpoint('version-match')
+    if versions[0].split(b'.')[:3] != versions[1].split(b'.')[:3]:
+        raise Failure('mismatch')
+
+
 def execute(action):
     started = time.monotonic()
     checkpoint = 'guard'
@@ -351,9 +384,10 @@ def execute(action):
         if action == 'cleanup':
             mark('cleanup')
         if action == 'run':
-            mark('preflight')
-            h.browser_preflight()
+            preflight(h, mark)
+            mark('port-check')
             require(not folder.exists() and not folder.is_symlink() and h.port_free(9515))
+            mark('private-state-init')
             folder.mkdir(mode=0o700)
             private_directory(folder)
             state = {'token': token, 'processes': []}
@@ -399,7 +433,8 @@ def execute(action):
                     outcome = Failure('cleanup')
         signal.alarm(0)
     result = {'status': 'FAIL' if outcome else 'PASS', 'checkpoint': checkpoint,
-              'elapsedMs': min(120000, max(0, int((time.monotonic() - started) * 1000))), 'cleanup': cleanup_result}
+              'elapsedMs': min(120000, max(0, int((time.monotonic() - started) * 1000))), 'cleanup': cleanup_result,
+              'cleanupScope': 'registered-driver-profile-only-version-descendants-unverified'}
     if outcome:
         result['code'] = outcome.code
         if outcome.http is not None:
@@ -410,9 +445,88 @@ def execute(action):
     return 1 if outcome else 0
 
 
+def preflight_selftest(h):
+    from types import SimpleNamespace
+    from contextlib import redirect_stdout
+    from io import StringIO
+    stages, calls, verified = [], [], []
+    valid = (b'145.0.7584.0\n', b'ChromeDriver 145.0.7584.1\n')
+    def metadata(binary):
+        verified.append(binary)
+        return binary
+    def subprocess_mock(args, **kwargs):
+        require(verified == [h.CHROMIUM_BINARY, h.CHROMEDRIVER_BINARY])
+        require(kwargs == {'input': None, 'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'env': None, 'timeout': 5})
+        index = len(calls)
+        require(args == ([h.CHROMIUM_BINARY, '--product-version'] if index == 0 else [h.CHROMEDRIVER_BINARY, '--version']))
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout=valid[index], stderr=b'PRIVATE-NOT-LOGGED')
+    with patch.object(h, 'verify_browser_binary', metadata), patch.object(subprocess, 'run', subprocess_mock):
+        preflight(h, stages.append)
+    require(stages == ['browser-file', 'driver-file', 'browser-version-exec', 'browser-version-parse',
+                       'driver-version-exec', 'driver-version-parse', 'version-match'] and len(calls) == 2)
+    # Either file failure must precede every invocation, service, or resource.
+    for binary in (h.CHROMIUM_BINARY, h.CHROMEDRIVER_BINARY):
+        stages.clear()
+        def bad_file(value):
+            if value == binary:
+                raise RuntimeError('PRIVATE-NOT-LOGGED')
+            return value
+        with patch.object(h, 'verify_browser_binary', bad_file), \
+             patch.object(subprocess, 'run', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('version before both file gates'))):
+            try:
+                preflight(h, stages.append)
+                raise AssertionError('invalid file accepted')
+            except RuntimeError:
+                require(stages[-1] == ('browser-file' if binary == h.CHROMIUM_BINARY else 'driver-file'))
+    for index in (0, 1):
+        for kind in ('timeout', 'oserror', 'nonzero', 'format'):
+            stages.clear(); calls.clear(); verified.clear()
+            def failed_run(args, **kwargs):
+                result = subprocess_mock(args, **kwargs)
+                if len(calls) - 1 == index:
+                    if kind == 'timeout':
+                        raise subprocess.TimeoutExpired(['PRIVATE-NOT-LOGGED'], 5, output=b'PRIVATE-NOT-LOGGED', stderr=b'PRIVATE-NOT-LOGGED')
+                    if kind == 'oserror':
+                        raise OSError('PRIVATE-NOT-LOGGED')
+                    return SimpleNamespace(returncode=7 if kind == 'nonzero' else 0,
+                                           stdout=b'PRIVATE-NOT-LOGGED', stderr=b'PRIVATE-NOT-LOGGED')
+                return result
+            with patch.object(h, 'verify_browser_binary', metadata), patch.object(subprocess, 'run', failed_run):
+                try:
+                    preflight(h, stages.append)
+                    raise AssertionError('version failure accepted')
+                except Failure as error:
+                    require(error.code == kind and 'PRIVATE-NOT-LOGGED' not in str(error))
+                    require(stages[-1] == ('driver-version-' if index else 'browser-version-') + ('parse' if kind == 'format' else 'exec'))
+                    require(len(calls) == index + 1)
+    # Run-level mismatch must stop before port probes, folder creation, or launch;
+    # successful cleanup must not conceal the failed preflight or claim a tree sweep.
+    stages.clear(); calls.clear(); verified.clear()
+    def mismatch(args, **kwargs):
+        result = subprocess_mock(args, **kwargs)
+        if len(calls) == 2:
+            result.stdout = b'ChromeDriver 146.0.7584.0\n'
+        return result
+    clear = {'sessionDeleted': False, 'processesStopped': True, 'profileProcessesGone': True, 'portFree': True, 'privateFilesGone': True}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('resource action reached')
+    with patch.object(h, 'verify_browser_binary', metadata), patch.object(subprocess, 'run', mismatch), \
+         patch.object(h, 'port_free', forbidden), patch.object(Path, 'mkdir', forbidden), \
+         patch.object(signal, 'signal', lambda *a: None), patch.object(signal, 'alarm', lambda *a: None), \
+         patch.dict(globals(), identity=lambda: ('1-1', Path('/synthetic-private')), harness=lambda: h,
+                    cleanup=lambda *_: dict(clear), launch_driver=forbidden), redirect_stdout(StringIO()) as output:
+        status = execute('run')
+    result = json.loads(output.getvalue())
+    require(status == 1 and result['checkpoint'] == 'version-match' and result['code'] == 'mismatch'
+            and result['cleanupScope'] == 'registered-driver-profile-only-version-descendants-unverified'
+            and 'PRIVATE-NOT-LOGGED' not in output.getvalue())
+
+
 def selftest():
     from types import SimpleNamespace
     h = harness()  # Verified source import only; never invoke its run/cleanup.
+    preflight_selftest(h)
     require(decode(200, b'{"value":{"sessionId":"synthetic"}}') == {'sessionId': 'synthetic'})
     for status, raw, expected in [(500, b'{"value":{"error":"session not created","message":"SECRET"}}', 'webdriver'),
                                   (503, b'{"value":null}', 'http'), (200, b'not-json-SECRET', 'malformed-response'),
@@ -487,14 +601,14 @@ def selftest():
     from io import StringIO
     complete_cleanup = {'sessionDeleted': False, 'processesStopped': True, 'profileProcessesGone': True,
                         'portFree': True, 'privateFilesGone': True}
-    for case in ('success', 'create-timeout', 'driver-exited', 'http-error'):
+    for case in ('success', 'create-timeout', 'driver-exited', 'http-error', 'port-check', 'private-state-init'):
         cleanup_calls = []
         launch_calls = []
         def fake_start(_h, _folder, _state):
             launch_calls.append([_h.CHROMEDRIVER_BINARY, '--port=9515', '--log-level=OFF'])
             return SimpleNamespace(poll=lambda: 7 if case == 'driver-exited' else None), item
         runtime = SimpleNamespace(CHROMIUM_BINARY=h.CHROMIUM_BINARY, CHROMEDRIVER_BINARY=h.CHROMEDRIVER_BINARY,
-                                  browser_preflight=lambda: None, port_free=lambda _: True, record=lambda *_: None,
+                                  browser_preflight=lambda: None, port_free=lambda _: case != 'port-check', record=lambda *_: None,
                                   start=fake_start)
         def transport(_h, method, path, body=None, timeout=5):
             if method == 'GET':
@@ -506,20 +620,26 @@ def selftest():
                     return decode(500, b'{"value":{"error":"session not created","message":"SECRET"}}')
                 return {'sessionId': 'synthetic'}
             return None
+        def mkdir_mock(*args, **kwargs):
+            if case == 'private-state-init':
+                raise OSError('PRIVATE-NOT-LOGGED')
         def cleaned(*_):
             cleanup_calls.append(True)
             return dict(complete_cleanup)
         with patch.dict(globals(), identity=lambda: ('1-1', folder), harness=lambda: runtime,
-                        private_directory=lambda _: None, request=transport, cleanup=cleaned, verify_listeners=lambda *_: None, launch_driver=fake_start), \
+                        private_directory=lambda _: None, request=transport, cleanup=cleaned, verify_listeners=lambda *_: None, launch_driver=fake_start, preflight=lambda *_: None), \
              patch.object(Path, 'exists', lambda _: False), patch.object(Path, 'is_symlink', lambda _: False), \
-             patch.object(Path, 'mkdir', lambda *a, **kw: None), patch.object(signal, 'signal', lambda *a: None), \
+             patch.object(Path, 'mkdir', mkdir_mock), patch.object(signal, 'signal', lambda *a: None), \
              patch.object(signal, 'alarm', lambda *a: None), redirect_stdout(StringIO()) as output:
             code = execute('run')
-        require(launch_calls == [[h.CHROMEDRIVER_BINARY, '--port=9515', '--log-level=OFF']])
-        require(not any(arg.startswith(('--allowed-ips', '--whitelisted-ips')) for arg in launch_calls[0]))
+        expected_launches = [] if case in ('port-check', 'private-state-init') else [[h.CHROMEDRIVER_BINARY, '--port=9515', '--log-level=OFF']]
+        require(launch_calls == expected_launches)
+        require(not any(arg.startswith(('--allowed-ips', '--whitelisted-ips')) for args in launch_calls for arg in args))
         result = json.loads(output.getvalue())
         require(code == (0 if case == 'success' else 1) and cleanup_calls == [True]
                 and result['cleanup']['privateFilesGone'] and 'SECRET' not in output.getvalue())
+        if case in ('port-check', 'private-state-init'):
+            require(result['checkpoint'] == case and 'PRIVATE-NOT-LOGGED' not in output.getvalue())
         if case == 'create-timeout':
             require(result['checkpoint'] == 'session-create' and result['code'] == 'timeout')
         if case == 'driver-exited':
