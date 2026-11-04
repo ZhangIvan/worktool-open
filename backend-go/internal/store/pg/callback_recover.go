@@ -5,6 +5,7 @@ import (
 	"errors"
 	cb "github.com/ZhangIvan/worktool-open/backend-go/internal/callback"
 	"github.com/jackc/pgx/v5"
+	"sort"
 	"time"
 )
 
@@ -12,12 +13,21 @@ import (
 // external generation. It neither sends nor automatically schedules a daemon.
 // Cross-generation/PITR recovery is deliberately unavailable.
 func (s *CallbackStore) RecoverExpired(ctx context.Context, tenant, id string) error {
+	_, err := s.recoverExpired(ctx, tenant, id, false)
+	return err
+}
+
+// recoverExpired preserves explicit recovery semantics. The selector may skip a
+// clean busy scope or a row whose successor is no longer expired; neither counts
+// as recovery. Generation and cleanup uncertainty always remain errors.
+func (s *CallbackStore) recoverExpired(ctx context.Context, tenant, id string, skip bool) (bool, error) {
 	if ctx == nil || ctx.Err() != nil || !asciiIdentifier(tenant) || !asciiIdentifier(id) {
-		return cb.ErrStale
+		return false, cb.ErrStale
 	}
 	if e := s.gate(ctx); e != nil {
-		return cb.ErrStale
+		return false, cb.ErrStale
 	}
+	recovered := false
 	e := s.runner.Run(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(ctx context.Context, tx pgx.Tx) error {
 		var dest string
 		if e := tx.QueryRow(ctx, callbackDestinationHint, tenant, id).Scan(&dest); e != nil {
@@ -26,12 +36,15 @@ func (s *CallbackStore) RecoverExpired(ctx context.Context, tenant, id string) e
 		if _, ok := s.policies[tenant+"\x00"+dest]; !ok {
 			return cb.ErrDenied
 		}
-		if e := s.lockScopes(ctx, tx, tenant, dest); e != nil {
+		if e := s.lockScopeMode(ctx, tx, tenant, dest, skip); e != nil {
 			return e
 		}
 		d, e := callbackReadLocked(ctx, tx, tenant, id)
 		if e != nil {
 			return e
+		}
+		if d.destination != dest {
+			return cb.ErrStale
 		}
 		if d.state != "leased" {
 			return nil
@@ -85,6 +98,9 @@ func (s *CallbackStore) RecoverExpired(ctx context.Context, tenant, id string) e
 			return cb.ErrStale
 		}
 		if now.Before(*d.lease) {
+			if skip {
+				return nil
+			}
 			return cb.ErrStale
 		}
 		outcome, code := "lease_lost", "LEASE_EXPIRED_BEFORE_PREPARE"
@@ -119,10 +135,90 @@ func (s *CallbackStore) RecoverExpired(ctx context.Context, tenant, id string) e
 				return cb.ErrStale
 			}
 		}
-		return auditGateway(ctx, tx, tenant, s.runtime.instance, "callback.recovered", id, code, now.UnixMilli())
+		if e = auditGateway(ctx, tx, tenant, s.runtime.instance, "callback.recovered", id, code, now.UnixMilli()); e != nil {
+			return e
+		}
+		recovered = true
+		return nil
 	})
-	if errors.Is(e, pgx.ErrNoRows) {
-		return cb.ErrStale
+	// Only the exact clean rollback sentinel permits continuing past contention.
+	if skip && e == errCallbackCandidateBusy {
+		return false, nil
 	}
-	return callbackStoreError(e)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return false, cb.ErrStale
+	}
+	if e != nil {
+		return false, callbackStoreError(e)
+	}
+	return recovered, nil
+}
+
+// Discovery holds no row locks and grants no authority. At most one candidate
+// per copied policy is returned (32 total); oldest expiry first avoids a hot
+// destination hiding another destination behind its backlog. Disabled/revoked
+// scopes may still release old issued attempts, just as explicit recovery does.
+// The existing partial leased-destination index supports each bounded lookup.
+const callbackExpiredCandidates = `SELECT o.tenant,o.destination_id,o.delivery_id
+ FROM unnest($1::text[],$2::text[]) p(tenant,dest)
+ JOIN LATERAL (SELECT x.tenant,x.destination_id,x.delivery_id,x.lease_until FROM callback_outbox x
+ WHERE x.tenant=p.tenant AND x.destination_id=p.dest AND x.state='leased'
+ AND x.lease_recovery_epoch=$3 AND x.lease_until<=clock_timestamp()
+ ORDER BY x.lease_until,x.delivery_id COLLATE "C" LIMIT 1) o ON true
+ ORDER BY o.lease_until,o.tenant COLLATE "C",o.destination_id COLLATE "C",o.delivery_id COLLATE "C" LIMIT 32`
+
+var _ cb.RecoveryStore = (*CallbackStore)(nil)
+
+// RecoverOneExpired is the typed lifecycle adapter. A committed settlement is
+// the only true result. Selection and mutation share the caller's budget, but
+// each Runner may additionally perform its independent bounded cleanup.
+func (s *CallbackStore) RecoverOneExpired(ctx context.Context) (bool, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return false, cb.ErrStale
+	}
+	if e := s.gate(ctx); e != nil {
+		return false, cb.ErrStale
+	}
+	keys := make([]string, 0, len(s.policies))
+	for k := range s.policies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	tenants, dests := make([]string, 0, len(keys)), make([]string, 0, len(keys))
+	for _, k := range keys {
+		p := s.policies[k]
+		tenants = append(tenants, p.Binding.Tenant)
+		dests = append(dests, p.Binding.Destination)
+	}
+	candidates := make([]callbackCandidate, 0, len(keys))
+	e := s.runner.Run(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly}, func(ctx context.Context, tx pgx.Tx) error {
+		rows, e := tx.Query(ctx, callbackExpiredCandidates, tenants, dests, s.runtime.epoch)
+		if e != nil {
+			return e
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c callbackCandidate
+			if e = rows.Scan(&c.tenant, &c.dest, &c.id); e != nil {
+				return e
+			}
+			if _, ok := s.policies[c.tenant+"\x00"+c.dest]; !ok || !asciiIdentifier(c.id) || len(candidates) >= len(keys) {
+				return cb.ErrDenied
+			}
+			candidates = append(candidates, c)
+		}
+		return rows.Err()
+	})
+	if e != nil {
+		return false, callbackStoreError(e)
+	}
+	for _, c := range candidates {
+		// The method rechecks gate, scope/runtime, immutable graph, same epoch,
+		// exact fences/slots and database expiry under the established lock order.
+		recovered, e := s.recoverExpired(ctx, c.tenant, c.id, true)
+		if e != nil || recovered {
+			return recovered, e
+		}
+	}
+	return false, nil
 }

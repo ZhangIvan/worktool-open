@@ -66,6 +66,7 @@ type gwFixture struct {
 	client           *http.Client
 	schema, appToken string
 	commitFault      *atomic.Bool
+	retainStorage    func() // irreversible cleanup veto for other live fixture workers
 }
 
 // commitFault is a deterministic driver-error injection AFTER a real committed
@@ -153,9 +154,10 @@ func newGWWithStoreConstructor(t *testing.T, factory func(*pg.Runner, func(conte
 	}
 	qs := pgx.Identifier{schema}.Sanitize()
 	storageSafeToClose := true
+	storageRetained := false
 	t.Cleanup(func() {
-		if !storageSafeToClose {
-			t.Error("storage cleanup withheld: live gateway; isolated CI must terminate its resource")
+		if !storageSafeToClose || storageRetained {
+			t.Error("storage cleanup withheld: live fixture worker; isolated CI must terminate its resource")
 			return
 		}
 		cleanup, c := context.WithTimeout(context.Background(), 5*time.Second)
@@ -218,7 +220,7 @@ func newGWWithStoreConstructor(t *testing.T, factory func(*pg.Runner, func(conte
 		t.Fatal("pool")
 	}
 	t.Cleanup(func() {
-		if storageSafeToClose {
+		if storageSafeToClose && !storageRetained {
 			pool.Close()
 		}
 	})
@@ -272,7 +274,7 @@ func newGWWithStoreConstructor(t *testing.T, factory func(*pg.Runner, func(conte
 			t.Error("late cleanup DB failures")
 		}
 	})
-	return &gwFixture{ctx, owner, pool, store, controller, server, client, schema, token, fault}
+	return &gwFixture{ctx, owner, pool, store, controller, server, client, schema, token, fault, func() { storageRetained = true }}
 }
 func rollback(_ context.Context, tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

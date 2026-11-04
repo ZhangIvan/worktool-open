@@ -331,6 +331,7 @@ func TestPGCallbackCB03(t *testing.T) {
 			}
 		})
 	}
+	callbackWorkerIntegrationCases(t)
 }
 func TestPGCallbackCB04(t *testing.T) {
 	gatewayGate(t)

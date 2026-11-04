@@ -2,8 +2,10 @@
 
 The default gateway remains 1.0 synthetic/F0. Only trusted explicit
 `NewSyntheticCallbackGatewayStore` composition enables frozen subscriptions.
-There is no HTTP switch, automatic worker, production key provider or default
-external endpoint. No Android/WeCom capability is added.
+There is no HTTP switch, registered worker, production key provider or default
+external endpoint. The optional [worker lifecycle](worker_lifecycle.md) requires
+explicit trusted injected composition and is disabled by default. No
+Android/WeCom capability is added.
 
 The candidate connects real components in this order:
 HTTP admission → existing WS synthetic executor → immutable result and callback
@@ -15,8 +17,9 @@ normal TLS hostname verification, no proxies/redirects/connection reuse, a share
 
 PostgreSQL scheduling uses shared scope tokens/slots, monotonic delivery and slot
 fences, current authorization checks and one-shot prepared markers. Failed or
-uncertain commits provide no new send permission. Expired leases require an
-explicit bounded RecoverExpired call; no background daemon is installed.
+uncertain commits provide no new send permission. Expired leases use bounded
+RecoverExpired or the optional worker RecoverOneExpired adapter; no background
+daemon is installed at startup.
 Complete settles an issued attempt without treating later app revocation as
 proof the receiver did not already process it. Quota is internal capacity,
 never monetary billing. Delivery completion does not release retention quota.
@@ -45,12 +48,13 @@ Targeted pure/race tests cover projection, transport request policy, copied
 configuration, deadline mapping and existing sender/completion logic. They do
 not execute PostgreSQL SQL or prove network behavior.
 
-Baseline `d1e334c75aabc8eb313d97441637975e1dd0e4a0` passed all 43 real
-PostgreSQL groups, including CB01–CB05, at 2026-11-04 03:28 UTC in
+Phase A passed all 43 real PostgreSQL groups, including migration 0009 children,
+in [run 41769449828](https://github.com/ZhangIvan/worktool-open/actions/runs/41769449828).
+That is execution evidence for immutable destination identity, not the later
+worker lifecycle and selection SQL in this working slice. The new CB03 worker
+children remain **NOT_RUN**. The earlier baseline run remains available at
 [run 41767151007](https://github.com/ZhangIvan/worktool-open/actions/runs/41767151007).
-That isolated run used 2 CPU / 1 GiB and three confirmed cleanup checks. It is
-baseline evidence, **not** execution evidence for phase A migration 0009 or its
-new negative cases, which remain **NOT_RUN**. The five baseline callback groups are:
+The five baseline callback groups are:
 - CB01: admission/WS/result/ACK/outbox/receiver HMAC/public result query, duplicate
   device result, one delivered callback and exact slot release.
 - CB02: competing claims, prepared marker once, completion replay, app revocation
@@ -70,6 +74,6 @@ random per test and cleared; no real URL or account is accessed.
 
 Production remains blocked on independent review and actual integration of new changes,
 complete configuration-content identity and writer composition, production secret and UTC
-health providers, egress enforcement, restart/retention operations and measured
+health providers, egress enforcement, cross-generation recovery/retention operations and measured
 capacity. A bounded fixed policy set is not an unrestricted scheduler. The old
 38-group result remains evidence for the old baseline, not this candidate.

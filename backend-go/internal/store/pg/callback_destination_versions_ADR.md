@@ -1,11 +1,11 @@
 # Phase A: immutable callback destination identity
 
-Status: local candidate, not deployed. PostgreSQL cases are authored but **NOT_RUN**
-for this change. Baseline `d1e334c75aabc8eb313d97441637975e1dd0e4a0` passed 43 real PG
-groups (including CB01–CB05) at 2026-11-04 03:28 UTC in
-[run 41767151007](https://github.com/ZhangIvan/worktool-open/actions/runs/41767151007),
-using 2 CPU / 1 GiB with three cleanup confirmations. That does not validate this
-new migration or the added SQL cases.
+Status: phase A remains a nondeployed candidate. Its migration 0009 and added
+negative cases passed in the 43-group real-PG
+[run 41769449828](https://github.com/ZhangIvan/worktool-open/actions/runs/41769449828).
+This replaces the earlier prepublication NOT_RUN status. New worker-lifecycle
+selection/recovery cases are separate and remain **NOT_RUN**; see the
+[lifecycle boundary](../../callback/worker_lifecycle.md).
 
 ## Migration prerequisite, not an automatic compatible upgrade
 
@@ -103,7 +103,9 @@ Store configuration still permits at most 32 policies and one version per
 (tenant, destination); Sender retains its 64-policy bound and fanout remains at
 most four. No multi-version scheduler/draining, new sender, key provider, listener,
 admin API or background daemon is installed. Default production sending remains
-disabled. Runtime composition/reaper orchestration, retention/GC, shared-endpoint
+disabled. Optional default-off same-epoch worker orchestration is described
+separately;
+startup activation, cross-generation recovery, retention/GC, shared-endpoint
 policy, retry budgets and production egress/UTC health remain later work.
 
 ## Verification
@@ -117,9 +119,10 @@ Named cases under existing `TestPGIntegrationSchemaAndDeviceBindings` cover exac
 trigger/FK errors, rotation preserving outbox identity and allowing new
 subscriptions, terminal/idempotent revoke, version-specific revoke, temp-schema
 shadowing, version share-lock conflict, config-only backfill and legacy-history
-migration refusal with row preservation. They inherit the original strict gate
-and are locally **NOT_RUN**. The 43 top-level CI selector, diagnostic harness and
-script hash chain are unchanged. The new subcase names are not added to the
-redacted diagnostic name allowlist; a future approved CI run still propagates any
-failure through its existing parent group but may not identify the new child in
-its sanitized report. No database or listener was started for this phase.
+migration refusal with row preservation. They inherit the original strict gate and passed in run 41769449828.
+They were not executed in the local worker-lifecycle implementation pass. The
+43 top-level CI selector, diagnostic harness and script hash chain are unchanged
+by this worker slice. Phase-A children and the new CB03 worker children are not
+individually allowlisted in the sanitized report; failures still propagate
+through their existing parent groups. No database or listener was started in the
+local worker-lifecycle implementation pass.
