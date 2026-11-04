@@ -26,14 +26,14 @@ class RichChatFixture(
 ) {
     val titleNode: FakeExecutorNode = fakeNode(
         text = title,
-        resId = "com.tencent.wework:id/chat_title",
+        resId = "com.tencent.wework:id/o6j",
         cls = TEXT_VIEW,
         clickable = true,
     )
 
     /** 气泡正文节点（长按/定位锚点）。 */
     val bubbleNodes: List<FakeExecutorNode> = bubbles.map { (sender, content) ->
-        fakeNode(text = content, resId = "com.tencent.wework:id/chat_message_text", cls = TEXT_VIEW, clickable = true)
+        fakeNode(text = content, resId = "com.tencent.wework:id/ith", cls = TEXT_VIEW, clickable = true)
     }
 
     private val messageList: FakeExecutorNode = fakeNode(cls = VIEW_GROUP, scrollable = true) {
@@ -49,7 +49,7 @@ class RichChatFixture(
 
     val inputNode: FakeExecutorNode? =
         if (withInput) {
-            fakeNode(resId = "com.tencent.wework:id/chat_input_edit", cls = EDIT_TEXT, editable = true, clickable = true)
+            fakeNode(resId = "com.tencent.wework:id/iu5", cls = EDIT_TEXT, editable = true, clickable = true)
         } else {
             null
         }
@@ -129,7 +129,7 @@ class MultiSelectFixture(
     modes: Set<String> = setOf("逐条转发", "合并转发"),
 ) {
     val messageNodes: Map<String, FakeExecutorNode> = messages.associateWith {
-        fakeNode(text = it, resId = "com.tencent.wework:id/chat_message_text", cls = TEXT_VIEW, clickable = true)
+        fakeNode(text = it, resId = "com.tencent.wework:id/ith", cls = TEXT_VIEW, clickable = true)
     }
 
     val modeNodes: Map<String, FakeExecutorNode> = modes.associateWith {
@@ -331,7 +331,7 @@ class AddFriendPageFixture(
     withSend: Boolean = true,
 ) {
     val searchInput: FakeExecutorNode = fakeNode(
-        resId = "com.tencent.wework:id/search_input",
+        resId = "com.tencent.wework:id/m0f",
         cls = EDIT_TEXT,
         editable = true,
         clickable = true,
@@ -734,9 +734,15 @@ class GroupDetailFixture(
     announcement: String = "（暂无公告）",
     members: List<String> = emptyList(),
 ) {
+    // 真机校准（2026-11-04）：群设置页「群聊名称」行=标签 hn1 + 值 lm8（sibling 取值）。
     val titleNode: FakeExecutorNode = fakeNode(
         text = groupName,
-        resId = "com.tencent.wework:id/group_settings_title",
+        resId = "com.tencent.wework:id/lm8",
+        cls = TEXT_VIEW,
+    )
+    val titleLabelNode: FakeExecutorNode = fakeNode(
+        text = "群聊名称",
+        resId = "com.tencent.wework:id/hn1",
         cls = TEXT_VIEW,
     )
     val ownerNode: FakeExecutorNode = fakeNode(text = owner, resId = "com.tencent.wework:id/group_owner_value", cls = TEXT_VIEW)
@@ -757,6 +763,7 @@ class GroupDetailFixture(
     val screen: FakeScreen = FakeScreen(
         name = "group-detail-$groupName",
         root = fakeNode(cls = VIEW_GROUP) {
+            add(titleLabelNode)
             add(titleNode)
             add(ownerNode)
             add(announcementNode)

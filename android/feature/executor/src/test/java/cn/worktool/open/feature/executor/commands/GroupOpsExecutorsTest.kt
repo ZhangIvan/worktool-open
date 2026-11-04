@@ -192,6 +192,7 @@ class GroupOpsExecutorsTest {
         )
         val settings = GroupSettingsFixture(groupName = "技术交流群", members = listOf("张三"))
         // 群设置页挂扩展读取位（群名标题/群主/公告/成员列表）
+        detail.titleLabelNode.let { settings.screen.root.add(it) }
         detail.titleNode.let { settings.screen.root.add(it) }
         detail.ownerNode.let { settings.screen.root.add(it) }
         detail.announcementNode.let { settings.screen.root.add(it) }

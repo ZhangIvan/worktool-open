@@ -78,7 +78,7 @@ object RuleConfigParser {
             ?: throw RuleConfigException("缺少对象字段 'match'")
         val match = parseMatch(matchObj)
         if (match.isEmpty && o.array("chain") == null) {
-            throw RuleConfigException("'match' 至少需要一个条件（text/textContains/resourceId/className）")
+            throw RuleConfigException("'match' 至少需要一个条件（text/textContains/resourceId/className/contentDesc）")
         }
         val chainArr = o.array("chain")
         val chain = chainArr?.items?.mapIndexed { i, v ->
@@ -99,12 +99,19 @@ object RuleConfigParser {
         val textContains = o.string("textContains")
         val resourceId = o.string("resourceId")
         val className = o.string("className")
-        for (k in listOf("text", "textContains", "resourceId", "className")) {
+        val contentDesc = o.string("contentDesc")
+        for (k in listOf("text", "textContains", "resourceId", "className", "contentDesc")) {
             if (o.fields[k] != null && o.fields[k] !is JsonValue.JsonString) {
                 throw RuleConfigException("match.$k 必须是字符串")
             }
         }
-        return MatchSpec(text, textContains, resourceId, className)
+        return MatchSpec(
+            text = text,
+            textContains = textContains,
+            resourceId = resourceId,
+            className = className,
+            contentDesc = contentDesc,
+        )
     }
 
     private fun parseChainStep(o: JsonValue.JsonObject): ChainStep {
@@ -151,7 +158,7 @@ object RuleConfigParser {
         // 已知键集合按调用上下文宽松校验：解析器逐字段取值，此处只拦「完全不被识别」的键
         val known = setOf(
             "version", "selectors", "id", "match", "chain",
-            "text", "textContains", "resourceId", "className",
+            "text", "textContains", "resourceId", "className", "contentDesc",
             "rel", "index", "offset",
         )
         val bad = unknown.filter { it !in known }

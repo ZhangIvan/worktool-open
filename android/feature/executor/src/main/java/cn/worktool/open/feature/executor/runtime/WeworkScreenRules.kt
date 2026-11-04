@@ -3,6 +3,8 @@
  */
 package cn.worktool.open.feature.executor.runtime
 
+import cn.worktool.open.core.accessibility.rules.ChainRelation
+import cn.worktool.open.core.accessibility.rules.ChainStep
 import cn.worktool.open.core.accessibility.rules.MatchSpec
 import cn.worktool.open.core.accessibility.rules.RuleConfig
 import cn.worktool.open.core.accessibility.rules.RuleConfigException
@@ -12,16 +14,26 @@ import cn.worktool.open.core.accessibility.tree.UiNode
 
 /** 企微界面选择器 ID（执行器引用键；值可被外置规则配置覆盖，docs/01 R1 缓解）。 */
 object WeworkSelectorIds {
-    /** 会话列表项名称文本（203/207/225 定位目标会话）。 */
+    /**
+     * 会话列表项名称文本（203/207/225 定位目标会话；校准 2026-11-04：TextView `ibi`，
+     * 与底部 Tab 标签共用 ID——运行期定位先走 findByText 精确文本，ID 仅回退且带
+     * text 复核（CommonSteps.openConversation），误中底栏无副作用）。
+     */
     const val CONVERSATION_ITEM_NAME = "wework.conversation.item_name"
 
     /** 主界面底部「消息」Tab（501 会话定位入口，对齐原版 goHome）。 */
     const val MESSAGE_TAB = "wework.nav.message_tab"
 
-    /** 聊天页标题（点击进入群设置）。 */
+    /** 聊天页标题（校准 2026-11-04：标题栏 TextView `o6j`，text=「群名(N)」）。 */
     const val CHAT_TITLE = "wework.chat.title"
 
-    /** 聊天页输入框。 */
+    /**
+     * 聊天页右上「更多」入口（校准 2026-11-04：desc=「更多，按钮」，`o70`）。
+     * 群设置导航真入口——点标题 `o6j` 真机实测**不进**设置页，须点「更多」。
+     */
+    const val CHAT_MORE_ENTRY = "wework.chat.more"
+
+    /** 聊天页输入框（校准 2026-11-04：EditText `iu5`，hint=「发消息或按住...」）。 */
     const val CHAT_INPUT = "wework.chat.input"
 
     /** 聊天页发送按钮。 */
@@ -81,10 +93,10 @@ object WeworkSelectorIds {
     /** 群聊列表项群名文本（501 分页读取）。 */
     const val GROUP_LIST_ITEM = "wework.contacts.group_list_item"
 
-    /** 通讯录联系人列表滚动容器（502 分页读取）。 */
+    /** 通讯录联系人列表滚动容器（校准 2026-11-04：RecyclerView `l_8`）。 */
     const val CONTACTS_LIST_CONTAINER = "wework.contacts.list_container"
 
-    /** 通讯录联系人条目名称文本（502 分页读取）。 */
+    /** 通讯录联系人条目名称文本（校准 2026-11-04：TextView `hlo`）。 */
     const val CONTACT_LIST_ITEM = "wework.contacts.contact_item"
 
     // ---- 对等计划扩展批（docs/10 §B B1~B4）选择器（占位默认同上口径，待真机校准） ----
@@ -116,10 +128,10 @@ object WeworkSelectorIds {
     /** 转发/多选确认（发送）按钮。 */
     const val RELAY_PICKER_CONFIRM = "wework.relay.picker_confirm"
 
-    /** 消息页顶部搜索入口（219/244/512/515/213/234 搜索定位）。 */
+    /** 消息页顶部搜索入口（校准 2026-11-04：纯 desc 节点「搜索，按钮」，`o7a`）。 */
     const val HOME_SEARCH_ENTRY = "wework.home.search_entry"
 
-    /** 搜索页输入框。 */
+    /** 搜索页输入框（校准 2026-11-04：SearchEditText `m0f`，desc=「搜索，搜索框，空白」）。 */
     const val SEARCH_INPUT = "wework.search.input"
 
     /** 搜索结果条目名称文本。 */
@@ -341,10 +353,11 @@ object WeworkSelectorIds {
  * 企微界面规则（T3.1）：选择器解析门面，**复用** core:accessibility 的
  * [SelectorEngine]/[MatchSpec]/[SelectorDef]（T2.4 交付），不另造匹配引擎。
  *
- * 选择器来源优先级：外置 [RuleConfig]（真机校准后由配置下发，R1：企微改版只改
- * 配置不改代码）→ [DEFAULTS] 程序化占位默认值（resourceId/text 为占位示例，
- * 与 core:accessibility `accessibility_rules.sample.json` 同一占位口径，
- * 待 D1 真机 dump 校准，W-M3R 替换）。
+ * 选择器来源优先级：外置 [RuleConfig]（企微改版只改配置不改代码，R1）→
+ * [DEFAULTS] 内置默认值。核心导航/聊天/搜索/通讯录族已于 2026-11-04 按真机
+ * D1 dump 校准（证据：local-private/evidence/session21/uitree-*.xml，企微
+ * 当前版本混淆短 ID 实测）；未校准条目仍为占位并在注释登记 NOT_CALIBRATED，
+ * 真机未命中时如实失败，不虚构成功。
  */
 class WeworkScreenRules(private val config: RuleConfig? = null) {
 
@@ -390,8 +403,10 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
 
         /** 内置占位默认（与 fixtures 假节点树对齐；真机校准后由配置覆盖）。 */
         val DEFAULTS: Map<String, SelectorDef> = mapOf(
+            // ---- 真机校准批（2026-11-04 D1 dump，企微当前版本实测；混淆短 ID 随版本
+            // 可能漂移——漂移时优先用外置规则配置覆盖，其次改此处并附新 dump 证据）----
             WeworkSelectorIds.CONVERSATION_ITEM_NAME to sel(
-                resourceId = "com.tencent.wework:id/conversation_item_name",
+                resourceId = "com.tencent.wework:id/ibi",
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.MESSAGE_TAB to sel(
@@ -399,11 +414,14 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.CHAT_TITLE to sel(
-                resourceId = "com.tencent.wework:id/chat_title",
+                resourceId = "com.tencent.wework:id/o6j",
                 className = TEXT_VIEW,
             ),
+            WeworkSelectorIds.CHAT_MORE_ENTRY to sel(
+                contentDesc = "更多，按钮",
+            ),
             WeworkSelectorIds.CHAT_INPUT to sel(
-                resourceId = "com.tencent.wework:id/chat_input_edit",
+                resourceId = "com.tencent.wework:id/iu5",
                 className = EDIT_TEXT,
             ),
             WeworkSelectorIds.CHAT_SEND to sel(
@@ -482,15 +500,14 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.CONTACTS_LIST_CONTAINER to sel(
-                resourceId = "com.tencent.wework:id/contacts_list_container",
-                className = VIEW_GROUP_PLACEHOLDER,
+                resourceId = "com.tencent.wework:id/l_8",
             ),
             WeworkSelectorIds.CONTACT_LIST_ITEM to sel(
-                resourceId = "com.tencent.wework:id/contact_item_name",
+                resourceId = "com.tencent.wework:id/hlo",
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.CHAT_MESSAGE_TEXT to sel(
-                resourceId = "com.tencent.wework:id/chat_message_text",
+                resourceId = "com.tencent.wework:id/ith",
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.CHAT_PLUS_ENTRY to sel(text = "+"),
@@ -511,11 +528,10 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.HOME_SEARCH_ENTRY to sel(
-                resourceId = "com.tencent.wework:id/home_search_entry",
+                contentDesc = "搜索，按钮",
             ),
             WeworkSelectorIds.SEARCH_INPUT to sel(
-                resourceId = "com.tencent.wework:id/search_input",
-                className = EDIT_TEXT,
+                resourceId = "com.tencent.wework:id/m0f",
             ),
             WeworkSelectorIds.SEARCH_RESULT_ITEM to sel(
                 resourceId = "com.tencent.wework:id/search_result_item_name",
@@ -526,9 +542,17 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
             WeworkSelectorIds.DIALOG_CONFIRM to sel(text = "确定", className = TEXT_VIEW),
             WeworkSelectorIds.DIALOG_DELETE_CONFIRM to sel(text = "删除", className = TEXT_VIEW),
             WeworkSelectorIds.SETTINGS_GROUP_QRCODE_ENTRY to sel(text = "群二维码", className = TEXT_VIEW),
+            // 群设置页行结构（校准 2026-11-04）：行标签=hn1、行值=lm8（「群聊名称」行的
+            // 值节点=真实群名；lm8 为多行复用值 ID，必须以行标签锚定 + sibling 取值）。
             WeworkSelectorIds.SETTINGS_GROUP_NAME_TITLE to sel(
-                resourceId = "com.tencent.wework:id/group_settings_title",
+                text = "群聊名称",
                 className = TEXT_VIEW,
+                chain = listOf(
+                    ChainStep(
+                        relation = ChainRelation.SIBLING,
+                        match = MatchSpec(resourceId = "com.tencent.wework:id/lm8"),
+                    ),
+                ),
             ),
             WeworkSelectorIds.SETTINGS_GROUP_OWNER to sel(
                 resourceId = "com.tencent.wework:id/group_owner_value",
@@ -688,7 +712,19 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
             text: String? = null,
             resourceId: String? = null,
             className: String? = null,
-        ) = SelectorDef(id = "", match = MatchSpec(text, null, resourceId, className))
+            contentDesc: String? = null,
+            chain: List<ChainStep> = emptyList(),
+        ) = SelectorDef(
+            id = "",
+            match = MatchSpec(
+                text = text,
+                textContains = null,
+                resourceId = resourceId,
+                className = className,
+                contentDesc = contentDesc,
+            ),
+            chain = chain,
+        )
     }
 }
 

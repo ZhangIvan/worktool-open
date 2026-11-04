@@ -96,25 +96,32 @@ internal object CommonSteps {
         awaitSelector(driver, rules, timeouts, WeworkSelectorIds.CHAT_INPUT, what)
     }
 
-    /** 点击聊天页标题进入群设置页（207/225）；标题缺失 → NODE_NOT_FOUND。 */
+    /**
+     * 进入群设置页（207/225）。真机校准（2026-11-04）：企微当前版本点聊天页
+     * 标题**不进**设置页，唯一入口是右上「更多」按钮（desc=「更多，按钮」）；
+     * 「更多」未命中再回退点标题（旧版本语义兜底）。
+     */
     fun openGroupSettings(
         rules: WeworkScreenRules,
         timeouts: StepTimeouts,
     ): PlanStep = PlanStep(
         id = "open-group-settings",
-        description = "点击聊天页群名进入群设置页",
+        description = "点击聊天页「更多」（回退：群名标题）进入群设置页",
     ) { driver ->
-        val title = driver.awaitNode(
-            timeouts.awaitNodeMs, timeouts.pollMs, "聊天页群名标题",
-        ) { rules.find(it, WeworkSelectorIds.CHAT_TITLE) }
+        val entry = driver.awaitNode(
+            timeouts.awaitNodeMs, timeouts.pollMs, "聊天页群设置入口（更多/群名标题）",
+        ) { root ->
+            rules.find(root, WeworkSelectorIds.CHAT_MORE_ENTRY)
+                ?: rules.find(root, WeworkSelectorIds.CHAT_TITLE)
+        }
             ?: return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.NODE_NOT_FOUND,
-                "聊天页群名标题未出现（无法进入群设置）",
+                "聊天页群设置入口未出现（更多按钮与群名标题均缺失）",
             )
-        if (!driver.click(title)) {
+        if (!driver.click(entry)) {
             return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.ACTION_REJECTED,
-                "点击群名标题被界面拒绝",
+                "点击群设置入口被界面拒绝",
             )
         }
         StepOutcome.Success

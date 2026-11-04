@@ -56,6 +56,7 @@ class GroupInfoQueryExecutorsTest {
             members = listOf("张三", "李四"),
         )
         val settings = GroupSettingsFixture(groupName = groupName, members = listOf("张三"))
+        detail.titleLabelNode.let { settings.screen.root.add(it) }
         detail.titleNode.let { settings.screen.root.add(it) }
         remark?.let {
             settings.screen.root.add(
@@ -187,7 +188,9 @@ class GroupInfoQueryExecutorsTest {
         val settings = FakeScreen(
             name = "group-settings-exited-blank",
             root = fakeNode(cls = cn.worktool.open.feature.executor.fake.VIEW_GROUP) {
-                add(fakeNode(text = "", resId = "com.tencent.wework:id/group_settings_title", cls = TEXT_VIEW))
+                // 真机校准（2026-11-04）：行标签 hn1 + 值 lm8（sibling 取值）。
+                add(fakeNode(text = "群聊名称", resId = "com.tencent.wework:id/hn1", cls = TEXT_VIEW))
+                add(fakeNode(text = "", resId = "com.tencent.wework:id/lm8", cls = TEXT_VIEW))
                 add(fakeNode(text = "无法在已退出的群聊中发送消息", cls = TEXT_VIEW))
             },
         )

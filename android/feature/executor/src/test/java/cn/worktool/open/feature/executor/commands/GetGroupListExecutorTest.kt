@@ -132,13 +132,13 @@ class GetGroupListExecutorTest {
         val gate = cn.worktool.open.feature.executor.fake.FakePauseGate()
         val hiddenRow = cn.worktool.open.feature.executor.fake.fakeNode(
             text = "第二页群",
-            resId = "com.tencent.wework:id/conversation_item_name",
+            resId = "com.tencent.wework:id/ibi",
             cls = "android.widget.TextView",
             clickable = true,
         )
         val visibleRow = cn.worktool.open.feature.executor.fake.fakeNode(
             text = "首屏会话",
-            resId = "com.tencent.wework:id/conversation_item_name",
+            resId = "com.tencent.wework:id/ibi",
             cls = "android.widget.TextView",
             clickable = true,
         )

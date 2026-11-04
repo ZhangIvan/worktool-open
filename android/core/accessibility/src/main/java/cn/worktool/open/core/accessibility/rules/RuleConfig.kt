@@ -24,8 +24,15 @@ data class MatchSpec(
     val resourceId: String? = null,
     /** 精确匹配 [UiNode.className]（如 `android.widget.TextView`）。 */
     val className: String? = null,
+    /**
+     * 精确匹配 [UiNode.contentDescription]（2026-11-04 真机校准新增）：
+     * 企微部分入口为纯 desc 节点（消息页搜索钮 desc=「搜索，按钮」、聊天页
+     * 「更多」desc=「更多，按钮」），text/resourceId 均空——无此字段则无法定位。
+     */
+    val contentDesc: String? = null,
 ) {
-    val isEmpty: Boolean get() = text == null && textContains == null && resourceId == null && className == null
+    val isEmpty: Boolean
+        get() = text == null && textContains == null && resourceId == null && className == null && contentDesc == null
 
     /** 空条件匹配一切节点（视为合法：便于「任意子节点」链步）。 */
     fun matches(node: UiNode): Boolean {
@@ -36,6 +43,7 @@ data class MatchSpec(
         }
         if (resourceId != null && node.viewIdResourceName != resourceId) return false
         if (className != null && node.className != className) return false
+        if (contentDesc != null && node.contentDescription != contentDesc) return false
         return true
     }
 }

@@ -44,7 +44,7 @@ class HomeFixture(
     val conversationNodes: Map<String, FakeExecutorNode> = conversations.associateWith { name ->
         fakeNode(
             text = name,
-            resId = "com.tencent.wework:id/conversation_item_name",
+            resId = "com.tencent.wework:id/ibi",
             cls = TEXT_VIEW,
             clickable = true,
         )
@@ -86,7 +86,7 @@ class ChatFixture(
 ) {
     val titleNode: FakeExecutorNode = fakeNode(
         text = title,
-        resId = "com.tencent.wework:id/chat_title",
+        resId = "com.tencent.wework:id/o6j",
         cls = TEXT_VIEW,
         clickable = true,
     )
@@ -97,7 +97,7 @@ class ChatFixture(
     }
 
     val inputNode: FakeExecutorNode = fakeNode(
-        resId = "com.tencent.wework:id/chat_input_edit",
+        resId = "com.tencent.wework:id/iu5",
         cls = EDIT_TEXT,
         editable = true,
         clickable = true,
@@ -385,7 +385,7 @@ class ContactsFixture(
     val friendList: FakeExecutorNode? = friendPages?.let {
         fakeNode(
             cls = VIEW_GROUP,
-            resId = "com.tencent.wework:id/contacts_list_container",
+            resId = "com.tencent.wework:id/l_8",
             scrollable = true,
         ) {
             it.first().forEach { name -> add(contactItemNode(name)) }
@@ -407,7 +407,7 @@ class ContactsFixture(
 
     private fun contactItemNode(name: String): FakeExecutorNode = fakeNode(
         text = name,
-        resId = "com.tencent.wework:id/contact_item_name",
+        resId = "com.tencent.wework:id/hlo",
         cls = TEXT_VIEW,
     )
 
