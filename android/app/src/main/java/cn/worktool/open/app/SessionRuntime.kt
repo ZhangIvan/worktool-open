@@ -19,6 +19,8 @@ import cn.worktool.open.feature.executor.query.QueryResult
 import cn.worktool.open.feature.executor.query.QueryResultSink
 import cn.worktool.open.feature.executor.runtime.PauseManager as ExecPauseGate
 import java.io.File
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -111,7 +113,10 @@ class SessionRuntime(
     private val eventBuffer = ArrayDeque<String>()
     private val lastOutcome = LinkedHashMap<Int, CommandCatalog.Row.Outcome>()
     private val timeFmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-    private val logFile: File get() = File(File(appContext.filesDir, "logs"), LOG_NAME)
+
+    /** FR-49 日期分区日志目录（LogStoreWriter：worktool_(yyyy_MM_dd).log + 30 天窗口）。 */
+    private val logsDir: File get() = File(appContext.filesDir, "logs")
+    private val logFile: File get() = LogStoreWriter.fileFor(logsDir, Date(clock()))
 
     /** 由设置页写入（AppSettings.logEnabled 同步）。 */
     @Volatile
@@ -194,7 +199,7 @@ class SessionRuntime(
                 console = portHub,
                 queue = portHub,
                 resources = DevicePortImpls.Resources(appContext),
-                logs = DevicePortImpls.Logs { logFile },
+                logs = DevicePortImpls.Logs { logsDir },
                 logUpload = DevicePortImpls.LogUpload { baseUrl },
                 remoteFiles = DevicePortImpls.RemoteFiles(appContext),
                 qrJoin = DevicePortImpls.QrJoin(appContext),
@@ -259,11 +264,51 @@ class SessionRuntime(
         heartbeatIntervalMillis = credentials.heartbeatIntervalSeconds * 1000L
         windowScheduler.startWith(clock()) // U1：运行时段分钟 tick（出窗休眠/入窗恢复）
         appendEvent("会话启动 deviceId=${credentials.deviceId} → $baseUrl")
+        sendEnvSnapshot301(portHub) // FR-49 ③：WS onOpen 环境快照（经 journal 队列，连接建立即投递）
         return true
+    }
+
+    /**
+     * FR-49 ③ / 契约 301 S1：会话建立即上报环境快照（appVersion/workVersion/
+     * 分辨率/processSessionId/previousExitReason/logHealth）——socketType=2、
+     * 无 commandId（自动上报非指令产物，服务端 301 上报分支消费）。
+     * previousExitReason：SP 标记位近似（stop 正常落 marker，下次启动读后清；
+     * 进程被杀无 marker → "unexpected_process_death" 无法区分冷启，v0.1 登记近似口径）。
+     */
+    private fun sendEnvSnapshot301(portHub: RuntimePortHub) {
+        runCatching {
+            val pm = appContext.packageManager.getPackageInfo("com.tencent.wework", 0).versionName ?: "?"
+            val dm = android.util.DisplayMetrics().let { appContext.resources.displayMetrics }
+            val prefs = appContext.getSharedPreferences("wt_runtime", android.content.Context.MODE_PRIVATE)
+            val prevExit = prefs.getString("prev_exit", "first_run") ?: "first_run"
+            prefs.edit().remove("prev_exit").apply()
+            val today = LogStoreWriter.fileFor(logsDir, Date(clock()))
+            val bean = cn.worktool.open.core.protocol.WeworkMessageBean(
+                type = 301,
+                extras = buildJsonObject {
+                    put("appVersion", AppInfo.VERSION)
+                    put("workVersion", pm)
+                    put("resolution", "${dm.widthPixels}x${dm.heightPixels}")
+                    put("processSessionId", processSessionId)
+                    put("previousExitReason", prevExit)
+                    put("logHealth", buildJsonObject {
+                        put("enabled", logEnabled)
+                        put("todayFile", today.name)
+                        put("todayBytes", if (today.isFile) today.length() else 0L)
+                    })
+                },
+            )
+            portHub.loop?.sendReportBeans(listOf(bean))
+        }
     }
 
     fun stop() {
         val l = synchronized(lock) { loop ?: return }
+        // FR-49 ③：正常停止落 marker（下次启动 301 previousExitReason 数据源）
+        runCatching {
+            appContext.getSharedPreferences("wt_runtime", android.content.Context.MODE_PRIVATE)
+                .edit().putString("prev_exit", "user_stop").apply()
+        }
         synchronized(lock) { loop = null }
         windowScheduler.stop() // U1：随会话停（无会话即无休眠语义）
         foreground?.stopRequested() // SP-2：无会话 → 无前台服务/常驻通知
@@ -299,10 +344,7 @@ class SessionRuntime(
         synchronized(lock) {
             eventBuffer.addLast(stamped)
             while (eventBuffer.size > EVENT_BUFFER_MAX) eventBuffer.removeFirst()
-            if (logEnabled) runCatching {
-                logFile.parentFile?.mkdirs()
-                logFile.appendText(stamped + "\n")
-            }
+            if (logEnabled) LogStoreWriter.appendLine(logsDir, clock, stamped)
         }
         onEventLine?.invoke(stamped)
     }
@@ -311,8 +353,9 @@ class SessionRuntime(
     private fun settingsSnapshot(): AppSettings = AppSettings(appContext)
 
     private companion object {
+        /** 进程级会话标识（301 快照 processSessionId；进程存活期恒定）。 */
+        private val processSessionId: String = java.util.UUID.randomUUID().toString()
         const val EVENT_BUFFER_MAX = 200
-        const val LOG_NAME = "worktool-session.log"
     }
 }
 

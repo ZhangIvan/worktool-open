@@ -218,7 +218,7 @@ class LabPairingActivity : Activity() {
                 console = portHub,
                 queue = portHub,
                 resources = DevicePortImpls.Resources(applicationContext),
-                logs = DevicePortImpls.Logs { File(labFileDir, "worktool-lab.log") },
+                logs = DevicePortImpls.Logs { labFileDir },
                 logUpload = DevicePortImpls.LogUpload { host },
                 remoteFiles = DevicePortImpls.RemoteFiles(applicationContext),
                 qrJoin = DevicePortImpls.QrJoin(applicationContext),

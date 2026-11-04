@@ -68,19 +68,71 @@ object DevicePortImpls {
         }
     }
 
-    /** 301/302/510/514：本地日志读取（尾部=真实；打包/片段=边界 null，见类注）。 */
-    class Logs(private val logFile: () -> File) : LogStorePort {
-        override fun recentLogText(maxChars: Int): String = tailText(maxChars)
+    /**
+     * 301/302/510/514：本地日志读取（FR-49 落盘器全实装，W-M6）：
+     * - 301/302 = 最近分区文件尾部；
+     * - 510 collectDayLogZip = 该日分区 zip（内层实体=原日志文件名）；
+     * - 514 messageId 模式 = 行内含目标 id 的命中区间；时间段模式 = 行首时间戳过滤；
+     *   产物 gzip+base64 + meta{logFilePath/startLine/endLine/matchedCount}。
+     */
+    class Logs(private val logsDir: () -> File) : LogStorePort {
+        override fun recentLogText(maxChars: Int): String = tailText(LogStoreWriter.latestFile(logsDir()), maxChars)
+
         override fun recentErrorText(maxChars: Int): String =
-            tailText(maxChars * 4).lineSequence().filter { it.contains("E ", true) || it.contains("失败") }
-                .joinToString("\n").takeLast(maxChars)
+            tailText(LogStoreWriter.latestFile(logsDir()), maxChars * 4)
+                .lineSequence()
+                .filter { it.contains("E ", true) || it.contains("失败") || it.contains("拒帧") }
+                .joinToString("\n")
+                .takeLast(maxChars)
 
-        override fun collectDayLogZip(logDate: String): ByteArray? = null // Phase B：日期分区落盘器
-        override fun findSnippetByMessageId(targetMessageId: String): LogSnippet? = null
-        override fun findSnippetByRange(startTime: String, endTime: String): LogSnippet? = null
+        override fun collectDayLogZip(logDate: String): ByteArray? =
+            LogStoreWriter.dayZip(logsDir(), logDate)
 
-        private fun tailText(maxChars: Int): String = runCatching {
-            val f = logFile()
+        override fun findSnippetByMessageId(targetMessageId: String): LogSnippet? =
+            snippet(linesWithIndex()) { it.contains(targetMessageId) }
+
+        override fun findSnippetByRange(startTime: String, endTime: String): LogSnippet? =
+            snippet(linesWithIndex()) { line ->
+                stampOf(line)?.let { it >= startTime && it <= endTime } == true
+            }
+
+        /** 行内时间戳（写入器行首 `[MM-dd HH:mm:ss.SSS]`；年份补当前年——跨年边界近似，登记）。 */
+        private fun stampOf(line: String): String? {
+            val m = Regex("^(\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})").find(line.trimStart('[')) ?: return null
+            val year = SimpleDateFormat("yyyy", Locale.US).format(Date())
+            return "$year-" + m.groupValues[1]
+        }
+
+        private fun linesWithIndex(): List<Pair<Int, String>> {
+            val f = LogStoreWriter.latestFile(logsDir()) ?: return emptyList()
+            return runCatching { f.readLines().withIndex().map { it.index to it.value } }.getOrDefault(emptyList())
+        }
+
+        private fun snippet(lines: List<Pair<Int, String>>, match: (String) -> Boolean): LogSnippet? {
+            val hits = lines.filter { match(it.second) }
+            if (hits.isEmpty()) return null
+            val first = hits.first().first
+            val last = hits.last().first
+            val body = lines.subList(first, last + 1).joinToString("\n") { it.second }
+            val gzipB64 = java.io.ByteArrayOutputStream().use { bos ->
+                java.util.zip.GZIPOutputStream(bos).use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            }
+            val f = LogStoreWriter.latestFile(logsDir())
+            return LogSnippet(
+                payloadBase64 = gzipB64,
+                truncated = false,
+                meta = mapOf(
+                    "logFilePath" to (f?.absolutePath ?: ""),
+                    "startLine" to (first + 1).toString(),
+                    "endLine" to (last + 1).toString(),
+                    "matchedCount" to hits.size.toString(),
+                ),
+            )
+        }
+
+        private fun tailText(f: File?, maxChars: Int): String = runCatching {
+            f ?: return ""
             if (!f.isFile) return ""
             val bytes = ByteArray(minOf(f.length(), maxChars.toLong() * 4).toInt())
             java.io.RandomAccessFile(f, "r").use { raf ->
