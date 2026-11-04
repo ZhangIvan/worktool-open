@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,12 @@ type Hub struct {
 	v2ByDev map[string]*v2Session // deviceID → 当前活动会话（一设备一会话）
 	v1      map[string]*v1Conn    // robotId → v1 兼容连接
 
+	// renegMu/renegNonce 为凭据重协商 nonce 单次化表（M-2，安全审计 TOP5：
+	// Hub 级 5 分钟内存去重窗——重协商发生在会话建立前，无 v2Session 可挂，
+	// v2Session.nonceSeen 同型形态在 Hub 维度复刻，见 v2.go renegotiateNonceSeen）。
+	renegMu    sync.Mutex
+	renegNonce map[string]time.Time
+
 	// flushMu 串行化“取 queued 批→发送→E03 留痕”整段（hello 冲刷/调度泵/
 	// 显式 DispatchQueued 并发时防止同一指令被取走两次——双发帧 + 第二次
 	// MarkDispatched 409；T3.2 修复的既有竞态）。
@@ -72,24 +79,45 @@ func New(db *sqlite.DB, pipeline *scheduler.Service, m *statemachine.Machine, lo
 		logger = log.Default()
 	}
 	return &Hub{
-		DB:       db,
-		Pipeline: pipeline,
-		Machine:  m,
-		Now:      time.Now,
-		Log:      logger,
-		creds:    map[string]*LiveCred{},
-		v2:       map[string]*v2Session{},
-		v2ByDev:  map[string]*v2Session{},
-		v1:       map[string]*v1Conn{},
+		DB:         db,
+		Pipeline:   pipeline,
+		Machine:    m,
+		Now:        time.Now,
+		Log:        logger,
+		creds:      map[string]*LiveCred{},
+		v2:         map[string]*v2Session{},
+		v2ByDev:    map[string]*v2Session{},
+		v1:         map[string]*v1Conn{},
+		renegNonce: map[string]time.Time{},
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4 << 10,
 			WriteBufferSize: 4 << 10,
-			// 明文 loopback 原型 + TLS 对外部署（SR-09）；设备鉴权由逐帧 HMAC
-			// （v2）与后续 admin 白名单（v1，T3.x）承担，WS 层不做 Origin 校验。
-			CheckOrigin: func(*http.Request) bool { return true },
+			// H-2（安全审计 TOP5）：浏览器载体防线——带 Origin 头的握手须同源
+			// （Origin host 与请求 Host 一致），跨源/不可解析 Origin 一律拒绝；
+			// 设备端与测试客户端（gorilla dialer 默认）不携 Origin，不受影响。
+			// v1 面的弱鉴权由 EnableV1Compat 默认不挂载承担（api.Options）。
+			CheckOrigin: checkSameOrigin,
 		},
 	}
 }
+
+// checkSameOrigin WS 升级同源校验（H-2）：无 Origin 头放行（非浏览器载体）；
+// 有 Origin 须可解析且 host（含端口，大小写不敏感）与请求 Host 一致。
+func checkSameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+// wsReadLimit 单帧读上限（H-2 OOM 面：v1/v2 WS 升级后即 conn.SetReadLimit，
+// 超限帧在 gorilla 读层即报错断连，不解入内存）。
+const wsReadLimit int64 = 1 << 20 // 1 MiB
 
 // ---- 凭据注册表 ----
 

@@ -46,7 +46,9 @@ func newTestApp(t *testing.T) *testApp {
 	pipeline := scheduler.New(db, machine)
 	hub := gateway.New(db, pipeline, machine, testLogger{t})
 	apiSrv := api.NewServer(db, hub, pipeline, machine, testLogger{t})
-	mux := api.NewServeMux(api.Options{Server: apiSrv})
+	// H-2（安全审计 TOP5）后 v1 兼容面默认不挂载——测试装配显式 opt-in
+	// （对齐生产 main.go 在 -enable-v1-compat 下的形态）。
+	mux := api.NewServeMux(api.Options{Server: apiSrv, EnableV1Compat: true})
 	httpSrv := httptest.NewServer(mux)
 	t.Cleanup(httpSrv.Close)
 	return &testApp{t: t, db: db, pipeline: pipeline, hub: hub, apiSrv: apiSrv, httpSrv: httpSrv}
@@ -648,7 +650,7 @@ func TestV2NegativeFrames(t *testing.T) {
 func TestV2EventIDDedup(t *testing.T) {
 	a := newTestApp(t)
 	m := a.pairDevice(t)
-	c, _ := openV2Session(t, a, m, 0, 0, 0, 1)
+	c, sessionID := openV2Session(t, a, m, 0, 0, 0, 1)
 	res, err := a.pipeline.Submit(context.Background(), scheduler.SubmitRequest{
 		Target: m.deviceID, CommandType: 203, Payload: `{"type":203,"receivedContent":"dup"}`,
 	})
@@ -696,8 +698,24 @@ func TestV2EventIDDedup(t *testing.T) {
 		return ok && cmd.State == "succeeded", ""
 	})
 
+	// H1 服务端半边：结果帧处理后回写 receipt（socketType=3，同载荷 result/ack）
+	receipt := c.readFrame()
+	if receipt.SocketType != wire.SocketRawConfirm {
+		t.Fatalf("结果帧应回写 receipt，socketType = %d", receipt.SocketType)
+	}
+	if got := c.verifyServerFrame(receipt, sessionID); !strings.Contains(string(got), `"errorCode":0`) {
+		t.Fatalf("receipt 载荷应回显原结果内容: %s", got)
+	}
+
 	// 同 eventId 同 digest（新 seq=3 重签重发）→ 幂等回执原确认，无重复副作用
 	sendResult(eventID, 3, 0)
+	replay := c.readFrame()
+	if replay.SocketType != wire.SocketRawConfirm {
+		t.Fatalf("重复帧应原确认回执，socketType = %d", replay.SocketType)
+	}
+	if got := c.verifyServerFrame(replay, sessionID); !strings.Contains(string(got), `"errorCode":0`) {
+		t.Fatalf("重复帧 receipt 载荷应与首帧一致: %s", got)
+	}
 	// 连接应保持：随后发一条合法心跳仍被接受（无回复即无关闭）
 	c.send(c.buildFrame(wire.SocketHeartbeat, nil, "", nil))
 
@@ -721,6 +739,191 @@ func TestV2EventIDDedup(t *testing.T) {
 	items, _ := a.db.OutboxByStatus(context.Background(), "pending")
 	if len(items) != 1 {
 		t.Fatalf("重复/冲突回执不得产生额外 outbox: %+v", items)
+	}
+}
+
+// TestV2DupReceiptReplay（性能审计 H1 服务端半边回归）：结果帧首处理后服务端
+// 回写 receipt 并记忆；同 eventId 重放（设备重发语义 = 同 eventId 新 seq 重签，
+// 端侧 AtLeastOnceQueue.refreshForResend）→ 收到同 receipt 回写（同 socketType/
+// commandId/载荷内容），且不重复管线副作用（outbox/事件流不变）。
+func TestV2DupReceiptReplay(t *testing.T) {
+	a := newTestApp(t)
+	m := a.pairDevice(t)
+	c, sessionID := openV2Session(t, a, m, 0, 0, 0, 1)
+	res, err := a.pipeline.Submit(context.Background(), scheduler.SubmitRequest{
+		Target: m.deviceID, CommandType: 203,
+		Payload: `{"type":203,"targetRoom":"外部群测试群","receivedContent":"receipt"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.hub.DispatchQueued(context.Background(), m.deviceID); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.readFrame() // 指令帧
+
+	resultList := json.RawMessage(`[{"type":203,"errorCode":0,"timeCost":7,"successList":["外部群测试群"],"failList":[],"metaJson":"{\"dispatchId\":\"` + res.CommandID + `\"}"}]`)
+	sendResult := func(eventID string, seq int64) {
+		t.Helper()
+		c.mu.Lock()
+		c.outSeq = seq
+		c.mu.Unlock()
+		digest, err := wire.PayloadDigest(0, resultList, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts := time.Now().UTC().UnixMilli()
+		nonce, _ := wire.RandomHex(16)
+		mac, err := wire.ComputeHMAC(c.tokenHex, res.CommandID, eventID, seq, ts, nonce, digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"socketType": wire.SocketRawConfirm,
+			"messageId":  wire.BuildMessageID(ts, eventID),
+			"apiSend":    1, "encryptType": 0, "list": resultList,
+			"meta": wire.FrameMeta{
+				Ver: 2, Ts: ts, Nonce: nonce, HMAC: mac, Seq: seq,
+				EventID: eventID, CommandID: res.CommandID, TokenVersion: 1,
+			},
+		})
+		c.send(raw)
+	}
+
+	eventID := wire.NewUUID()
+	sendResult(eventID, 2)
+
+	// ① 首处理：回写 receipt（socketType=3，载荷回显原结果内容）并记忆
+	receipt1 := c.readFrame()
+	if receipt1.SocketType != wire.SocketRawConfirm {
+		t.Fatalf("首处理应回写 receipt，socketType = %d", receipt1.SocketType)
+	}
+	plain1 := c.verifyServerFrame(receipt1, sessionID)
+	if string(plain1) != string(resultList) {
+		t.Fatalf("receipt 载荷应回显原结果帧 list:\n got %s\nwant %s", plain1, resultList)
+	}
+	m1, _ := receipt1.V2Meta()
+	if m1.CommandID != res.CommandID {
+		t.Fatalf("receipt meta.commandId = %q, want %q", m1.CommandID, res.CommandID)
+	}
+	waitFor(t, 3*time.Second, func() (bool, string) {
+		cmd, ok, _ := a.db.GetCommand(context.Background(), res.CommandID)
+		return ok && cmd.State == "succeeded", ""
+	})
+	stored, ok, err := a.db.GetInboundReceipt(context.Background(), m.deviceID, eventID)
+	if err != nil || !ok || stored == "" {
+		t.Fatalf("receipt 应已记忆: ok=%v stored=%q err=%v", ok, stored, err)
+	}
+	var content struct {
+		SocketType int             `json:"socketType"`
+		CommandID  string          `json:"commandId"`
+		List       json.RawMessage `json:"list"`
+	}
+	if err := json.Unmarshal([]byte(stored), &content); err != nil {
+		t.Fatalf("receipt 内容形态（JSON）: %v (%s)", err, stored)
+	}
+	if content.SocketType != wire.SocketRawConfirm || content.CommandID != res.CommandID ||
+		string(content.List) != string(resultList) {
+		t.Fatalf("receipt 内容与回写帧不一致: %+v", content)
+	}
+	eventsBefore, _ := a.db.Events(context.Background(), res.CommandID)
+	outboxBefore, _ := a.db.OutboxByStatus(context.Background(), "pending")
+
+	// ② 同 eventId 重放（新 seq 重签）→ 收到同 receipt 回写；无重复副作用
+	sendResult(eventID, 3)
+	receipt2 := c.readFrame()
+	if receipt2.SocketType != wire.SocketRawConfirm {
+		t.Fatalf("重复帧应原确认回执，socketType = %d", receipt2.SocketType)
+	}
+	plain2 := c.verifyServerFrame(receipt2, sessionID)
+	if string(plain2) != string(plain1) {
+		t.Fatalf("重复帧 receipt 应同内容回写:\n got %s\nwant %s", plain2, plain1)
+	}
+	m2, _ := receipt2.V2Meta()
+	if m2.CommandID != m1.CommandID {
+		t.Fatalf("重复帧 receipt commandId 漂移: %q != %q", m2.CommandID, m1.CommandID)
+	}
+	if m2.Seq <= m1.Seq {
+		t.Fatalf("重复帧 receipt 应为重签新帧（seq 单调），got %d <= %d", m2.Seq, m1.Seq)
+	}
+	waitFor(t, 2*time.Second, func() (bool, string) { // 服务端消化完重复帧
+		eventsAfter, _ := a.db.Events(context.Background(), res.CommandID)
+		return len(eventsAfter) == len(eventsBefore), ""
+	})
+	eventsAfter, _ := a.db.Events(context.Background(), res.CommandID)
+	if len(eventsAfter) != len(eventsBefore) {
+		t.Fatalf("重放不得新增事件流: before=%d after=%d", len(eventsBefore), len(eventsAfter))
+	}
+	outboxAfter, _ := a.db.OutboxByStatus(context.Background(), "pending")
+	if len(outboxAfter) != len(outboxBefore) {
+		t.Fatalf("重放不得新增 outbox: before=%d after=%d", len(outboxBefore), len(outboxAfter))
+	}
+	// 连接保持：重放后合法心跳仍被接受（无关闭）
+	c.send(c.buildFrame(wire.SocketHeartbeat, nil, "", nil))
+}
+
+// TestV2FlushDrainsQueue（性能审计 H3 回归）：积压 > 单批上限（64）时，一次
+// DispatchQueued 冲刷到队空（原实现每秒泵至多一批，吞吐被泵周期封顶）。
+func TestV2FlushDrainsQueue(t *testing.T) {
+	a := newTestApp(t)
+	m := a.pairDevice(t)
+	c, _ := openV2Session(t, a, m, 0, 0, 0, 1)
+
+	const total = 70 // > v2FlushBatchSize(64)：至少跨两批
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		r, err := a.pipeline.Submit(context.Background(), scheduler.SubmitRequest{
+			Target: m.deviceID, CommandType: 203,
+			Payload: `{"type":203,"targetRoom":"外部群测试群","receivedContent":"q` + strconv.Itoa(i) + `"}`,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, r.CommandID)
+	}
+	n, err := a.hub.DispatchQueued(context.Background(), m.deviceID)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if n != total {
+		t.Fatalf("一次冲刷应排空全队 %d 条，实际 %d（每秒至多一批的旧语义？）", total, n)
+	}
+	for _, id := range ids {
+		cmd, ok, _ := a.db.GetCommand(context.Background(), id)
+		if !ok || cmd.State != "dispatched" {
+			t.Fatalf("指令 %s 状态 = %v（应 dispatched）", id, cmd.State)
+		}
+		if cmd.Epoch <= 0 {
+			t.Fatalf("指令 %s epoch 未分配", id)
+		}
+	}
+	// 全部下发帧可读（指令帧 total 条），epoch 单调递增
+	lastEpoch := int64(0)
+	for i := 0; i < total; i++ {
+		env := c.readFrame()
+		meta, _ := env.V2Meta()
+		if meta.Seq != int64(i+2) { // hello_ack=1，指令帧自 2 连续递增
+			t.Fatalf("指令帧 seq = %d, want %d", meta.Seq, i+2)
+		}
+		plain := c.verifyServerFrame(env, "")
+		var items []json.RawMessage
+		if err := json.Unmarshal(plain, &items); err != nil || len(items) != 1 {
+			t.Fatalf("指令载荷应为单元数组: %s", plain)
+		}
+		var probe struct {
+			Epoch int64 `json:"epoch"`
+		}
+		if err := json.Unmarshal(items[0], &probe); err != nil {
+			t.Fatalf("epoch 解析: %v (%s)", err, items[0])
+		}
+		if probe.Epoch <= lastEpoch {
+			t.Fatalf("epoch 应单调递增: %d <= %d", probe.Epoch, lastEpoch)
+		}
+		lastEpoch = probe.Epoch
+	}
+	// 队空：再次冲刷返回 0（排空收敛，不死循环）
+	if n, err := a.hub.DispatchQueued(context.Background(), m.deviceID); err != nil || n != 0 {
+		t.Fatalf("队空冲刷应返回 0: n=%d err=%v", n, err)
 	}
 }
 
@@ -847,7 +1050,11 @@ func TestV2FrameOnV1PathRejected(t *testing.T) {
 }
 
 // TestPairNegativeCases：配对否定用例（格式 400 / 码无效过期已用 403）。
+// H-1 后 pair 面 per-IP 限速默认 5 次/分钟，本例 7 次 POST → 放宽限速注入
+// （对齐 compat_test.go 包级 var 注入形态；限速/封禁路径归 pair_guard 专项测试）。
 func TestPairNegativeCases(t *testing.T) {
+	api.PairRatePerMin = 1000
+	defer func() { api.PairRatePerMin = 5 }()
 	a := newTestApp(t)
 	base := func(code string) map[string]string {
 		return map[string]string{

@@ -15,7 +15,8 @@
     "queued": {
       "terminal": false,
       "owner": "server.scheduler",
-      "on_entry": "持久化+审计落库；用户接管暂停（FR-52）在此状态持住——只入队不执行"
+      "on_entry": "持久化+审计落库；用户接管暂停（FR-52）在此状态持住——只入队不执行",
+      "on_queue_ttl_expired": "排队超过 TTL（默认 24h，可配）无投递 → E19 迁 cancelled（离线积压清理；从未下发不涉成败推定）"
     },
     "dispatched": {
       "terminal": false,

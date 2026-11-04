@@ -65,6 +65,32 @@ func (s *v2Session) nonceSeen(nonce string, now time.Time, window time.Duration)
 	return false
 }
 
+// renegNonceWindow 重协商 nonce 单次化窗口（M-2，安全审计 TOP5：覆盖 §5.5.1
+// ±30s ts 容差数倍，窗口滑出后同一 nonce 理论上可复用，但 ts 已失效兜底拒绝）。
+const renegNonceWindow = 5 * time.Minute
+
+// renegotiateNonceSeen 登记/查询凭据重协商 nonce（Hub 级 5 分钟去重窗；重复 →
+// true）。M-2：重协商证据 Ed25519(deviceId|ts|nonce) 单次化——同一签名证据
+// 在窗口内重放被拒；仅在 Ed25519 验签**通过后**登记（无私钥者无法抢占合法
+// nonce 造成 DoS）。形态复刻 v2Session.nonceSeen（会话前无 v2Session 可挂）。
+func (h *Hub) renegotiateNonceSeen(nonce string, now time.Time) bool {
+	h.renegMu.Lock()
+	defer h.renegMu.Unlock()
+	if h.renegNonce == nil {
+		h.renegNonce = map[string]time.Time{}
+	}
+	for k, ts := range h.renegNonce {
+		if now.Sub(ts) > renegNonceWindow {
+			delete(h.renegNonce, k)
+		}
+	}
+	if _, dup := h.renegNonce[nonce]; dup {
+		return true
+	}
+	h.renegNonce[nonce] = now
+	return false
+}
+
 // ---- POST /api/v2/device-sessions ----
 
 type createSessionRequest struct {
@@ -187,6 +213,11 @@ func (h *Hub) renegotiate(ctx context.Context, dev sqlite.Device, req createSess
 	if !ed25519.Verify(ed25519.PublicKey(pubBytes), msg, sig) {
 		return nil, errors.New("Ed25519 签名验证失败")
 	}
+	// M-2（安全审计 TOP5）：nonce 单次化（Hub 级 5 分钟内存去重窗）——验签通过
+	// 后登记，同一签名证据窗口内重放即拒（凭据换发为一次性操作）。
+	if h.renegotiateNonceSeen(p.Nonce, h.Now().UTC()) {
+		return nil, errors.New("renegotiate nonce 重放（证据单次有效）")
+	}
 	tokenHex, err := wire.RandomHex(32)
 	if err != nil {
 		return nil, err
@@ -236,6 +267,7 @@ func (h *Hub) HandleDeviceSessionWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(wsReadLimit) // H-2 OOM 面：升级后即设单帧读上限（1 MiB）
 	s := &v2Session{
 		ID: sessionID, DeviceID: row.DeviceID,
 		TokenHex: cred.TokenHex, TokenVersion: cred.TokenVersion,
@@ -444,9 +476,17 @@ func (h *Hub) handleV2Frame(ctx context.Context, s *v2Session, conn *websocket.C
 		return true
 	}
 	if dup {
-		// 同 ID 同内容 → 幂等回执原确认，不重复副作用（§5.4.3；无原回执则静默）
+		// 同 ID 同内容 → 幂等回执原确认，不重复副作用（§5.4.3；无原回执则静默）。
+		// H1 服务端半边：存下的回执内容按当前会话重签重建回写（fresh nonce/ts/seq
+		// + 同载荷）——冻结签名帧原样重放会被设备侧入向规则拒收（ts/nonce/seq 冻结
+		// 门）；非 JSON 内容（历史数据）原样回写兜底。
 		if receipt, ok, _ := h.DB.GetInboundReceipt(ctx, s.DeviceID, meta.EventID); ok && receipt != "" {
-			_ = writeRaw(&s.writeMu, conn, []byte(receipt))
+			var rc receiptContent
+			if err := json.Unmarshal([]byte(receipt), &rc); err != nil || len(rc.List) == 0 {
+				_ = writeRaw(&s.writeMu, conn, []byte(receipt))
+			} else if err := h.writeReceipt(s, []byte(receipt)); err != nil {
+				h.Log.Printf("gateway: 重复帧回执回写失败 eventId=%s: %v", meta.EventID, err)
+			}
 		}
 		return false
 	}
@@ -511,6 +551,7 @@ func (h *Hub) dispatchV2Payload(ctx context.Context, s *v2Session, env *wire.Env
 		}
 	}
 	now := h.Now().UTC()
+	hasResult := false
 	for _, item := range items {
 		switch t := wire.ListItemType(item); {
 		case t == wire.TypeJournalReplay:
@@ -525,6 +566,7 @@ func (h *Hub) dispatchV2Payload(ctx context.Context, s *v2Session, env *wire.Env
 				h.Log.Printf("gateway: journal 对账: %v", err)
 			}
 		case wire.IsExecResult(item):
+			hasResult = true
 			r, err := wire.DecodeExecResult(item)
 			if err != nil {
 				h.Log.Printf("gateway: 结果载荷解析失败: %v", err)
@@ -565,13 +607,95 @@ func (h *Hub) dispatchV2Payload(ctx context.Context, s *v2Session, env *wire.Env
 			h.Log.Printf("gateway: 未消费载荷 type=%d", t)
 		}
 	}
+	// H1 服务端半边（性能审计）：结果帧处理后即回写 receipt 并记忆——重复帧
+	// （设备重发/重连重放）凭 inbound_events.receipt 原确认，设备 journal 得以
+	// 确认（重连全量重放根因之一：结果帧当初以空 receipt 记忆，重复帧从不回包）。
+	if hasResult {
+		h.rememberReceipt(ctx, s, meta, listJSON)
+	}
 }
 
-// flushQueued 把目标的 queued 指令构造为签名帧下发并落 E03（先发送后留痕）。
-// 取批→发送→留痕整段持 Hub 级 flush 锁：与 hello 冲刷/调度泵并发时防止同一
-// queued 指令被取走两次（双发帧 + 第二次 MarkDispatched 409，T3.2 修复的
-// 既有竞态——帧发送为小文本写，锁窗口可接受）。
+// receiptContent 为入向结果帧的回执内容（inbound_events.receipt 存储形态）。
+// 存内容而非冻结帧文本：设备侧入向规则（ts ±30s / nonce 5min / seq 严格递增）
+// 拒绝冻结签名帧的原样重放（端侧 AtLeastOnceQueue.refreshForResend 以「同 eventId
+// + 新 nonce/ts/seq 重签」重建即为同一约束），服务端原确认同样按内容重签重建。
+type receiptContent struct {
+	SocketType int             `json:"socketType"`
+	CommandID  string          `json:"commandId"`
+	List       json.RawMessage `json:"list"`
+}
+
+// rememberReceipt 把结果帧的回执（socketType=3，result/ack，protocol/spec.md §5.4
+// 帧表）内容存 inbound_events.receipt（先存后发——发送崩溃后重复帧仍可原确认），
+// 随即向设备回写一帧重签名回执（fresh nonce/ts/seq + 同载荷，按能力自动加密）。
+// 全程 best-effort：失败仅日志，不撕裂会话、不影响已完成的管线副作用。
+func (h *Hub) rememberReceipt(ctx context.Context, s *v2Session, meta *wire.FrameMeta, listJSON []byte) {
+	content, err := json.Marshal(receiptContent{
+		SocketType: wire.SocketRawConfirm,
+		CommandID:  meta.CommandID,
+		List:       listJSON,
+	})
+	if err != nil {
+		h.Log.Printf("gateway: receipt 内容序列化失败: %v", err)
+		return
+	}
+	if err := h.DB.SetInboundReceipt(ctx, s.DeviceID, meta.EventID, string(content)); err != nil {
+		h.Log.Printf("gateway: receipt 记忆失败 eventId=%s: %v", meta.EventID, err)
+	}
+	if err := h.writeReceipt(s, content); err != nil {
+		h.Log.Printf("gateway: receipt 回写失败 eventId=%s: %v", meta.EventID, err)
+	}
+}
+
+// writeReceipt 按回执内容构造并回写一帧重签名回执。
+func (h *Hub) writeReceipt(s *v2Session, content []byte) error {
+	var rc receiptContent
+	if err := json.Unmarshal(content, &rc); err != nil || len(rc.List) == 0 {
+		return fmt.Errorf("receipt 内容非法: %s", truncateForAudit(content, 120))
+	}
+	socketType := rc.SocketType
+	if socketType == 0 {
+		socketType = wire.SocketRawConfirm
+	}
+	frame, _, err := s.buildSignedFrame(h, socketType, rc.List, rc.CommandID)
+	if err != nil {
+		return err
+	}
+	return writeRaw(&s.writeMu, s.conn, mustJSON(frame))
+}
+
+// v2FlushBatchSize 为单批冲刷上限（性能审计 H3；var 供测试注入小批大小验证
+// 多批排空）。
+var v2FlushBatchSize = 64
+
+// flushQueued 把目标的 queued 指令构造为签名帧下发并落 E03（先发送后留痕），
+// 冲刷至队空（性能审计 H3：原实现每秒泵至多一批 64 条，积压吞吐被泵周期封顶；
+// 现单次调用循环排空）。
+//
+// 每批：取批 → 一事务批量分配 epoch（原每条一次 BumpEpoch 事务）→ 逐帧发送 →
+// 一事务批量落 E03（原每条一次 MarkDispatched 事务）——每批 2 次事务替代每条
+// 2 次。先发送后留痕语义不变（pipeline.go MarkDispatched 注释）：发送中断时已
+// 发送前缀照常留痕、其余留队下轮补发（at-least-once）。
+//
+// 取批→发送→留痕整段仍持 Hub 级 flush 锁（与 hello 冲刷/调度泵并发时防止同一
+// queued 指令被取走两次，T3.2）；批间释放——单批锁窗受帧写 deadline（writeRaw
+// SetWriteDeadline）与批量事务封顶，大批量积压不独占全局锁。
 func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
+	total := 0
+	for {
+		n, err := s.flushBatch(ctx, h)
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, nil
+		}
+		total += n
+	}
+}
+
+// flushBatch 冲刷一批（≤v2FlushBatchSize 条）；返回本批已发送条数。
+func (s *v2Session) flushBatch(ctx context.Context, h *Hub) (int, error) {
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
@@ -579,33 +703,49 @@ func (s *v2Session) flushQueued(ctx context.Context, h *Hub) (int, error) {
 		return 0, nil
 	}
 	h.flushMu.Lock()
-	defer h.flushMu.Unlock()
-	cmds, err := h.Pipeline.QueuedForTarget(ctx, s.DeviceID, 64)
+	cmds, err := h.Pipeline.QueuedForTarget(ctx, s.DeviceID, v2FlushBatchSize)
 	if err != nil {
+		h.flushMu.Unlock()
 		return 0, err
 	}
+	if len(cmds) == 0 {
+		h.flushMu.Unlock()
+		return 0, nil
+	}
+	// 一事务批量分配本批 epoch（逐指令消费 base..base+len-1；H3）
+	base, err := h.DB.AllocateEpochs(ctx, s.DeviceID, len(cmds))
+	if err != nil {
+		h.flushMu.Unlock()
+		return 0, err
+	}
+	sent := make([]scheduler.DispatchMark, 0, len(cmds))
 	n := 0
-	for _, cmd := range cmds {
-		epoch, err := h.DB.BumpEpoch(ctx, s.DeviceID)
-		if err != nil {
-			return n, err
-		}
+	buildErr := error(nil)
+	for i, cmd := range cmds {
 		// 下发载荷注入 epoch（spec §5.7.2 v1.2.0 冻结：端侧 InboundCommandGate
 		// 拒旧水位的线缆输入；载荷 additionalProperties:true 容纳该字段）
-		list := json.RawMessage(`[` + string(withEpoch(cmd.Payload, epoch)) + `]`)
+		list := json.RawMessage(`[` + string(withEpoch(cmd.Payload, base+int64(i))) + `]`)
 		frame, meta, err := s.buildSignedFrame(h, wire.SocketMessageList, list, cmd.CommandID)
 		if err != nil {
-			return n, err
+			buildErr = err
+			break
 		}
 		if err := writeRaw(&s.writeMu, s.conn, mustJSON(frame)); err != nil {
-			return n, err
+			buildErr = err
+			break
 		}
-		if err := h.Pipeline.MarkDispatched(ctx, cmd.CommandID, epoch, meta.Seq, meta.EventID); err != nil {
-			return n, err
-		}
+		sent = append(sent, scheduler.DispatchMark{
+			CommandID: cmd.CommandID, Epoch: base + int64(i), Seq: meta.Seq, EventID: meta.EventID,
+		})
 		n++
 	}
-	return n, nil
+	// 一事务批量落 E03（仅已发送前缀；并发迁出竞态指令跳过不失败，H3）
+	if _, err := h.Pipeline.MarkDispatchedBatch(ctx, sent); err != nil {
+		h.flushMu.Unlock()
+		return n, err
+	}
+	h.flushMu.Unlock()
+	return n, buildErr
 }
 
 // withEpoch 把 dispatch 载荷单元（JSON 对象）注入 "epoch": <n>（已存在则覆盖为本次分配值）。

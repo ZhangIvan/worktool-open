@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -701,9 +703,109 @@ func TestScanQueuedTTL(t *testing.T) {
 	if len(ev) != 1 {
 		t.Fatalf("应有 E19 事件留痕：%v", ev)
 	}
-	// 幂等：再扫无新取消
+	// B4：迁移同事务落 101018 exec_result outbox 回执（CSV E19「回执含取消原因」；
+	// openapi 提交方/回调订阅方据此感知取消）。
+	ob, err := f.db.QueryDump(ctx, `SELECT payload FROM outbox WHERE command_id='qt-1' AND kind='exec_result'`)
+	if err != nil || len(ob) != 1 {
+		t.Fatalf("E19 应落 1 条 outbox 回执：rows=%v err=%v", ob, err)
+	}
+	for _, frag := range []string{`"errorCode":101018`, `queue_ttl_expired`, `"finalState":"cancelled"`} {
+		if !strings.Contains(ob[0][0], frag) {
+			t.Fatalf("回执应含 %s：%s", frag, ob[0][0])
+		}
+	}
+	// 幂等：再扫无新取消（也不得重复落回执）
 	again, _ := f.svc.ScanQueuedTTL(ctx, 24*time.Hour)
 	if len(again) != 0 {
 		t.Fatalf("重扫应幂等：%v", again)
+	}
+	if n, _ := f.db.QueryDump(ctx, `SELECT COUNT(*) FROM outbox WHERE command_id='qt-1' AND kind='exec_result'`); n[0][0] != "1" {
+		t.Fatalf("重扫后回执应仍 1 条：%v", n)
+	}
+}
+
+// TestMarkDispatchedBatch（性能审计 H3）：整批 E03 单事务——语义与逐条
+// MarkDispatched 完全一致（同边/同 detail/同审计行）；并发迁出（取消竞态）
+// 指令跳过不失败、其余照常留痕。
+func TestMarkDispatchedBatch(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+
+	// ① 正常批：3 条 queued → 一批留痕，事件/审计逐条齐备
+	ids := []string{f.submit(t, 203, RiskL0), f.submit(t, 203, RiskL0), f.submit(t, 203, RiskL0)}
+	marks := make([]DispatchMark, 0, len(ids))
+	for i, id := range ids {
+		marks = append(marks, DispatchMark{CommandID: id, Epoch: int64(i + 1), Seq: int64(i + 1), EventID: wire.NewUUID()})
+	}
+	skipped, err := f.svc.MarkDispatchedBatch(ctx, marks)
+	if err != nil {
+		t.Fatalf("批量留痕: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("正常批应无跳过: %v", skipped)
+	}
+	for i, id := range ids {
+		if st := f.state(t, id); st != "dispatched" {
+			t.Fatalf("指令 %s 状态 = %s, want dispatched", id, st)
+		}
+		cmd, ok, _ := f.db.GetCommand(ctx, id)
+		if !ok || cmd.Epoch != int64(i+1) || cmd.Seq != int64(i+1) {
+			t.Fatalf("指令 %s epoch/seq 未按批量分配值落库: %+v", id, cmd)
+		}
+		events, _ := f.db.Events(ctx, id)
+		if len(events) != 2 { // E01 + E03
+			t.Fatalf("指令 %s 事件流 = %d 条, want 2 (E01+E03)", id, len(events))
+		}
+		e03 := events[len(events)-1]
+		if e03.EdgeID != "E03" {
+			t.Fatalf("指令 %s 末条边 = %s, want E03", id, e03.EdgeID)
+		}
+		wantDetail := fmt.Sprintf("epoch=%d seq=%d eventId=%s ttl=%ds", i+1, i+1, marks[i].EventID, f.svc.Machine().Policy().AckTTLSeconds)
+		if e03.Detail != wantDetail {
+			t.Fatalf("E03 detail 与单条路径不一致:\n got %s\nwant %s", e03.Detail, wantDetail)
+		}
+	}
+	audit, err := f.db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='command_transition' AND detail LIKE 'E03 %'`)
+	if err != nil || len(audit) != 1 || audit[0][0] != "3" {
+		t.Fatalf("E03 审计应逐条 3 行: %v %v", audit, err)
+	}
+
+	// ② 并发迁出竞态：批内一条已被 cancel（帧已发送），应跳过且不拖垮整批
+	id2 := f.submit(t, 203, RiskL0)
+	if err := f.svc.CancelBeforeDelivery(ctx, id2, "test"); err != nil {
+		t.Fatal(err)
+	}
+	id3 := f.submit(t, 203, RiskL0)
+	skipped, err = f.svc.MarkDispatchedBatch(ctx, []DispatchMark{
+		{CommandID: id2, Epoch: 11, Seq: 11, EventID: wire.NewUUID()},
+		{CommandID: id3, Epoch: 12, Seq: 12, EventID: wire.NewUUID()},
+	})
+	if err != nil {
+		t.Fatalf("含竞态指令的批量留痕不应失败: %v", err)
+	}
+	if len(skipped) != 1 || skipped[0] != id2 {
+		t.Fatalf("应跳过已取消指令 %s: %v", id2, skipped)
+	}
+	if st := f.state(t, id3); st != "dispatched" {
+		t.Fatalf("健康指令应照常留痕，状态 = %s", st)
+	}
+	if st := f.state(t, id2); st != "cancelled" {
+		t.Fatalf("已取消指令不得被迁移，状态 = %s", st)
+	}
+	skipAudit, _ := f.db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='dispatch_skip'`)
+	if len(skipAudit) != 1 || skipAudit[0][0] != "1" {
+		t.Fatalf("跳过应有审计留痕: %v", skipAudit)
+	}
+
+	// ③ 指令不存在：整批报错回滚（commands 无删除路径，仅防御脏数据）
+	if _, err := f.svc.MarkDispatchedBatch(ctx, []DispatchMark{
+		{CommandID: "no-such-cmd", Epoch: 1, Seq: 1, EventID: wire.NewUUID()},
+	}); err == nil {
+		t.Fatal("不存在指令应报错")
+	}
+
+	// ④ 空批：no-op
+	if skipped, err := f.svc.MarkDispatchedBatch(ctx, nil); err != nil || len(skipped) != 0 {
+		t.Fatalf("空批应 no-op: skipped=%v err=%v", skipped, err)
 	}
 }

@@ -37,6 +37,23 @@ var (
 	PerIPKeysCap = 4096
 )
 
+// IPParams 为 per-IP 限流口径（实例化复用入口：api /api/v2/pair 面 H-1 以
+// NewIPLimiter 自持实例 + 实例口径，与包级 var（K6 面，测试可在 Mount 后注入）
+// 互不干扰；判定逻辑与 ipLimiter.allowWith 同一份实现）。
+type IPParams struct {
+	// Rate 滚动窗口内允许的请求数。
+	Rate int
+	// Window 滚动窗口长度。
+	Window time.Duration
+	// BanThreshold 窗口内连续超限第 N 次触发封禁；≤0 = 禁用超限封禁
+	// （pair 面：封禁语义由"连续失败封禁"承担，见 api/pair.go pairGuard）。
+	BanThreshold int
+	// BanDuration 封禁冷却时长。
+	BanDuration time.Duration
+	// KeysCap entry 基数上限（fail-closed：超限对新 IP 直接拒绝，保旧）。
+	KeysCap int
+}
+
 // ipLimiter 为 per-IP 滚动窗口限流器 + 连续超限封禁。
 type ipLimiter struct {
 	mu      sync.Mutex
@@ -51,20 +68,51 @@ type ipEntry struct {
 
 func newIPLimiter() *ipLimiter { return &ipLimiter{entries: map[string]*ipEntry{}} }
 
-// ipKey 从 RemoteAddr 提取 host（无端口原样返回；解析失败返回整串——fail-safe
-// 归并为单键，不影响放行判定）。
-func ipKey(remoteAddr string) string {
+// IPLimiter 为实例化 per-IP 限流器（判定状态自持；口径随调用经 AllowParams
+// 传入，调用方可维持 var 注入语义）。非 K6 面复用入口（api/pair.go pairGuard）。
+type IPLimiter struct {
+	lim ipLimiter
+}
+
+// NewIPLimiter 构建实例化 per-IP 限流器（空口径，判定时经 AllowParams 传入）。
+func NewIPLimiter() *IPLimiter { return &IPLimiter{lim: ipLimiter{entries: map[string]*ipEntry{}}} }
+
+// AllowParams 以给定口径判定本请求是否放行（语义同 ipLimiter.allow）。
+func (l *IPLimiter) AllowParams(ip string, now time.Time, p IPParams) (allowed, banned bool) {
+	return l.lim.allowWith(ip, now, p)
+}
+
+// compatParams 取包级 var 口径（K6 面维持 var 注入语义：Mount 之后仍可改）。
+func compatParams() IPParams {
+	return IPParams{
+		Rate: PerIPRateQPS, Window: PerIPWindow,
+		BanThreshold: PerIPBanThreshold, BanDuration: PerIPBanDuration,
+		KeysCap: PerIPKeysCap,
+	}
+}
+
+// IPKey 从 RemoteAddr 提取 host（导出复用入口：api/pair.go pairGuard 同键口径；
+// 无端口原样返回；解析失败返回整串——fail-safe 归并为单键，不影响放行判定）。
+func IPKey(remoteAddr string) string {
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil && host != "" {
 		return host
 	}
 	return remoteAddr
 }
 
-// allow 判定本请求是否放行。返回 (allowed, banned)：
+// ipKey 从 RemoteAddr 提取 host（包内调用点走 IPKey，单一来源）。
+func ipKey(remoteAddr string) string { return IPKey(remoteAddr) }
+
+// allow 判定本请求是否放行（K6 面：读包级 var 口径）。返回 (allowed, banned)：
 //   - banned=true：封禁期内（冷却未过，直接拒绝，不计数）；
 //   - allowed=false 且 banned=false：超限拒绝（计入连续超限计数，达到阈值
 //     即启动封禁）。
 func (l *ipLimiter) allow(ip string, now time.Time) (allowed, banned bool) {
+	return l.allowWith(ip, now, compatParams())
+}
+
+// allowWith 同 allow，口径由参数给定（实例化复用：IPLimiter.AllowParams）。
+func (l *ipLimiter) allowWith(ip string, now time.Time, p IPParams) (allowed, banned bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.entries[ip]
@@ -72,7 +120,7 @@ func (l *ipLimiter) allow(ip string, now time.Time) (allowed, banned bool) {
 		return false, true // 冷却期内：直接拒绝
 	}
 	if !ok {
-		if len(l.entries) >= PerIPKeysCap {
+		if len(l.entries) >= p.KeysCap {
 			return false, false // keys-cap fail-closed（拒新保旧）
 		}
 		e = &ipEntry{}
@@ -84,7 +132,7 @@ func (l *ipLimiter) allow(ip string, now time.Time) (allowed, banned bool) {
 		e.hits = nil
 		e.consecOver = 0
 	}
-	cutoff := now.Add(-PerIPWindow)
+	cutoff := now.Add(-p.Window)
 	kept := e.hits[:0]
 	for _, t := range e.hits {
 		if t.After(cutoff) {
@@ -93,13 +141,13 @@ func (l *ipLimiter) allow(ip string, now time.Time) (allowed, banned bool) {
 	}
 	if len(kept) == 0 && len(e.hits) > 0 {
 		delete(l.entries, ip)                     // 空窗回收（防每 IP 一条永不释放的空 entry）
-		return l.allowLockedFresh(ip, now), false // cap 满 → fail-closed 拒新
+		return l.allowLockedFresh(ip, now, p), false // cap 满 → fail-closed 拒新
 	}
 	e.hits = kept
-	if len(kept) >= PerIPRateQPS {
+	if len(kept) >= p.Rate {
 		e.consecOver++
-		if e.consecOver >= PerIPBanThreshold {
-			e.bannedUntil = now.Add(PerIPBanDuration)
+		if p.BanThreshold > 0 && e.consecOver >= p.BanThreshold {
+			e.bannedUntil = now.Add(p.BanDuration)
 			e.consecOver = 0
 		}
 		return false, false
@@ -110,8 +158,8 @@ func (l *ipLimiter) allow(ip string, now time.Time) (allowed, banned bool) {
 }
 
 // allowLockedFresh 空窗回收后重新建 entry（等价首请求路径；cap 满时 fail-closed）。
-func (l *ipLimiter) allowLockedFresh(ip string, now time.Time) bool {
-	if len(l.entries) >= PerIPKeysCap {
+func (l *ipLimiter) allowLockedFresh(ip string, now time.Time, p IPParams) bool {
+	if len(l.entries) >= p.KeysCap {
 		return false // keys-cap fail-closed：拒新保旧
 	}
 	l.entries[ip] = &ipEntry{hits: []time.Time{now}}

@@ -66,9 +66,9 @@ var adminCommandCatalog = []adminCommandEntry{
 	{508, "查询全部群", "L0", nil, `{"type":508}`, "查询"},
 	{509, "上传本地文件/日志", "L0", []string{"filePath"}, `{"type":509,"filePath":"/sdcard/Download/文件.pdf"}`, "运维"},
 	{510, "上传运行日志包", "L0", nil, `{"type":510,"logDate":"2026-11-04"}`, "运维"},
-	{511, "查询会议信息", "L0", nil, `{"type":511","objectName":"2026-11-04"}`, "查询"},
+	{511, "查询会议信息", "L0", nil, `{"type":511,"objectName":"2026-11-04"}`, "查询"},
 	{512, "查询群成员信息", "L0", []string{"groupName"}, `{"type":512,"groupName":"交付群"}`, "查询"},
 	{513, "查询设备资源", "L0", nil, `{"type":513}`, "查询"},
-	{514, "查询日志片段", "L0", []string{"messageId 或时间段"}, `{"type":514,"messageId":"消息ID"}`, "运维"},
+	{514, "查询日志片段", "L0", nil, `{"type":514,"messageId":"消息ID（或按时间段查询，与 messageId 二选一）"}`, "运维"},
 	{515, "查询群名信息", "L0", []string{"groupName"}, `{"type":515,"groupName":"交付群"}`, "查询"},
 }

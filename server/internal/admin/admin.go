@@ -264,12 +264,18 @@ func (s *Server) handlePairingCodes(w http.ResponseWriter, r *http.Request) {
 	code := string(digits)
 	now := s.now().UTC()
 	expires := now.Add(pairingCodeTTL)
+	// H-1（安全审计 TOP5）：签发新码即把全部未使用旧码置 used（单活动码语义，
+	// 压缩爆破面；与 api.Server.CreatePairingCode 同一 store 方法，防语义漂移）。
+	if _, err := s.db.InvalidateUnusedPairingCodes(r.Context(), now); err != nil {
+		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		return
+	}
 	if err := s.db.CreatePairingCode(r.Context(), sha256Hex(code), expires); err != nil {
 		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
 		return
 	}
 	if err := s.db.InsertAudit(r.Context(), nil, "admin_pairing_code_issued", adminScopeRobotID,
-		fmt.Sprintf("配对码签发（仅存 hash，TTL %s，单次有效）", pairingCodeTTL), now); err != nil {
+		fmt.Sprintf("配对码签发（仅存 hash，TTL %s，单次有效；未使用旧码已一并置 used，H-1 单活动码）", pairingCodeTTL), now); err != nil {
 		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
 		return
 	}

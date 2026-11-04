@@ -341,11 +341,14 @@ class SessionRuntime(
     fun events(): List<String> = synchronized(lock) { eventBuffer.toList() }
 
     private fun appendEvent(line: String) {
-        val stamped = "[${timeFmt.format(Date(clock()))}] $line"
-        synchronized(lock) {
-            eventBuffer.addLast(stamped)
-            while (eventBuffer.size > EVENT_BUFFER_MAX) eventBuffer.removeFirst()
-            if (logEnabled) LogStoreWriter.appendLine(logsDir, clock, stamped)
+        // S9（线程安全 review）：SimpleDateFormat 非线程安全，回调来自 WS/调度器
+        // 多线程——format 与环形缓冲写同锁串行化。
+        val stamped = synchronized(lock) {
+            "[${timeFmt.format(Date(clock()))}] $line".also {
+                eventBuffer.addLast(it)
+                while (eventBuffer.size > EVENT_BUFFER_MAX) eventBuffer.removeFirst()
+                if (logEnabled) LogStoreWriter.appendLine(logsDir, clock, it)
+            }
         }
         onEventLine?.invoke(stamped)
     }

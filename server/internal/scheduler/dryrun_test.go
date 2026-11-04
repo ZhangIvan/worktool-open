@@ -76,3 +76,19 @@ func TestDryRunRejectsNonDryRun(t *testing.T) {
 		t.Fatal("非干跑指令应拒绝服务端代执行")
 	}
 }
+
+// TestPlannedActionNamesWMS5Coverage（S7 回归，2026-11-04 review）：W-M5 进入
+// openapi 注册表的六类（236/237/238/239/240/244）此前缺中文名——干跑报告退化为
+// 「指令 type=236」。锁名字已补齐（与 admin/catalog.go 对齐）；分级另由
+// TestRiskClassify 锁 L2（补名 ≠ 降级）。
+func TestPlannedActionNamesWMS5Coverage(t *testing.T) {
+	want := map[int]string{
+		236: "删除单向联系人", 237: "清理企微缓存", 238: "批量发送文本",
+		239: "创建客户群活码", 240: "添加群公告网页", 244: "退出群",
+	}
+	for typ, name := range want {
+		if got := plannedAction(typ); got != name {
+			t.Fatalf("type=%d plannedAction 应 %q，实际 %q", typ, name, got)
+		}
+	}
+}

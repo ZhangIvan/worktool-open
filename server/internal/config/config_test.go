@@ -122,6 +122,43 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 }
 
+// TestEnableV1CompatDefaultOff（H-2，安全审计 TOP5）：v1 兼容 WS 面默认不挂载——
+// 配置默认 false；flag -enable-v1-compat / env WT_ENABLE_V1_COMPAT 显式开启；
+// flag 优先级高于 env（false 覆盖 env 的 1）。
+func TestEnableV1CompatDefaultOff(t *testing.T) {
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableV1Compat {
+		t.Fatal("EnableV1Compat 默认必须 false（v1 兼容面默认不挂载）")
+	}
+
+	cfg, err = Load([]string{"-enable-v1-compat", "-listen", "127.0.0.1:19095"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableV1Compat {
+		t.Fatal("-enable-v1-compat 应开启 v1 兼容面")
+	}
+
+	cfg, err = Load(nil, []string{"WT_LISTEN=127.0.0.1:19095", "WT_ENABLE_V1_COMPAT=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableV1Compat {
+		t.Fatal("WT_ENABLE_V1_COMPAT=1 应开启 v1 兼容面")
+	}
+
+	cfg, err = Load([]string{"-enable-v1-compat=false"}, []string{"WT_LISTEN=127.0.0.1:19095", "WT_ENABLE_V1_COMPAT=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableV1Compat {
+		t.Fatal("flag -enable-v1-compat=false 应覆盖 env 的 1（flag 优先）")
+	}
+}
+
 // TestLoadT23Fields：T2.3 新增配置（DB/回调）装载与校验。
 func TestLoadT23Fields(t *testing.T) {
 	cfg, err := Load(nil, []string{

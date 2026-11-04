@@ -377,6 +377,61 @@ func (s *Service) MarkDispatched(ctx context.Context, commandID string, epoch, s
 	})
 }
 
+// DispatchMark 为 MarkDispatchedBatch 的一条留痕项（网关发送后持有的
+// commandID ↔ epoch/seq/eventId 分配值）。
+type DispatchMark struct {
+	CommandID string
+	Epoch     int64
+	Seq       int64
+	EventID   string
+}
+
+// MarkDispatchedBatch 一个事务落整批 E03（queued→dispatched）（性能审计 H3：
+// 原 flushQueued 每条指令一次 MarkDispatched 事务，一批 64 条即 64 次提交；
+// 此处整批单事务）。每条指令语义与 MarkDispatched 完全一致（同 E03 边、同
+// detail 格式、同审计行），E03 事件/审计语义不变。
+//
+// 已被并发迁出 queued 的指令（如取消竞态——帧此时已实际发送）跳过不失败、仅
+// 审计留痕：整批回滚会把已发送指令留在 queued 态导致下轮重发（重复投递），
+// 比"逐条独立事务遇错中止"更收敛。返回跳过的 commandID 列表。
+// 指令不存在（无法回配）仍整批报错回滚——commands 无删除路径，仅防御脏数据。
+func (s *Service) MarkDispatchedBatch(ctx context.Context, marks []DispatchMark) ([]string, error) {
+	now := s.Now().UTC()
+	var skipped []string
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for _, m := range marks {
+			cmd, ok, err := s.db.GetCommandForUpdate(ctx, tx, m.CommandID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("scheduler: 指令 %s 不存在（dispatch）", m.CommandID)
+			}
+			edge, ok := s.m.EdgeFor(cmd.State, "dispatch")
+			if !ok {
+				if err := s.db.InsertAudit(ctx, tx, "dispatch_skip", m.CommandID,
+					fmt.Sprintf("state=%s 不允许 dispatch（并发迁出竞态），跳过 E03（帧已发送）", cmd.State), now); err != nil {
+					return err
+				}
+				skipped = append(skipped, m.CommandID)
+				continue
+			}
+			ttl := time.Duration(s.m.Policy().AckTTLSeconds) * time.Second
+			cmd.Epoch = m.Epoch
+			cmd.Seq = m.Seq
+			cmd.EventID = m.EventID
+			cmd.DispatchedAt = sql.NullTime{Time: now, Valid: true}
+			cmd.AckDeadline = sql.NullTime{Time: now.Add(ttl), Valid: true}
+			if err := s.applyEdge(ctx, tx, &cmd, edge,
+				fmt.Sprintf("epoch=%d seq=%d eventId=%s ttl=%ds", m.Epoch, m.Seq, m.EventID, s.m.Policy().AckTTLSeconds), now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return skipped, err
+}
+
 // HandleTransportAck 落 E05（dispatched→acked；transport ack ≠ 执行许可）。
 func (s *Service) HandleTransportAck(ctx context.Context, commandID, evidence string) error {
 	now := s.Now().UTC()
@@ -778,6 +833,9 @@ func (s *Service) ScanAckTTL(ctx context.Context) (expired []string, err error) 
 // ScanQueuedTTL 扫描排队超期（E19，2026-11-04 所有者反馈修复）：queued 态超过
 // 排队 TTL（默认 24h）仍无投递 → cancelled（离线积压清理；从未下发不涉成败推定）。
 // 与 E17/E18 不同：queued 从未出服务端，无对账歧义，可直接终态化。
+// B4 修复：迁移同事务落 101018 exec_result outbox 回执（CSV E19 effect「回执含
+// 取消原因」；与 admin enqueueAdminCancelReceipt 同形态）——openapi 提交方/回调
+// 订阅方据此感知取消，不再永远等结果。
 func (s *Service) ScanQueuedTTL(ctx context.Context, ttl time.Duration) (cancelled []string, err error) {
 	now := s.Now().UTC()
 	rows, err := s.db.QueryDump(ctx, `SELECT command_id FROM commands WHERE state='queued' AND created_at < ?`,
@@ -802,6 +860,17 @@ func (s *Service) ScanQueuedTTL(ctx context.Context, ttl time.Duration) (cancell
 			}
 			if err := s.applyEdge(ctx, tx, &cur, edge,
 				fmt.Sprintf("排队 TTL %s 到期无投递（设备离线积压清理；从未下发，可重新提交）", ttl), now); err != nil {
+				return err
+			}
+			// 取消回执与迁移同事务（不变量②）；errorReason 注明 queue_ttl_expired 供
+			// 回调方机读归因。101018=指令被取消（与 admin/api 回执同码）。
+			receipt := map[string]any{
+				"type": "exec_result", "commandId": cur.CommandID, "commandType": cur.CommandType,
+				"errorCode": 101018, "errorReason": "排队超期未投递（queue_ttl_expired，离线积压清理；可重新提交新指令）",
+				"timeCost": 0, "finalState": edge.To, "dryRun": cur.DryRun,
+				"at": now.UnixMilli(),
+			}
+			if err := s.db.EnqueueOutbox(ctx, tx, "exec_result", cur.CommandID, receipt, now); err != nil {
 				return err
 			}
 			migrated = true
@@ -833,6 +902,12 @@ func (s *Service) RunAckTTLScanner(ctx context.Context, interval time.Duration) 
 				return err
 			}
 			if _, err := s.ScanQueuedTTL(ctx, QueuedTTLDefault); err != nil {
+				return err
+			}
+			// L-3（安全审计 TOP5）：顺带清理过期/已用配对码（TTL 过 24h 即删，
+			// sqlite.PairingCodeRetain）。错误与同级扫描一致上抛——main.go 侧
+			// TTL 扫描器容错重启，瞬时 SQLITE_BUSY 不致停摆。
+			if _, err := s.db.CleanupPairingCodes(ctx, s.Now().UTC()); err != nil {
 				return err
 			}
 		}

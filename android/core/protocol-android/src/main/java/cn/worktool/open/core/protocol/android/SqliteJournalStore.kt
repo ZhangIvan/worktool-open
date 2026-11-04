@@ -94,6 +94,20 @@ class SqliteJournalStore(context: Context, dbName: String = "worktool_protocol_j
         )
     }
 
+    override fun pruneDone(keep: Int) {
+        // 块体同 update（避免表达式体歧义）。H1 DONE 化防回退窗口：仅保留最近 keep 条
+        // DONE（created_at 倒序 + rowid 兜底同毫秒并列），其余已完成条目删除。
+        if (keep <= 0) return
+        synchronized(helper) {
+            helper.writableDatabase.execSQL(
+                "DELETE FROM outbound WHERE state = 'DONE' AND event_id NOT IN (" +
+                    "SELECT event_id FROM outbound WHERE state = 'DONE' " +
+                    "ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+                arrayOf(keep),
+            )
+        }
+    }
+
     private class Helper(context: Context, name: String) :
         SQLiteOpenHelper(context, name, null, SCHEMA_VERSION) {
 

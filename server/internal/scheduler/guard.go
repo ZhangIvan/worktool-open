@@ -25,7 +25,8 @@ import (
 )
 
 // 风险分级表（FR-53；type → 风险级。分级表基线 = docs/01 FR-53 裁决③：
-// L1={206,207,213,220,227,228,229,230}、L2={219,234,304}，其余已实现指令=L0、
+// L1={206,207,213,220,227,228,229,230}、L2={219,234,304}∪{236,237,238,239,240,244
+// （S7 补缺配套显式钉 L2，见下方表内注）}，其余已实现指令=L0、
 // 未登记类型→L2 fail-closed〔ClassifyRisk〕；docs/10 新增指令须随实现同步登记本表）。
 //
 // 一致性约束（CR-t31-T31-R3 / CR-R1-0）：本表与端侧静态兜底表
@@ -46,6 +47,18 @@ var riskClassByType = map[int]string{
 	219: RiskL2, // DISMISS_GROUP 解散群
 	234: RiskL2, // DELETE_CONTACT 删联系人
 	304: RiskL2, // ROBOT_QUEUE_CLEAR 清空指令队列
+	// S7 补缺配套（2026-11-04 review）：236/237/238/239/240/244 已随 W-M5 进入
+	// openapi 注册表与 admin 目录（中文名补入 plannedActionNames），但分级裁决仍
+	// 按 docs/10-PARITY-PLAN（236 删单向联系人=L2、237 危险清理=L2、238~240/244
+	// 规划 L1 未裁决）——降级须显式裁决（FR-53「登记后方可降级」），本表先显式
+	// 钉 L2 保持与既往 fail-closed 同门（TestOpenAPIRegistryAllRoutesSmoke 锁 202
+	// 审批门不因补名而放松）。
+	236: RiskL2, // DELETE_SINGLE_DIRECTIONAL_CONTACT 删单向联系人（docs/10：FR-53 L2）
+	237: RiskL2, // WEWORK_CLEAN_CACHE 危险清理（docs/11 D6：默认关闭+高风险）
+	238: RiskL2, // SEND_BATCH_TEXT_MESSAGE 批量发送文本（docs/10 规划 L1，待裁决）
+	239: RiskL2, // CREATE_CUSTOMER_GROUP_LIVE_QRCODE 客户群活码（docs/10 规划 L1，待裁决）
+	240: RiskL2, // ADD_GROUP_BOARD_WEBPAGE 群公告网页（docs/10 规划 L1，待裁决）
+	244: RiskL2, // EXIT_GROUP 退群（docs/10 规划 L1/L2，待裁决）
 }
 
 // ClassifyRisk 按指令类型返回默认风险级（恒返回 L0/L1/L2，REST 兼容层与 cron 共用）：

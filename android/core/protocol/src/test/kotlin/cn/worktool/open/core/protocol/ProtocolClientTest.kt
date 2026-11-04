@@ -101,7 +101,7 @@ class ProtocolClientTest {
         )
         val v2 = serverVerifier.verify(transport.sent[1])
         assertTrue("上报帧验签: $v2", v2 is FrameVerifier.Verification.Accepted)
-        assertEquals(1, journal.entries().count { it.state != JournalState.DONE }) // 未 ack → 待发
+        assertEquals(1, journal.entries().count { it.state == JournalState.DONE }) // 发送成功即 DONE（H1：不再依赖 ack）
         session.stop()
     }
 
@@ -168,23 +168,30 @@ class ProtocolClientTest {
             transportFactory = FakeTransport.Factory(transport),
         )
         session.start()
-        // hello(seq=1) + 结果回执(seq=2，经 AtLeastOnce 先落盘)
+        // H1 DONE 化后重放语义：只有**发送失败**的条目才留在 journal 待重放——
+        // 先断线再入队（发送失败 → 条目保持未完成），重连 flushPending 补发。
+        transport.close(1006, "net-gone")
+        // 结果回执(seq=2，经 AtLeastOnce 先落盘；发送失败不上网)
         assertTrue(session.sendExecResult("cmd-replay", WeworkMessageBean(type = 203, errorCode = 0)))
         assertEquals(1, journal.entries().size)
-        val original = Json.parseToJsonElement(transport.sent[1]).jsonObject
+        assertTrue(
+            "发送失败条目保持未完成（待重放）",
+            journal.entries().single().state != JournalState.DONE,
+        )
+        // 固化帧文本 = journal 落盘内容（首投未上网，原样文本仅存 journal）
+        val original = Json.parseToJsonElement(journal.entries().single().frameText).jsonObject
         val origMeta = original["meta"]!!.jsonObject
 
         // 断线 60s（越过 ts±30s 与 nonce 5min 窗口）→ 重连：hello seq 恒 1（计数器
         // 在构造 hello 前复位），flushPending 重放 = 同 eventId 重建信封（新 nonce/ts/seq
         // + 重算 HMAC）——原样重发固化帧文本会被 4403/4402/4405+903 拒收（CR T34-01）
         now += 60_000
-        transport.close(1006, "net-gone")
         scheduler.advance(10_000) // 退避重连触发（greeting → onConnected → flushPending）
 
-        assertEquals("hello + 原回执 + 重连 hello + 重放帧 = 4 帧", 4, transport.sent.size)
-        val hello2 = Json.parseToJsonElement(transport.sent[2]).jsonObject
+        assertEquals("hello + 重连 hello + 重放帧 = 3 帧", 3, transport.sent.size)
+        val hello2 = Json.parseToJsonElement(transport.sent[1]).jsonObject
         assertEquals(1L, hello2["meta"]!!.jsonObject["seq"]!!.jsonPrimitive.content.toLong())
-        val rebuilt = Json.parseToJsonElement(transport.sent[3]).jsonObject
+        val rebuilt = Json.parseToJsonElement(transport.sent[2]).jsonObject
         val rebuiltMeta = rebuilt["meta"]!!.jsonObject
 
         assertEquals("重放帧 eventId 须与原帧一致（§5.4.3 去重键）", origMeta["eventId"]!!, rebuiltMeta["eventId"]!!)

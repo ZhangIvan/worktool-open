@@ -31,6 +31,15 @@ interface JournalStore {
     fun appliedEpoch(): Long
 
     fun setAppliedEpoch(epoch: Long)
+
+    /**
+     * 清理出向已完成（DONE）条目，仅保留最近 [keep] 条（docs/16 性能审计 H1）：
+     * journal 此前永不清理 → flushPending 全量重放历史帧（最旧优先）、新帧永远排队尾，
+     * 跨重连滞留 5.5 分钟。DONE 化后由队列在 enqueue/flushPending 后调用本方法做
+     * 防回退窗口裁剪（重放幂等由服务端 eventId 去重兜底，spec §5.4.3）。
+     * 缺省 no-op：未覆写的实现不清理（接口向后兼容，行为同历史版本）。
+     */
+    fun pruneDone(keep: Int) {}
 }
 
 /** 出向条目状态机：PENDING → INFLIGHT →（服务端确认）DONE。 */
@@ -80,6 +89,15 @@ class InMemoryJournalStore : JournalStore {
 
     override fun setAppliedEpoch(epoch: Long) {
         synchronized(lock) { this.epoch = epoch }
+    }
+
+    override fun pruneDone(keep: Int) = synchronized(lock) {
+        // 插入序 = created_at 序（LinkedHashMap）→ 保留最近 keep 条 DONE，其余删除。
+        if (keep > 0) {
+            outbound.values.filter { it.state == JournalState.DONE }
+                .dropLast(keep)
+                .forEach { outbound.remove(it.eventId) }
+        }
     }
 
     /** 深拷贝快照（模拟崩溃后重启重读 SQLite）。 */

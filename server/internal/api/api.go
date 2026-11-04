@@ -57,6 +57,10 @@ type Server struct {
 
 	Outbox *OutboxWorker
 
+	// pairGuard 为 POST /api/v2/pair 的 per-IP 防爆破闸（H-1，安全审计 TOP5：
+	// 5 次/分钟/IP + 连续 20 次失败封 15 分钟；NewServer 装配，勿手工置 nil）。
+	pairGuard *pairGuard
+
 	// apifox 兼容面（FR-34，T3.2）：配置与按 robot 限流器（默认 60QPM）。
 	openapiCfg     OpenAPIConfig
 	openapiLimiter *openapiLimiter
@@ -80,6 +84,7 @@ func NewServer(db *sqlite.DB, hub *gateway.Hub, pipeline *scheduler.Service, m *
 	s := &Server{
 		DB: db, Hub: hub, Pipeline: pipeline, Machine: m, Now: time.Now, Log: logger,
 		openapiCfg: cfg, openapiLimiter: newOpenAPILimiter(cfg),
+		pairGuard: newPairGuard(), // H-1：pair 面 per-IP 防爆破闸（参数见 pair.go PairRate* / PairFail*）
 	}
 	// W-M6 事件旁路接线（api/events.go: 网关车道旁路调用点）：设备 socketType=2
 	// 事件帧 → HandleEventFrameItems（102~105 事件 + 511/512/513/515 查询推送
@@ -100,6 +105,10 @@ func (s *Server) SetOpenAPIConfig(cfg OpenAPIConfig) {
 // Options 为 NewServeMux 的可选依赖（零值 = 仅 /healthz 骨架模式，T1.3 兼容）。
 type Options struct {
 	Server *Server
+	// EnableV1Compat 挂载 v1 兼容 WS 面 /webserver/wework/{robotId}（H-2，安全
+	// 审计 TOP5：robotId 即身份的弱鉴权面**默认不挂载**——config.EnableV1Compat
+	// / flag -enable-v1-compat 显式 opt-in 才暴露，迁移期部署用）。
+	EnableV1Compat bool
 }
 
 // NewServeMux 构建服务端 HTTP 路由。
@@ -107,9 +116,13 @@ type Options struct {
 // T2.3 全部端点。Go 1.22 ServeMux 路由模式：方法+路径参数。
 func NewServeMux(opts ...Options) *http.ServeMux {
 	var s *Server
+	enableV1Compat := false
 	for _, o := range opts {
 		if o.Server != nil {
 			s = o.Server
+		}
+		if o.EnableV1Compat {
+			enableV1Compat = true
 		}
 	}
 	mux := http.NewServeMux()
@@ -121,7 +134,10 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 	mux.HandleFunc("POST /api/v2/pair", s.HandlePair)
 	mux.HandleFunc("/api/v2/device-sessions", s.Hub.HandleCreateSession) // POST（方法守卫在 handler）
 	mux.HandleFunc("/api/v2/device-sessions/{sessionId}", s.Hub.HandleDeviceSessionWS)
-	mux.HandleFunc("/webserver/wework/{robotId}", s.Hub.HandleV1)
+	// H-2（安全审计 TOP5）：v1 兼容面默认不挂载（Options.EnableV1Compat 显式开启）。
+	if enableV1Compat {
+		mux.HandleFunc("/webserver/wework/{robotId}", s.Hub.HandleV1)
+	}
 	// apifox 兼容面（FR-34，ADR-08；方法守卫在 handler）
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands", s.HandleOpenAPICommand)
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands/{commandId}", s.HandleOpenAPIResult)

@@ -232,10 +232,11 @@ function confirmBox(title, bodyHtml, okLabel, onOk) {
   $("modal-ok").onclick = function () { closeModal(); onOk(); };
 }
 
-/* ============ 指令目录（数据源：GET /api/v1/admin/catalog；拉取失败时回退
- * server/internal/api/openapi_registry.go 同步维护的内置静态表）============
+/* ============ 指令目录（唯一数据源：GET /api/v1/admin/catalog）============
  * 服务端口径：commands[]（type/name/risk/required/example/group）+ statusLegend +
- * riskLegend。历史/队列/执行日志页枚举化显示与发送页三步引导均以此为准。 */
+ * riskLegend。历史/队列/执行日志页枚举化显示与发送页三步引导均以此为准。
+ * S2：拉取失败不再回退内置静态表（旧契约字段名/缺条目，生成的载荷必被服务端
+ * 拒绝）——发送页停用参数表单只留手写 JSON，列表页 type 回退纯数字。 */
 var CAT = { commands: [], byType: {}, statusLegend: {}, riskLegend: {}, ok: false };
 var CAT_PROMISE = null;
 function loadCatalog() {
@@ -249,56 +250,11 @@ function loadCatalog() {
     CAT.ok = true;
     return CAT;
   }).catch(function () {
-    CAT.ok = false; // 回退：纯数字显示（列表页）+ 内置静态表（发送页）
+    CAT.ok = false; // 失败降级：列表页 type 纯数字、发送页只留手写 JSON（见 renderSend）
+    CAT_PROMISE = null; // S1：失败结果不终身缓存——下次 loadCatalog()（切页/刷新）自动重试
     return CAT;
   });
   return CAT_PROMISE;
-}
-// 兜底静态表（仅发送页在 catalog 端点不可达时使用；展示口径以服务端为准）
-var RISK = {
-  L1: [206, 207, 213, 220, 227, 228, 229, 230],
-  L2: [219, 234, 304]
-};
-var CATALOG = [
-  { t: 201, n: "停止并回家", p: [] },
-  { t: 202, n: "循环接收新消息", p: [] },
-  { t: 203, n: "发送文本消息", p: ["targetRoom", "receivedContent"] },
-  { t: 204, n: "回复消息", p: ["targetRoom", "receivedContent"] },
-  { t: 205, n: "转发消息", p: ["targetRoom", "receivedName"] },
-  { t: 206, n: "建群", p: ["groupName"] },
-  { t: 207, n: "改群配置", p: ["targetRoom"] },
-  { t: 212, n: "通过全部好友申请", p: [] },
-  { t: 213, n: "手机号加好友", p: ["receivedName"] },
-  { t: 214, n: "查看群信息", p: ["targetRoom"] },
-  { t: 218, n: "发送文件", p: ["targetRoom", "receivedName"] },
-  { t: 219, n: "解散群", p: ["targetRoom"] },
-  { t: 220, n: "群内加好友", p: ["receivedName"] },
-  { t: 224, n: "发送链接", p: ["targetRoom", "receivedContent"] },
-  { t: 226, n: "撤回消息", p: ["targetRoom", "receivedContent"] },
-  { t: 229, n: "批量发送", p: ["targetRoom"] },
-  { t: 233, n: "扫描二维码", p: [] },
-  { t: 234, n: "删除联系人", p: ["receivedName"] },
-  { t: 237, n: "清理企微缓存", p: [] },
-  { t: 238, n: "批量发文本", p: ["targetRoom"] },
-  { t: 244, n: "退出群", p: ["targetRoom"] },
-  { t: 303, n: "机器人控制器测试", p: [] },
-  { t: 304, n: "清空指令队列", p: [] },
-  { t: 501, n: "查群信息", p: ["targetRoom"] },
-  { t: 503, n: "查我的信息", p: [] },
-  { t: 505, n: "查最近会话", p: [] },
-  { t: 506, n: "查企业列表", p: ["receivedContent"] },
-  { t: 507, n: "查全部好友", p: [] },
-  { t: 508, n: "查全部群聊", p: [] }
-];
-function riskOf(t) {
-  if (RISK.L2.indexOf(t) >= 0) return "L2";
-  if (RISK.L1.indexOf(t) >= 0) return "L1";
-  var known = CATALOG.some(function (c) { return c.t === t; });
-  return known ? "L0" : "L2"; // 未登记类型按 L2 fail-closed（FR-53 裁决②）
-}
-function catByType(t) {
-  for (var i = 0; i < CATALOG.length; i++) if (CATALOG[i].t === t) return CATALOG[i];
-  return null;
 }
 // 列表页「中文名 (203)」双显示；目录未命中/未载时回退纯数字
 function typeCell(t) {
@@ -328,8 +284,8 @@ function riskPill(rc) {
   return "<span class='pill " + esc(rc) + "'" + (tip ? " title='" + esc(tip) + "'" : "") + ">" + esc(rc) + "</span>";
 }
 function shortId(id) { return "<span class='mono' title='" + esc(id) + "'>" + esc(String(id).slice(0, 13)) + "…</span>"; }
-// E01..E18 边（数据源 protocol/state-transitions.csv；term=终态边 unk=对账登记边）
-var EDGE_TERM = { E02: 1, E04: 1, E10: 1, E11: 1, E13: 1, E14: 1, E15: 1, E16: 1 };
+// E01..E19 边（数据源 protocol/state-transitions.csv；term=终态边 unk=对账登记边）
+var EDGE_TERM = { E02: 1, E04: 1, E10: 1, E11: 1, E13: 1, E14: 1, E15: 1, E16: 1, E19: 1 };
 var EDGE_UNK = { E06: 1, E07: 1, E08: 1, E17: 1, E18: 1 };
 function edgePill(e) {
   var cls = "edge" + (EDGE_TERM[e] ? " term" : EDGE_UNK[e] ? " unk" : "");
@@ -537,12 +493,9 @@ function renderSend() {
     "<div id='send-warn'></div><div id='send-result'></div>" +
     "<p class='note'>正式发送防误发：需先取消「干跑模式」勾选；L2 指令另有弹层警示与独立审批门。未知类型按 L2 fail-closed（FR-53 裁决②）。分级实时口径可到「设置 → 分级查询」验证。</p></section>";
   var manual = false; // 预览手动微调标记：改动后不再被表单输入覆盖，直到点「重新生成」或改参数
-  // 兜底目录：catalog 端点不可达时用内置静态表（标注可能过期）
-  function localCatalog() {
-    return CATALOG.map(function (c) {
-      return { type: c.t, name: c.n, risk: riskOf(c.t), required: c.p || [], group: "内置静态目录（回退）", example: "" };
-    });
-  }
+  // S2：目录端点不可达时不再回退内置静态表（旧契约字段名 targetRoom/receivedName 与
+  // 现行契约 titleList/friend.* 不符、且缺 20+ 条——静态表生成的载荷必被服务端拒绝）。
+  // 降级口径：见 loadCatalog().then 的失败分支（停用表单、只留手写 JSON 提交路径）。
   function buildTypeOptions(list) {
     var groups = [], byGroup = {};
     list.forEach(function (c) {
@@ -559,9 +512,7 @@ function renderSend() {
   function currentEntry() {
     var t = parseInt($("send-type").value, 10);
     if (!t) return null;
-    if (CAT.byType[t]) return CAT.byType[t];
-    var loc = catByType(t);
-    return loc ? { type: loc.t, name: loc.n, risk: riskOf(loc.t), required: loc.p || [], group: "", example: "" } : null;
+    return CAT.byType[t] || null; // 仅服务端目录；目录未载 → 无条目，doSend 走手写 JSON 路径（S2）
   }
   // 从示例载荷取参数类型提示（数组 → 多行文本；其余单行）
   function exampleValue(entry, key) {
@@ -674,8 +625,7 @@ function renderSend() {
     okmsg(dry ? "干跑完成（零副作用）" : "指令已受理（" + esc(j.state) + "）");
   }
   function doSend(dry) {
-    var entry = currentEntry();
-    if (!entry) { banner("请先在第 1 步选择指令。"); return; }
+    var entry = currentEntry(); // 目录未载时为 null：允许手写 JSON 提交（S2），但 type 必须自带
     var target = $("send-target").value.trim();
     if (!target) { banner("target 必填（deviceId 或 v1:robotId）。"); return; }
     var payload;
@@ -684,10 +634,15 @@ function renderSend() {
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
       banner("载荷须为 JSON 对象（如 {} 或 {\"titleList\":[\"群名\"]}）。"); return;
     }
-    if (payload.type === undefined) payload.type = entry.type; // CR ADM-2：type 自动注入
+    if (entry) {
+      if (payload.type === undefined) payload.type = entry.type; // CR ADM-2：type 自动注入
+    } else if (payload.type === undefined) {
+      banner("目录未载且载荷缺 type：请在载荷 JSON 手写 type（如 {\"type\":203,\"titleList\":[\"群名\"],\"receivedContent\":\"内容\"}），或切换页面重试目录后用表单。");
+      return;
+    }
     var missing = missingRequired(entry, payload);
     if (missing.length && !confirm("以下必填参数未填写：" + missing.join("、") + "\n仍要提交？（服务端静态校验可能拒绝）")) return;
-    var body = { target: target, type: entry.type, payload: payload, dryRun: dry, actor: $("send-actor").value.trim() || "admin" };
+    var body = { target: target, type: entry ? entry.type : payload.type, payload: payload, dryRun: dry, actor: $("send-actor").value.trim() || "admin" };
     if ($("send-approval").value.trim()) body.approvalId = $("send-approval").value.trim();
     body.idempotencyKey = sendIdemKey(); // CR ADM-4：本次提交的幂等键（失败重试复用，成功后轮换）
     var b1 = $("send-dryrun"), b2 = $("send-go");
@@ -718,11 +673,16 @@ function renderSend() {
   loadCatalog().then(function () {
     if (CAT.ok) {
       buildTypeOptions(CAT.commands);
+      onPick();
     } else {
-      buildTypeOptions(localCatalog());
-      $("send-cat-note").innerHTML = "<span style='color:var(--warn)'>目录端点拉取失败：已回退内置静态表（名称/必填参数可能过期，以服务端校验为准）</span>";
+      // S2 诚实降级：停用目录引导与参数表单（防生成必被服务端拒绝的载荷），
+      // 只保留手写 JSON 载荷提交路径（下方预览框 + 干跑验证）；配合 S1，
+      // 目录失败不缓存 promise——切换页面再回来即自动重试。
+      $("send-type").innerHTML = "<option value=''>目录未载</option>";
+      $("send-pick").innerHTML = "";
+      $("send-fields").innerHTML = "<p class='dim' style='margin:6px 0'>目录未载：参数表单已停用——请在下方「载荷预览」手写完整 JSON（须含 type 与必填参数，如 {\"type\":203,\"titleList\":[\"群名\"],\"receivedContent\":\"内容\"}），先干跑验证再正式发送。</p>";
+      $("send-cat-note").innerHTML = "<span style='color:var(--warn)'>目录未载——请切换页面重试或在下方手写 JSON 载荷</span>";
     }
-    onPick();
   });
 }
 // CR ADM-4：提交幂等键管理（受理成功轮换 / 失败保留复用）
@@ -909,9 +869,11 @@ function renderApprovals() {
   $("approver").addEventListener("change", function () { localStorage.setItem(APPROVER_KEY, $("approver").value.trim()); });
   function fillExpl() {
     $("ap-cat-note").textContent = CAT.ok ? "" : "（目录未载：类型显示纯数字）";
-    var l2 = CAT.commands.filter(function (c) { return c.risk === "L2"; })
-      .map(function (c) { return "<b>" + esc(c.name) + "</b>（" + c.type + "）"; }).join("、");
-    if (!l2) l2 = RISK.L2.map(function (t) { return "<b>" + esc((catByType(t) || { n: "type " + t }).n) + "</b>（" + t + "）"; }).join("、");
+    // S2：静态表已移除——目录未载时 L2 清单诚实标注不可用（以服务端目录为准），不再兜底旧表
+    var l2 = CAT.ok
+      ? CAT.commands.filter(function (c) { return c.risk === "L2"; })
+        .map(function (c) { return "<b>" + esc(c.name) + "</b>（" + c.type + "）"; }).join("、")
+      : "<span style='color:var(--warn)'>目录未载——L2 指令清单暂不可用，请切换页面重试（分级口径以服务端目录/设置页分级查询为准）</span>";
     $("ap-expl").innerHTML = "<b>L2 = 高风险指令</b>" + (CAT.riskLegend.L2 ? "：" + esc(CAT.riskLegend.L2) : "") + "<br>" +
       "当前目录中的 L2 指令：" + l2 + "。<br>" +
       "L2 指令提交后<b>不直达设备</b>：先登记为待审批（FR-53），须在此由独立决议人（≠申请人）逐条批准/拒绝；" +

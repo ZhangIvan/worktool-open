@@ -76,6 +76,7 @@ func (h *Hub) HandleV1(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(wsReadLimit) // H-2 OOM 面：升级后即设单帧读上限（1 MiB）
 	c := &v1Conn{
 		hub: h, robotID: robotID, target: target,
 		conn: conn, pending: map[string]pendingRef{},

@@ -9,7 +9,8 @@ import org.junit.Test
 
 /**
  * AtLeastOnce 队列 + journal 语义测试（任务卡 T2.2 ④：先落盘后副作用）：
- * 持久先于发送、ack 完成、崩溃恢复重放、入向门禁（E09 guard）与 epoch 拒旧。
+ * 持久先于发送、发送成功即 DONE（docs/16 H1，ack 仍兼容）、崩溃恢复只重放未完成
+ * 条目、入向门禁（E09 guard）与 epoch 拒旧。
  */
 class DeliveryTest {
 
@@ -66,11 +67,11 @@ class DeliveryTest {
     @Test
     fun `崩溃恢复-journal 快照重放未完成条目（同 eventId 幂等）`() {
         val store = InMemoryJournalStore()
-        val sink = FakeSink()
+        val sink = FakeSink(available = false)
         val queue = AtLeastOnceQueue(store, sink)
-        queue.enqueue("evt-1", "f1", now = 100L)
-        queue.enqueue("evt-2", "f2", now = 101L)
-        queue.onAck("evt-2")
+        queue.enqueue("evt-1", "f1", now = 100L) // 断线期发送失败 → 未完成，待重放
+        sink.available = true
+        queue.enqueue("evt-2", "f2", now = 101L) // 发送成功即 DONE（H1）→ 崩溃恢复不重放
 
         // 模拟崩溃：内存对象全丢，仅 journal 快照（= SQLite 落盘内容）幸存
         val recovered = store.snapshot()
@@ -78,7 +79,37 @@ class DeliveryTest {
         val queue2 = AtLeastOnceQueue(recovered, sink2)
         assertEquals(1, queue2.pendingCount())
         queue2.flushPending()
-        assertEquals(listOf("f1"), sink2.sent) // 只重发未确认的 evt-1
+        assertEquals(listOf("f1"), sink2.sent) // 只重发未完成的 evt-1
+    }
+
+    @Test
+    fun `发送成功即 DONE-不再重放-超窗清理保留最近 N 条`() {
+        val store = InMemoryJournalStore()
+        val sink = FakeSink()
+        val queue = AtLeastOnceQueue(store, sink, doneRetention = 32)
+
+        // H1：发送成功（send=true）即标 DONE——journal 不再依赖 ack 完成路径
+        val entry = queue.enqueue("evt-1", "f1", now = 100L)
+        assertEquals(JournalState.DONE, entry.state)
+        assertEquals(0, queue.pendingCount())
+
+        // 重连 flushPending 不重放已发送条目（重放本就幂等，服务端 eventId 去重兜底）
+        sink.sent.clear()
+        queue.flushPending()
+        assertTrue(sink.sent.isEmpty())
+
+        // 超过保留窗口的 DONE 条目在下次 enqueue 时清理，保留最近 32 条（防回退窗口）
+        repeat(40) { i -> queue.enqueue("evt-bulk-$i", "fb-$i", now = 1_000L + i) }
+        val doneIds = store.entries().filter { it.state == JournalState.DONE }.map { it.eventId }
+        assertEquals(32, doneIds.size)
+        assertTrue("最旧 DONE 须被清理", doneIds.none { it == "evt-1" })
+        assertEquals("evt-bulk-39", doneIds.last()) // 保留的是最近条目
+
+        // 清理只删 DONE：不产生任何重放帧
+        sink.sent.clear()
+        queue.flushPending()
+        assertTrue(sink.sent.isEmpty())
+        assertEquals(0, queue.pendingCount())
     }
 
     @Test
@@ -91,17 +122,23 @@ class DeliveryTest {
         queue.enqueue("evt-1", "f1", now = 100L)
         assertEquals(listOf("f1"), sink.sent)
 
+        // 断线期入队：发送失败 → 条目保持待发（H1：发送成功即 DONE，只有失败条目进重放）
+        sink.available = false
+        queue.enqueue("evt-2", "f2", now = 101L)
+        sink.available = true
+
         // 重放（重连/崩溃恢复）：按同 eventId 重建信封（新 nonce/ts/seq + 重算 HMAC
         // 由注入方实现；冻结入站规则下原样重发必 4403/4402/4405，CR T34-01）
+        // 已 DONE 的 evt-1 不重放，只重放待发的 evt-2
         sink.sent.clear()
         queue.flushPending()
-        assertEquals(listOf("f1#rebuilt:evt-1"), sink.sent)
+        assertEquals(listOf("f2#rebuilt:evt-2"), sink.sent)
 
         // 无 refresh 钩子 = 原样重放（既有语义保持）
         val store2 = InMemoryJournalStore()
-        val sink2 = FakeSink()
-        AtLeastOnceQueue(store2, sink2).enqueue("evt-2", "f2", now = 100L)
-        sink2.sent.clear()
+        val sink2 = FakeSink(available = false)
+        AtLeastOnceQueue(store2, sink2).enqueue("evt-2", "f2", now = 100L) // 断线：保持待发
+        sink2.available = true
         store2.entries().forEach { store2.update(it.eventId, JournalState.PENDING, it.attempts) }
         AtLeastOnceQueue(store2, sink2).flushPending()
         assertEquals(listOf("f2"), sink2.sent)

@@ -62,6 +62,52 @@ func TestPairingCodeLifecycle(t *testing.T) {
 	}
 }
 
+// TestPairingCodeInvalidateAndCleanup（H-1 单活动码 + L-3 清理，安全审计 TOP5）：
+//   - InvalidateUnusedPairingCodes 把全部未使用旧码置 used（不可再消费）；
+//   - CleanupPairingCodes 删 TTL 过 24h（used_at/expires_at）的行，24h 内不删。
+func TestPairingCodeInvalidateAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+
+	// 两个未使用码 → 签发新码前置 used
+	for _, c := range []string{"111111", "222222"} {
+		if err := db.CreatePairingCode(ctx, sha256Hex(c), now.Add(10*time.Minute)); err != nil {
+			t.Fatalf("签发 %s: %v", c, err)
+		}
+	}
+	n, err := db.InvalidateUnusedPairingCodes(ctx, now)
+	if err != nil || n != 2 {
+		t.Fatalf("应置 used 2 条: n=%d err=%v", n, err)
+	}
+	if ok, _ := db.ConsumePairingCode(ctx, sha256Hex("111111"), now); ok {
+		t.Fatal("旧码置 used 后应不可消费（单活动码）")
+	}
+	if n, _ := db.InvalidateUnusedPairingCodes(ctx, now); n != 0 {
+		t.Fatalf("无未使用码应返回 0: n=%d", n)
+	}
+
+	// 清理：used_at 过 24h 才删（used_at=now）
+	if n, err := db.CleanupPairingCodes(ctx, now.Add(23*time.Hour)); err != nil || n != 0 {
+		t.Fatalf("24h 内不得删除: n=%d err=%v", n, err)
+	}
+	if n, err := db.CleanupPairingCodes(ctx, now.Add(24*time.Hour+time.Minute)); err != nil || n != 2 {
+		t.Fatalf("过 24h 应删 2 条已用码: n=%d err=%v", n, err)
+	}
+
+	// 过期未用码：expires_at 过 24h 即删
+	if err := db.CreatePairingCode(ctx, sha256Hex("333333"), now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.CleanupPairingCodes(ctx, now.Add(34*time.Hour+time.Minute)); err != nil || n != 1 {
+		t.Fatalf("过期码过 24h 应删: n=%d err=%v", n, err)
+	}
+	rows, err := db.QueryDump(ctx, `SELECT COUNT(*) FROM pairing_codes`)
+	if err != nil || len(rows) != 1 || rows[0][0] != "0" {
+		t.Fatalf("清理后表应为空: rows=%v err=%v", rows, err)
+	}
+}
+
 // TestUpsertDeviceRobotIDPreserved 回归（2026-11-03 会话 9 根因）：
 // 同 Ed25519 身份重配对不得抹掉管理面 robot_id 绑定；公钥变化（身份变更）
 // 才清空；显式传值可覆盖。
@@ -137,6 +183,81 @@ func TestInboundEventDedup(t *testing.T) {
 	}
 	if r, ok, _ := db.GetInboundReceipt(ctx, "dev-1", "evt-1"); !ok || r != `{"ok":true}` {
 		t.Fatalf("回执读取错误: %q ok=%v", r, ok)
+	}
+}
+
+// TestSetInboundReceipt（性能审计 H1 服务端半边）：回执记忆（空 receipt 回填 +
+// 幂等不覆盖）。
+func TestSetInboundReceipt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	if dup, conflict, err := db.RememberInboundEvent(ctx, "dev-1", "evt-1", "digest-a", "", now); err != nil || dup || conflict {
+		t.Fatalf("首见应登记: dup=%v conflict=%v err=%v", dup, conflict, err)
+	}
+	// 空 receipt 不写入（无回执语义）
+	if err := db.SetInboundReceipt(ctx, "dev-1", "evt-1", ""); err != nil {
+		t.Fatalf("空回执应 no-op: %v", err)
+	}
+	if r, ok, _ := db.GetInboundReceipt(ctx, "dev-1", "evt-1"); !ok || r != "" {
+		t.Fatalf("空回执不应落库: %q ok=%v", r, ok)
+	}
+	// 回填后可读取
+	if err := db.SetInboundReceipt(ctx, "dev-1", "evt-1", `{"socketType":3,"list":[]}`); err != nil {
+		t.Fatalf("回执回填: %v", err)
+	}
+	if r, ok, _ := db.GetInboundReceipt(ctx, "dev-1", "evt-1"); !ok || r != `{"socketType":3,"list":[]}` {
+		t.Fatalf("回执应回填: %q ok=%v", r, ok)
+	}
+	// 幂等：重复处理不覆盖既有回执
+	if err := db.SetInboundReceipt(ctx, "dev-1", "evt-1", `{"socketType":3,"list":[1]}`); err != nil {
+		t.Fatalf("重复回填: %v", err)
+	}
+	if r, _, _ := db.GetInboundReceipt(ctx, "dev-1", "evt-1"); r != `{"socketType":3,"list":[]}` {
+		t.Fatalf("既有回执不得被覆盖: %q", r)
+	}
+	// 行不存在 = no-op（帧未被记忆即未被消费）
+	if err := db.SetInboundReceipt(ctx, "dev-1", "evt-x", `{"x":1}`); err != nil {
+		t.Fatalf("未知帧回填应 no-op 不报错: %v", err)
+	}
+}
+
+// TestAllocateEpochs（性能审计 H3）：单事务批量分配连续 epoch，单调性与
+// BumpEpoch 互操作一致。
+func TestAllocateEpochs(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	// 新设备批量分配 3 个 → first=1..3
+	first, err := db.AllocateEpochs(ctx, "dev-alloc", 3)
+	if err != nil {
+		t.Fatalf("批量分配: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("首个 epoch = %d, want 1", first)
+	}
+	d, ok, _ := db.GetDevice(ctx, "dev-alloc")
+	if !ok || d.Epoch != 3 {
+		t.Fatalf("设备已分配 epoch = %d (ok=%v), want 3", d.Epoch, ok)
+	}
+	// 追加单个 = BumpEpoch 语义（4）
+	first, err = db.AllocateEpochs(ctx, "dev-alloc", 1)
+	if err != nil || first != 4 {
+		t.Fatalf("追加单个 epoch = %d err=%v, want 4", first, err)
+	}
+	// 与 BumpEpoch 互操作单调（5）
+	if e, err := db.BumpEpoch(ctx, "dev-alloc"); err != nil || e != 5 {
+		t.Fatalf("BumpEpoch = %d err=%v, want 5", e, err)
+	}
+	// n<=0 不消费
+	if e, err := db.AllocateEpochs(ctx, "dev-alloc", 0); err != nil || e != 0 {
+		t.Fatalf("n=0 应不消费: e=%d err=%v", e, err)
+	}
+	if d, _, _ := db.GetDevice(ctx, "dev-alloc"); d.Epoch != 5 {
+		t.Fatalf("n=0 消费后 epoch = %d, want 5", d.Epoch)
+	}
+	// 设备隔离：另一设备独立计数
+	if first, _ := db.AllocateEpochs(ctx, "dev-alloc-2", 2); first != 1 {
+		t.Fatalf("独立设备首个 epoch = %d, want 1", first)
 	}
 }
 

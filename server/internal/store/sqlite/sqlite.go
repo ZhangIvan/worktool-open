@@ -239,6 +239,9 @@ CREATE TABLE IF NOT EXISTS commands (
 );
 CREATE INDEX IF NOT EXISTS idx_commands_state ON commands(state);
 CREATE INDEX IF NOT EXISTS idx_commands_target ON commands(target);
+CREATE INDEX IF NOT EXISTS idx_commands_target_state ON commands(target, state, created_at);
+CREATE INDEX IF NOT EXISTS idx_commands_created ON commands(created_at);
+CREATE INDEX IF NOT EXISTS idx_device_sessions_device ON device_sessions(device_id, opened_at);
 
 CREATE TABLE IF NOT EXISTS command_events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -374,7 +377,7 @@ type DB struct {
 // file:…?cache=shared 更稳）。并发写靠 busy_timeout 串行化（单写者模型）。
 func Open(dsn string) (*DB, error) {
 	if !strings.Contains(dsn, "?") && dsn != ":memory:" {
-		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+		dsn += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 	}
 	sdb, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -587,6 +590,31 @@ ON CONFLICT(device_id) DO NOTHING`, deviceID, time.Now().UnixMilli(), time.Now()
 	return epoch, err
 }
 
+// AllocateEpochs 为设备一次分配 n 个连续命令 epoch（性能审计 H3：原 flushQueued
+// 每条指令独立 BumpEpoch 事务——一批 64 条即 64 次事务提交；此处单事务批量分配，
+// 语义不变：epoch 仍单调递增、逐指令消费）。返回本批首个 epoch（first..first+n-1
+// 已被本批占用；端侧拒旧水位语义允许跳号）。n<=0 不消费，返回 0。
+func (db *DB) AllocateEpochs(ctx context.Context, deviceID string, n int) (int64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	var first int64
+	err := db.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO devices(device_id, paired_at, updated_at) VALUES (?,?,?)
+ON CONFLICT(device_id) DO NOTHING`, deviceID, time.Now().UnixMilli(), time.Now().UnixMilli()); err != nil {
+			return err
+		}
+		var last int64
+		if err := tx.QueryRowContext(ctx, `UPDATE devices SET epoch = epoch + ?, updated_at = ? WHERE device_id = ? RETURNING epoch`,
+			n, time.Now().UnixMilli(), deviceID).Scan(&last); err != nil {
+			return err
+		}
+		first = last - int64(n) + 1
+		return nil
+	})
+	return first, err
+}
+
 // EnsureEpochAtLeast 抬高设备 epoch 基线（hello.lastEpoch 拒旧语义，docs/02 §5.1：
 // 服务端不得下发更小 epoch）。
 func (db *DB) EnsureEpochAtLeast(ctx context.Context, deviceID string, lastEpoch int64) error {
@@ -630,6 +658,37 @@ func (db *DB) ConsumePairingCode(ctx context.Context, codeHash string, now time.
 		return nil
 	})
 	return ok, err
+}
+
+// PairingCodeRetain 过期/已用配对码保留期（L-3，安全审计 TOP5：TTL 过 24h 即删）。
+const PairingCodeRetain = 24 * time.Hour
+
+// InvalidateUnusedPairingCodes 把全部未使用旧码置 used（H-1，安全审计 TOP5：
+// 签发新码时调用——单活动码语义，旧码即使未过期也不再可用，压缩爆破面）。
+// 返回置 used 的行数。调用方：api.Server.CreatePairingCode / admin
+// handlePairingCodes（签发路径全覆盖）。
+func (db *DB) InvalidateUnusedPairingCodes(ctx context.Context, now time.Time) (int64, error) {
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE pairing_codes SET used_at = ? WHERE used_at IS NULL`, now.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// CleanupPairingCodes 清理过期/已用配对码（L-3，安全审计 TOP5：TTL 过
+// [PairingCodeRetain] 即删——expires_at 或 used_at 早于 now-24h 的行删除，
+// 收敛表体积）。调用方：scheduler.RunAckTTLScanner 周期循环顺带执行。
+// 返回删除行数。
+func (db *DB) CleanupPairingCodes(ctx context.Context, now time.Time) (int64, error) {
+	cutoff := now.Add(-PairingCodeRetain).UnixMilli()
+	res, err := db.sql.ExecContext(ctx,
+		`DELETE FROM pairing_codes WHERE (used_at IS NOT NULL AND used_at <= ?) OR (expires_at IS NOT NULL AND expires_at <= ?)`,
+		cutoff, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ---- 会话 ----
@@ -1048,6 +1107,19 @@ func (db *DB) GetInboundReceipt(ctx context.Context, deviceID, eventID string) (
 		return "", false, err
 	}
 	return receipt, true, nil
+}
+
+// SetInboundReceipt 回填已记忆入向帧的回执（性能审计 H1 服务端半边：回执在
+// 处理完成后才产生，去重记忆先于处理——receipt 事后回填同键行）。幂等：重放
+// 处理不覆盖既有回执（空 receipt 才写入，防并发乱序回退）。行不存在 = no-op
+// （帧未被记忆即未被消费，无回执语义）。
+func (db *DB) SetInboundReceipt(ctx context.Context, deviceID, eventID, receipt string) error {
+	if receipt == "" {
+		return nil
+	}
+	_, err := db.sql.ExecContext(ctx, `
+UPDATE inbound_events SET receipt=? WHERE device_id=? AND event_id=? AND receipt=''`, receipt, deviceID, eventID)
+	return err
 }
 
 // ---- T3.2：审批（FR-53 L2）/ 白名单（L1）/ API 令牌（FR-34）/ cron（FR-38）----

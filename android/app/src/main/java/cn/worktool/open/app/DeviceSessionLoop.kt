@@ -302,13 +302,16 @@ class DeviceSessionLoop(
     // ---- 真实执行 + RAW_CONFIRM（本类唯一副作用入口，经 gate 调用）----
 
     private fun executeCommand(commandId: String, type: Int) {
+        // S4（泄漏 review）：解析前即设当前指令号——pendingBean==null 早退路径与
+        // collectQueryResult/sendStructuredReport 的对账键同为本指令，不残留上一条
+        // 指令的陈旧键（陈旧键会让 takeQueryResults 清槽落空）。
+        currentCommandId = commandId
         val bean = pendingBean ?: run {
             reportResult(commandId, type, ExecutorErrorCodes.PAYLOAD_INVALID, "执行上下文缺失", null, 0L, success = false)
             return
         }
         val epoch = pendingEpoch
         val startedAt = clock()
-        currentCommandId = commandId // 结构化推送对账键（见 sendStructuredReport）
         val normalized = normalizer.normalize(bean)
         if (normalized !is NormalizedIntent.Valid) {
             val (code, reason) = when (normalized) {
@@ -361,6 +364,11 @@ class DeviceSessionLoop(
                 // FR-52：接管暂停——只入队不执行；不发终态回执（服务端经对账收敛）。
                 // U1/U3：入队观察口上抛（SessionRuntime → PauseManager.enqueue，待执行
                 // 队列视图/运行时段休眠共用同一数据源）。
+                // S4（泄漏 review）：暂停路径无 reportResult 消费点——查询结果槽（按
+                // commandId 键）与批量结果槽在此取走清空，防有界 map 无界增长（暂停
+                // 积压指令堆积时键只增不减）。指令恢复执行时重新捕获，不影响后续回执。
+                takeQueryResults(commandId)
+                takeBatchOutcomes?.invoke()
                 ledger(commandId, epoch, started = false, outcome = "")
                 onDeferred?.invoke(commandId, type, startedAt)
                 onEvent?.invoke("commandId=$commandId 暂停拦截（${report.pausedBySource}）→ 不发终态回执（已入待执行队列）")

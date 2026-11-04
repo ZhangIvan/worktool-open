@@ -6,6 +6,7 @@
 //
 //	server [-listen host:port] [-tls-cert FILE] [-tls-key FILE]
 //	       [-db worktool.db] [-callback-url URL] [-callback-secret S]
+//	       [-enable-v1-compat]（v1 兼容 WS 面，默认不挂载，H-2）
 //
 // 环境变量（flag 优先于环境变量，环境变量优先于默认值）：
 //
@@ -130,7 +131,9 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	go func() { _ = worker.Run(bgCtx) }()
 	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()
 
-	mux := api.NewServeMux(api.Options{Server: srv})
+	// H-2（安全审计 TOP5）：v1 兼容 WS 面默认不挂载，cfg.EnableV1Compat
+	// （flag -enable-v1-compat）显式开启才暴露 /webserver/wework/{robotId}。
+	mux := api.NewServeMux(api.Options{Server: srv, EnableV1Compat: cfg.EnableV1Compat})
 	adminSrv.Register(mux)
 	httpSrv := &http.Server{
 		Handler:           mux,
@@ -143,8 +146,8 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	if ready != nil {
 		ready(ln.Addr())
 	}
-	fmt.Fprintf(stdout, "worktool-open-server listening on %s (tls=%v, db=%s, callback=%s)\n",
-		ln.Addr(), cfg.TLSEnabled(), cfg.DBPath, callbackState(cfg.CallbackURL))
+	fmt.Fprintf(stdout, "worktool-open-server listening on %s (tls=%v, db=%s, callback=%s, v1compat=%v)\n",
+		ln.Addr(), cfg.TLSEnabled(), cfg.DBPath, callbackState(cfg.CallbackURL), cfg.EnableV1Compat)
 
 	go func() {
 		<-ctx.Done()

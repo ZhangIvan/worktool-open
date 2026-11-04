@@ -31,6 +31,15 @@ func TestRiskClassify(t *testing.T) {
 		219: RiskL2, // 解散群
 		234: RiskL2, // 删联系人
 		304: RiskL2, // 清队列
+		// S7 补缺配套（2026-11-04 review）：六类补入 plannedActionNames 中文名后，
+		// 分级必须仍钉 L2（显式登记 ≠ 降级；TestOpenAPIRegistryAllRoutesSmoke 锁
+		// 202 审批门）——此处防「补名 → L0 裸奔」回归。
+		236: RiskL2, // 删单向联系人
+		237: RiskL2, // 清理企微缓存
+		238: RiskL2, // 批量发送文本
+		239: RiskL2, // 创建客户群活码
+		240: RiskL2, // 添加群公告网页
+		244: RiskL2, // 退群
 		215: RiskL2, // 未登记（上游未定义）→ L2 fail-closed（裁决②）
 		231: RiskL2, // 未登记 → L2 fail-closed
 		999: RiskL2, // 未登记 → L2 fail-closed
