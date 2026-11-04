@@ -469,9 +469,10 @@ function esc(s) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
 }
+// 时间显示规格 §2.2：默认「2026-11-04 06:00:00 UTC」（毫秒尾数一并归一；ISO 原值在详情处另行保留）
 function fmtMs(ms) {
   if (!ms) return "—";
-  return new Date(ms).toISOString().replace("T", " ").replace(".000Z", "Z");
+  return new Date(ms).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 }
 function banner(msg) { var b = $("banner"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
 function okmsg(msg) { var b = $("okmsg"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
@@ -616,6 +617,8 @@ function setState(el, kind, span, msg, errNameArg) {
 function setStale(id, why) { var el = $(id); if (el) el.innerHTML = "<div class='stalebox'>数据可能已过期" + (why ? "（" + esc(why) + "）" : "") + "——已保留最近一次成功数据；依赖新鲜状态的操作已禁用，请刷新成功后再操作。</div>"; }
 function clearStale(id) { var el = $(id); if (el) el.innerHTML = ""; }
 function errName(e) { return e && e.timeout ? "timeout" : ((e && e.message) || "error"); }
+// 空态文案二分（规格 §2.3：筛选无结果与首次无数据是两回事——文案必须不同）
+function emptyListText(hasFilter, filteredText, emptyText) { return hasFilter ? filteredText : emptyText; }
 
 /* ============ 纯函数（行为变更回归测试对象，见 test/admin_ui_v3.spec.mjs） ============ */
 // 短 ID：长 ID 显示前 8 后 4（规格 §2.2），title 保留完整值
@@ -694,19 +697,22 @@ function missingRequired(entry, payload) {
     return v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length);
   });
 }
-// 选设备门（规格 F01/车道核心流程①）：离线 → 下拉禁用并说明；暂停 → 可选可填草稿，
-// 但正式提交禁用（服务端 409 DEVICE_PAUSED 的前置说明）。
+// 选设备门（规格 F01/车道核心流程①）：离线/暂停均可进入草稿（可查看、可填写），
+// 正式提交分别由「上线后排队」确认（离线）与 409 DEVICE_PAUSED（暂停）把关——
+// 服务端对离线目标不拒收：指令入队保留（约 24h 未投递自动取消 E19），与规格
+// 交互图 01/07「离线仍可入队」分支一致。
 function deviceGate(d) {
   if (!d) return { selectable: false, reason: "未选择设备", submitBlocked: true, submitReason: "未选择设备" };
-  if (!d.online) return { selectable: false, reason: "离线：网关当前无该设备的活跃连接，暂不可选；设备上线后自动恢复可选", submitBlocked: true, submitReason: "设备离线" };
+  if (!d.online) return { selectable: true, offline: true, reason: "离线：可查看并填写草稿；正式提交须勾选「设备上线后排队执行」——指令保留在队列（约 24 小时未投递自动取消，E19 以服务端策略为准）", submitBlocked: true, submitReason: "设备离线：勾选「上线后排队执行」后方可提交" };
   if (d.status === "paused") return { selectable: true, reason: "已暂停：可查看与填写草稿，但正式提交会被管理面提交门拒收（409 DEVICE_PAUSED）；恢复后可提交", submitBlocked: true, submitReason: "设备已暂停：恢复后才能提交（草稿保留在本页）" };
   return { selectable: true, reason: "在线且未暂停。权限/目标 App 登录状态服务端未上报——就绪程度以干跑与服务端门禁为准", submitBlocked: false, submitReason: "" };
 }
-// 提交门（条件禁用 + 原因）。forDry=true 时豁免暂停/陈旧（干跑为服务端模拟，不触达设备）。
+// 提交门（条件禁用 + 原因）。forDry=true 时豁免暂停/陈旧/离线确认（干跑为服务端模拟，不触达设备）。
 function wizardGate(st) {
   var r = [];
   if (!st.device) r.push("未选择执行设备");
   else if (!st.forDry && st.devicePaused) r.push("设备已暂停：恢复后才能正式提交（草稿保留在本页，可先干跑预检）");
+  if (!st.forDry && st.offlineNeed) r.push("设备离线：需勾选「设备上线后排队执行」确认后才能提交——离线指令保留在队列（约 24 小时未投递自动取消，E19 以服务端策略为准）");
   if (!st.forDry && st.devicesStale) r.push("设备列表已过期（最近一次刷新失败）：请刷新成功后再提交");
   if (!st.type) r.push("未选择指令动作");
   if (st.missing && st.missing.length) r.push("必填参数未填写：" + st.missing.join("、"));
@@ -826,21 +832,35 @@ function stateConclusion(c, results) {
   if (st === "running") return { tone: "run", title: "执行中", detail: "设备已开始执行该指令", next: ["等待结果回执"] };
   return { tone: "dim", title: stName(st) || st || "未知状态", detail: "服务端状态：" + st, next: [] };
 }
-// 已知目录/管线分级漂移（规格 §12.1 固定源码观察）：提交前弹层警示，以服务端
-// 实际分级为准（可在「设置 → 分级查询」核对）；契约统一由后端第一批修复。
-var DRIFT_TYPES = {
-  223: "目录 L1 / 管线 L0",
-  236: "目录 L0 / 管线 L2",
-  238: "目录 L0 / 管线 L2",
-  239: "目录 L0 / 管线 L2",
-  240: "目录 L0 / 管线 L2",
-  244: "目录 L0 / 管线 L2"
-};
-// 已知字段形态漂移（规格 §12.2/12.3 固定源码观察）：目录登记字段与端侧读取字段
-// 不一致——UI 按目录契约提交并明示警告，不在前端静默更换协议语义（契约冻结由
-// 后端第一批统一修复）。
+// 分级漂移表已移除（2026-11-04 复核）：catalog.go 已将 236/238/239/240/244 显式钉 L2、
+// 223=L0，与 scheduler/guard.go 管线分级一致（catalog=管线单源）——「目录与管线分级
+// 不一致」的过期警示与确认框不再渲染；分级以服务端 ClassifyRisk 单一事实源为准
+// （「设置 → 分级查询」可核对）。
+// 已知字段形态漂移（规格 §12.2/12.3 固定源码观察，逐条对照 IntentNormalizer.kt）：
+// 目录登记字段与端侧读取字段不一致——UI 按目录契约提交并明示警告，不在前端静默
+// 更换协议语义（契约冻结由后端统一修复；提交前先干跑验证）。
 var FIELD_DRIFT_TYPES = {
-  202: "目录登记 loop.on（布尔）；端侧当前读取 loopEnabled（字符串 true/false/1/0，IntentNormalizer fail-closed）——正式提交前先干跑，端侧拒收则以端侧为准并等待契约统一"
+  202: "目录登记 loop.on（布尔）；端侧当前读取 loopEnabled（字符串 true/false/1/0，IntentNormalizer fail-closed）——正式提交前先干跑，端侧拒收则以端侧为准并等待契约统一",
+  203: "目录登记 titleList；端侧当前读取 targetRoom（单会话名称，receivedContent 同读）——单会话发送按名称匹配待设备确认；契约统一前先干跑验证",
+  204: "目录仅登记 titleList/receivedContent；端侧还需 receivedName（引用发送者）与 originalContent（被引用原文）才能定位引用消息——请在高级模式补齐后干跑验证",
+  205: "目录仅登记 titleList；端侧读取 titleList（来源会话）+receivedName+originalContent 定位原消息，nameList 才是接收方——目录示例 originTitle 非已验证别名",
+  206: "目录登记 groupName+selectList；端侧读取 groupName（或 targetRoom），成员走 groupMembers 数组、公告走 announcement/extraText——selectList 未被端侧读取",
+  207: "目录仅登记 groupName；端侧必填 targetRoom 且公告/备注/加人至少一项（announcement/groupRemark/addMembers）——当前端侧无踢人字段",
+  208: "目录登记 fileUrl；端侧未读取 fileUrl——微盘图片按 objectName（微盘内已存图片显示名）查找，请改在高级模式填写 objectName",
+  209: "目录登记 fileUrl；端侧未读取 fileUrl——微盘文件按 objectName（微盘内已存文件显示名）查找，请改在高级模式填写 objectName",
+  218: "端侧还需 objectName（文件名）与 fileType（image/audio/video/*）必填，目录未登记——请在高级模式补齐后干跑验证",
+  223: "目录登记 corpName；端侧读取 objectName（企业名称）——契约统一前先干跑验证",
+  225: "目录登记 groupName+selectList；端侧读取 targetRoom+memberName（或 friend.name），变更走 markName/tagList 至少一项——selectList 未被端侧读取",
+  226: "目录将 originalContent 称为消息 ID；端侧按原文内容定位——ID/原文语义未冻结前结果可能失败，先干跑验证",
+  227: "目录仅登记 titleList；端侧还需 messageList（逐条 originalContent）与 nameList（接收方）——originTitle 非已验证别名",
+  228: "目录仅登记 titleList；端侧还需 messageList（逐条 originalContent）与 nameList（接收方）——合并转发是否成功以端侧回执为准",
+  229: "目录登记 titleList+receivedContent；端侧读取 weworkMessageList（消息对象数组，每项 receivedContent/fileUrl 至少其一）+nameList（接收人）——请在高级模式按结构填写",
+  230: "目录仅登记 titleList；端侧读取 weworkMessageList+nameList——请在高级模式按结构填写，合并范围与顺序以回执为准",
+  238: "端侧要求 receivedContent 为「至少 2 条非空文本」的 JSON 数组字符串（双层编码）——目录示例为单条文本，直接提交会被端侧拒收",
+  239: "端侧必填 newGroupName（可用 groupName 兼容）；select 模式还需 selectList（去重后至多 5 群）——契约统一前先干跑验证",
+  240: "端侧要求 objectName 或 fileUrl 为网页 URL（http/s）且必填——目录示例仅含 fileUrl，请确认目标字段后干跑验证",
+  511: "目录示例非有效 JSON（禁止导入）；端侧必填 objectName=yyyy-MM-dd 日期——请在高级模式填写",
+  514: "目录 messageId 未被端侧读取——定位走 originalContent/objectName（按消息）或 logStartTime/logEndTime（按时间范围）"
 };
 
 /* ============ 指令目录（唯一数据源：GET /api/v1/admin/catalog?withSchema=1）============
@@ -973,9 +993,15 @@ function clearAuto() {
 }
 function bindAuto(boxId, fn) {
   $(boxId).addEventListener("change", function () {
-    if (autoTimers[boxId]) { clearInterval(autoTimers[boxId]); delete autoTimers[boxId]; }
+    stopAuto(boxId);
     if ($(boxId).checked) { fn(); autoTimers[boxId] = setInterval(fn, 5000); }
   });
+  // 初始即 checked 的勾选框（任务轨迹 tc-auto）渲染后直接启动轮询——
+  // 修前只在 change 事件启动，「自动刷新」初始态形同虚设（车道 D4）。
+  startAutoIfChecked(boxId, fn);
+}
+function startAutoIfChecked(boxId, fn) {
+  if ($(boxId) && $(boxId).checked && !autoTimers[boxId]) autoTimers[boxId] = setInterval(fn, 5000);
 }
 function stopAuto(boxId) {
   if (autoTimers[boxId]) { clearInterval(autoTimers[boxId]); delete autoTimers[boxId]; }
@@ -1262,7 +1288,7 @@ function renderDevices() {
           : "<span class='pill'>正常</span><div class='cell-sub' title='权限/目标 App 登录状态服务端未上报，无法判定就绪'>未知（权限未上报）</div>") + "</td>" +
         "<td class='mono'>" + fmtMs(d.lastSessionMs) + "</td>" +
         "<td><a href='#/devices-detail?id=" + encodeURIComponent(d.deviceId) + "'>详情</a> " +
-        "<button class='primary mini' data-newtask='" + esc(d.deviceId) + "'" + (gate.submitBlocked ? " disabled title='" + esc(gate.submitReason) + "'" : " title='在此设备创建任务'") + ">创建任务</button></td></tr>";
+        "<button class='primary mini' data-newtask='" + esc(d.deviceId) + "'" + (gate.selectable ? " title='" + esc(gate.submitReason || "在此设备创建任务") + "'" : " disabled title='" + esc(gate.submitReason) + "'") + ">创建任务</button></td></tr>";
     });
     $("dv-body").innerHTML = rows.join("") ||
       "<tr><td colspan='6' class='empty'>还没有设备：点右上「添加设备」生成配对码，在 App 完成配对后回本页查看。</td></tr>";
@@ -1300,7 +1326,7 @@ function renderDevices() {
       "<div class='kvrow'><span class='k'>就绪状态</span><span class='v' style='font-size:12px'>" + esc(gate.reason) + "</span></div>" +
       "<div class='row' style='margin-top:12px'>" +
       "<a class='btnlink' href='#/devices-detail?id=" + encodeURIComponent(d.deviceId) + "'>查看设备详情 →</a> " +
-      "<button class='primary mini' data-newtask='" + esc(d.deviceId) + "'" + (gate.submitBlocked ? " disabled title='" + esc(gate.submitReason) + "'" : "") + ">创建任务</button></div>" +
+      "<button class='primary mini' data-newtask='" + esc(d.deviceId) + "'" + (gate.selectable ? " title='" + esc(gate.submitReason || "在此设备创建任务") + "'" : " disabled title='" + esc(gate.submitReason) + "'") + ">创建任务</button></div>" +
       "<div class='row' style='margin-top:6px'>" +
       (d.status === "paused"
         ? "<button class='ok mini' data-resume='" + esc(d.deviceId) + "'>恢复接收任务</button>"
@@ -1435,7 +1461,8 @@ function renderDeviceDetail() {
         : "") +
       "</div></div>" +
       "<div class='infoband'>" + ico("info") + "<span>在线仅表示连接状态，不代表任务可执行。</span>" +
-      "<button id='dd-newtask' class='primary mini' style='margin-left:auto'" + (gate.submitBlocked ? " disabled title='" + esc(gate.submitReason) + "'" : "") + ">创建任务</button></div>" +
+      "<button id='dd-newtask' class='primary mini' style='margin-left:auto'" + (gate.selectable ? "" : " disabled title='" + esc(gate.submitReason) + "'") + ">创建任务</button>" +
+      (gate.submitBlocked ? "<span class='dim dd-gatereason' style='margin-left:8px'>" + esc(gate.submitReason) + "</span>" : "") + "</div>" +
       "</div>" +
       "<div id='dd-tab2' class='hiddenbox'><section class='card'><h3>此设备的任务 <span class='hint'>GET commands?target=设备ID</span></h3>" +
       "<table><thead><tr><th>时间</th><th>任务/动作</th><th>状态</th><th>风险</th><th></th></tr></thead>" +
@@ -1599,7 +1626,8 @@ function renderDevicesPair() {
  * → ③ 类型化参数表单（数组一行一个、friend.* 嵌套平铺、载荷实时预览）
  * → ④ 干跑预检（服务端模拟，结果内嵌）→ ⑤ L2 自动进审批流 → ⑥ 提交后直达任务轨迹 */
 var WIZ = { deviceId: "", type: 0, manual: false, dryReport: undefined, approval: null, lastBody: null,
-            submitting: false, devices: [], devicesLoaded: false, devicesStale: false, prefillTarget: "" };
+            submitting: false, devices: [], devicesLoaded: false, devicesStale: false, prefillTarget: "",
+            catGroup: "", offlineGo: false, offlineFor: "" };
 function renderTasksSend() {
   $("view").innerHTML =
     wsTabs("tasks", "tasks-send") +
@@ -1622,6 +1650,7 @@ function renderTasksSend() {
     "<section class='card'><h3>② 选择业务动作 <span class='hint'>按真实指令目录配置 · 中文名/风险/必填/类型</span></h3>" +
     "<div class='row'><label>" + ico("search") + " <input id='send-catsearch' placeholder='搜索指令名称或 type，如：发消息 / 203' size='24'></label>" +
     "<label>动作 <select id='send-type'><option value=''>目录加载中…</option></select></label><span class='dim' id='send-cat-note'></span></div>" +
+    "<div class='quicktabs' id='send-cattabs'></div>" +
     "<div id='send-pick'></div></section>" +
     "<section class='card'><h3>③ 参数（对象与内容） <span class='hint'>类型化表单：数组一行一个 · friend.* 嵌套自动平铺 · 右侧实时载荷预览</span></h3>" +
     "<div id='send-fields'></div>" +
@@ -1649,7 +1678,7 @@ function renderTasksSend() {
   markSteps();
   $("send-devrefresh").onclick = loadDevicesForSend;
   $("send-device").onchange = function () { WIZ.deviceId = $("send-device").value; onDeviceChange(); };
-  $("send-catsearch").oninput = function () { buildTypeOptions($("send-catsearch").value.trim()); };
+  $("send-catsearch").oninput = function () { buildTypeOptions($("send-catsearch").value.trim(), WIZ.catGroup); };
   $("send-type").onchange = onPick;
   $("send-json").addEventListener("input", function () {
     WIZ.manual = true;
@@ -1666,7 +1695,8 @@ function renderTasksSend() {
   loadCatalog().then(function () {
     if (CAT.ok) {
       $("send-cat-note").textContent = catNote();
-      buildTypeOptions("");
+      buildCatTabs();
+      buildTypeOptions("", WIZ.catGroup);
       if (WIZ.type && CAT.byType[WIZ.type]) {
         $("send-type").value = String(WIZ.type);
         onPick();
@@ -1730,9 +1760,9 @@ function fillDeviceSelect() {
   sel.innerHTML = "<option value=''>— 选择设备 —</option>" + WIZ.devices.map(function (d) {
     var g = deviceGate(d);
     var label = (d.deviceName || "未命名设备") + " · " + shortIdPlain(d.deviceId) +
-      (d.online ? " · 在线" : "") + (d.status === "paused" ? " · 已暂停" : "");
+      (d.online ? " · 在线" : " · 离线（可排队，提交前需确认）") + (d.status === "paused" ? " · 已暂停（可填草稿，提交暂禁）" : "");
     return "<option value='" + esc(d.deviceId) + "'" + (g.selectable ? "" : " disabled") + ">" +
-      esc(label) + (g.selectable ? "" : " —— 离线：设备不可达，暂不可选") + "</option>";
+      esc(label) + "</option>";
   }).join("");
   var keep = WIZ.prefillTarget && WIZ.devices.filter(function (d) {
     return d.deviceId === WIZ.prefillTarget || (d.robotId && "v1:" + d.robotId === WIZ.prefillTarget);
@@ -1769,17 +1799,31 @@ function onDeviceChange() {
     "<div class='dim' style='margin-top:4px'>robot 绑定：" + (d.robotId ? "<span class='mono'>" + esc(d.robotId) + "</span>" : "未绑定") +
     " · 最近会话：" + fmtMs(d.lastSessionMs) + " · epoch " + esc(String(d.epoch)) + "</div>" +
     "<div class='dim' style='margin-top:4px'>就绪状态：" + esc(g.reason) + "</div>";
+  // 离线确认勾选（规格 F01/交互图01）：显式选择「设备上线后排队执行」后方可正式提交
+  if (!d.online) {
+    box.innerHTML += "<label class='chk' style='cursor:pointer;margin-top:8px'><input type='checkbox' id='send-offline-go'" +
+      ((WIZ.offlineGo && WIZ.offlineFor === d.deviceId) ? " checked" : "") +
+      "> <span>设备上线后排队执行：离线指令保留在队列（约 24 小时未投递自动取消，E19 以服务端策略为准）；设备当前可能不具备执行条件，结果以实际回执为准。</span></label>";
+    var og = $("send-offline-go");
+    if (og) og.addEventListener("change", function () {
+      WIZ.offlineGo = og.checked;
+      WIZ.offlineFor = og.checked ? WIZ.deviceId : "";
+      updateGate();
+    });
+  }
   if (ctx) {
     ctx.style.display = "flex";
     ctx.innerHTML = "<b>执行设备：</b> " + esc(d.deviceName || "未命名设备") + " · target: <span class='mono'>" + esc(d.deviceId) + "</span>" +
-      (d.status === "paused" ? "<span class='pill st-paused'>已暂停（草稿可填，提交将被拒收 409）</span>" : "");
+      (d.status === "paused" ? "<span class='pill st-paused'>已暂停（草稿可填，提交将被拒收 409）</span>" : "") +
+      (!d.online ? "<span class='pill off'>离线（可排队，提交前需勾选确认）</span>" : "");
   }
   updateGate();
 }
-function buildTypeOptions(filter) {
+function buildTypeOptions(filter, group) {
   var groups = [], byGroup = {};
   var f = String(filter || "").toLowerCase();
   CAT.commands.forEach(function (c) {
+    if (group && (c.group || "未分组") !== group) return;
     if (f && String(c.name).toLowerCase().indexOf(f) < 0 && String(c.type).indexOf(f) < 0) return;
     var g = c.group || "未分组";
     if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
@@ -1795,6 +1839,24 @@ function buildTypeOptions(filter) {
       return "<option value='" + c.type + "'>" + esc(c.name) + "（" + esc(c.risk) + " · type " + c.type + "）</option>";
     }).join("") + "</optgroup>";
   }).join("");
+}
+// 分组快捷筛选（交互图02：全部/消息/文件/群操作/查询与运维；分组名来自目录 group 字段）
+function buildCatTabs() {
+  var box = $("send-cattabs");
+  if (!box) return;
+  var groups = [];
+  CAT.commands.forEach(function (c) { var g = c.group || "未分组"; if (groups.indexOf(g) < 0) groups.push(g); });
+  box.innerHTML = "<button data-cg='' class='on'>全部</button>" + groups.map(function (g) {
+    return "<button data-cg='" + esc(g) + "'>" + esc(g) + "</button>";
+  }).join("");
+  forEach("#send-cattabs button", function (b) {
+    b.onclick = function () {
+      forEach("#send-cattabs button", function (x) { x.classList.remove("on"); });
+      b.classList.add("on");
+      WIZ.catGroup = b.getAttribute("data-cg");
+      buildTypeOptions($("send-catsearch").value.trim(), WIZ.catGroup);
+    };
+  });
 }
 function currentEntry() { return CAT.byType[WIZ.type] || null; }
 function currentPayload() {
@@ -1862,15 +1924,17 @@ function onPick() {
           return "<span class='pill mono'>" + esc(k) + "：" + esc(kind === "bool" ? "布尔" : kind === "array" ? "数组" : kind === "number" ? "数字" : "文本") + "</span>";
         }).join(" ")
       : "<span class='dim'>无</span>") + "</div>" +
+    // 证据与支持状态（交互图02：目录登记 ≠ 设备可执行 ≠ 真机已验证；未上报/未验证不用绿色）
+    "<div class='row' style='margin:6px 0 0'>" +
+    "<span class='pill' title='能力目录登记状态（GET catalog）'>目录：" + esc(entry.status || "已登记") + "</span>" +
+    "<span class='pill unk' title='服务端未上报设备支持矩阵——目录登记不等于设备可执行'>设备支持：未上报</span>" +
+    "<span class='pill unk' title='真机执行验证未完成——「未验证」≠「不支持」，但不显示绿色可用'>真机验证：未验证</span></div>" +
     (entry.rawMsg ? "<div class='dim' style='margin:6px 0 0'>结果口径：" + esc(entry.rawMsg) + "</div>" : "") +
     (entry.example ? "<details class='adv' style='margin:8px 0 0'><summary>示例载荷（最小可提交，目录示例不自动发送）</summary><pre class='json' style='margin:6px 0 0'>" + esc(prettyJSON(entry.example)) + "</pre></details>" : "") +
     "</div>";
   $("send-warn").innerHTML =
     (entry.risk === "L2"
       ? "<div class='warnbox'>L2 高风险动作：正式提交<b>不会直达设备</b>——自动进入独立审批流（⑤），须决议人在「任务 → 审批」用决议令牌批准后携审批号继续（批准不自动执行）。</div>"
-      : "") +
-    (DRIFT_TYPES[entry.type]
-      ? "<div class='warnbox'>契约分级提示：该动作目录与管线分级不一致（" + esc(DRIFT_TYPES[entry.type]) + "，规格 §12.1）——正式提交时将再次确认；实际分级以服务端门禁为准（可在「设置 → 分级查询」核对）。</div>"
       : "") +
     (FIELD_DRIFT_TYPES[entry.type]
       ? "<div class='warnbox'>契约字段提示：" + esc(FIELD_DRIFT_TYPES[entry.type]) + "。</div>"
@@ -1904,6 +1968,7 @@ function updateGate() {
   var st = {
     device: !!WIZ.deviceId,
     devicePaused: !!(d && d.status === "paused"),
+    offlineNeed: !!(d && !d.online && !(WIZ.offlineGo && WIZ.offlineFor === WIZ.deviceId)),
     devicesStale: WIZ.devicesStale,
     type: !!WIZ.type,
     missing: missing,
@@ -2028,13 +2093,6 @@ function doSubmit() {
       "提交审批申请", proceed);
     return;
   }
-  if (DRIFT_TYPES[entry ? entry.type : 0]) {
-    confirmBox("契约分级提示",
-      "<p>该动作目录与管线分级不一致（" + esc(DRIFT_TYPES[entry.type]) + "）。</p>" +
-      "<p class='dim'>正式提交时服务端按<b>实际管线分级</b>执行门禁（可能转入审批或拒绝）。契约统一前请确认确实需要执行。</p>",
-      "仍要提交", proceed);
-    return;
-  }
   proceed();
 }
 function renderApprovalCard() {
@@ -2113,7 +2171,7 @@ function submitWithApproval() {
  * commandId + 状态时间线 E01→E19 + 结果回执（错误码/原因）+ 通知投递（独立结论）。
  * 终态（含结果未知）自动停止轮询；结果未知主按钮为「刷新核对」，无盲重试。 */
 function renderTaskCurrent() {
-  if (!CURRENT_CMD_ID && ROUTE_Q.id) CURRENT_CMD_ID = String(ROUTE_Q.id);
+  if (ROUTE_Q.id) CURRENT_CMD_ID = String(ROUTE_Q.id); // ?id= 深链始终为准：换 id 即换任务；提交/openTaskCurrent 跳转不带 query，不受影响
   if (!CURRENT_CMD_ID) {
     $("view").innerHTML = wsTabs("tasks", "tasks-current") +
       pageHead({ crumb: "<a href='#/tasks-history'>任务</a> / 任务轨迹", title: "任务轨迹", sub: "每次流转，都有可追溯的记录" }) +
@@ -2297,6 +2355,8 @@ function copyTaskAsDraft(c) {
   WIZ.approval = null;
   WIZ.lastBody = null;
   WIZ.devicesStale = false;
+  WIZ.offlineGo = false;
+  WIZ.offlineFor = "";
   okmsg("已载入为新任务草稿：请确认设备与参数，重新干跑预检后提交（新幂等键）。");
   location.hash = "#/tasks-send";
 }
@@ -2378,7 +2438,11 @@ function renderCommands() {
             "<td>" + (c.dryRun ? "<span class='pill dry'>干跑</span>" : "<span class='dim'>—</span>") + "</td>" +
             "<td><a href='#/tasks-current?id=" + encodeURIComponent(c.commandId) + "'>详情</a></td></tr>";
         });
-        $("commands-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>无匹配任务（筛选无结果与首次无数据是两回事——可清空筛选重试）</td></tr>";
+        var hasFilter = !!($("cmd-state").value || $("cmd-type").value.trim() || $("cmd-target").value.trim());
+        $("commands-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>" +
+          esc(emptyListText(hasFilter,
+            "筛选无结果：当前条件下没有任务——可清空状态/类型/目标筛选后重试",
+            "还没有任务：点右上「创建任务」提交第一条指令")) + "</td></tr>";
         forEach("[data-cmdrow]", function (tr) {
           tr.onclick = function (ev) {
             if (ev.target && ev.target.tagName && String(ev.target.tagName).toLowerCase() === "a") return;
@@ -2529,8 +2593,11 @@ function renderQueue() {
             "<td><button class='mini' data-prio='" + esc(c.commandId) + "'>移到队首</button> " +
             "<button class='no mini' data-rm='" + esc(c.commandId) + "'>取消待执行</button></td></tr>";
         });
-        $("queue-body").innerHTML = rows.join("") ||
-          "<tr><td colspan='6' class='empty'>队列为空（无 queued 待执行指令——与「无设备」「加载失败」是不同状态）</td></tr>";
+        var qFiltered = !!($("q-target").value.trim() || kw);
+        $("queue-body").innerHTML = rows.join("") || "<tr><td colspan='6' class='empty'>" +
+          esc(emptyListText(qFiltered,
+            "筛选无结果：该目标/编号下没有 queued 待执行指令——可清空筛选，或到「任务中心」查看已结束任务",
+            "队列为空（无 queued 待执行指令——与「无设备」「加载失败」是不同状态）")) + "</td></tr>";
         if (!Q_SEL && shown.length) Q_SEL = shown[0].commandId;
         if (Q_SEL) renderQSide(Q_SEL);
         forEach("[data-qrow]", function (tr) {
@@ -2698,6 +2765,7 @@ function renderApprovals() {
     ok.disabled = !isPending || !allCk || !approverToken;
     no.disabled = !isPending || !approverToken;
     ok.title = !approverToken ? "请先保存决议令牌" : (!allCk ? "请先勾选全部审批前核对项" : "");
+    no.title = !approverToken ? "请先保存决议令牌" : "";
   }
   function renderApDetail(a) {
     AP_SEL = a.approvalId;
@@ -3210,8 +3278,11 @@ function renderCallbackLogs() {
           "<td class='mono'>" + esc(l.lastError || "—") + "</td>" +
           "<td class='mono'>" + fmtMs(l.updatedAtMs) + "</td></tr>";
       });
-      $("cl-body").innerHTML = rows.join("") ||
-        "<tr><td colspan='8' class='empty'>暂无投递记录（从未产生回调事件，或均已按保留期清理）</td></tr>";
+      var clFiltered = !!($("cl-status").value || kw);
+      $("cl-body").innerHTML = rows.join("") || "<tr><td colspan='8' class='empty'>" +
+        esc(emptyListText(clFiltered,
+          "筛选无结果：当前状态下没有投递记录——可切回「全部」或清空搜索查看",
+          "暂无投递记录（从未产生回调事件，或均已按保留期清理）")) + "</td></tr>";
       forEach("[data-clrow]", function (tr) {
         tr.onclick = function (ev) {
           if (ev.target && ev.target.tagName && String(ev.target.tagName).toLowerCase() === "a") return;
@@ -3313,8 +3384,10 @@ function renderObsExecLogs() {
           "<td>" + esc(stName(e.fromState)) + " → " + esc(stName(e.toState)) + "<div class='cell-sub mono'>" + esc(e.event || "") + (e.commandId ? " · " + esc(shortIdPlain(e.commandId)) : "") + "</div></td>" +
           "<td class='mono' style='word-break:break-all'>" + esc(e.detail || "—") + "</td></tr>";
       });
-      $("el-body").innerHTML = rows.join("") ||
-        "<tr><td colspan='4' class='empty'>全局事件流暂无记录（新部署或事件按保留期清理——与「读取失败」是不同状态）。</td></tr>";
+      $("el-body").innerHTML = rows.join("") || "<tr><td colspan='4' class='empty'>" +
+        esc(emptyListText(!!cid,
+          "筛选无结果：该任务编号下暂无事件——可清空编号查看全局流",
+          "全局事件流暂无记录（新部署或事件按保留期清理——与「读取失败」是不同状态）。")) + "</td></tr>";
       $("el-count").textContent = "共 " + (j.count != null ? j.count : EL_CACHE.length) + " 条记录";
       $("el-raw").textContent = prettyJSON(EL_CACHE);
       paintMini(EL_CACHE);
@@ -3406,7 +3479,11 @@ function renderAuditLogs() {
         "<td class='dim mono' style='max-width:220px;word-break:break-all'>" + esc(n.extra || "—") + "</td>" +
         "<td><span class='pill'>" + esc(e.kind || "—") + "</span></td></tr>";
     });
-    $("al-body").innerHTML = rows.join("") || "<tr><td colspan='6' class='empty'>无匹配审计记录（筛选无结果与首次无数据是两回事——可清空筛选重试）</td></tr>";
+    var alFiltered = !!(kw || ($("al-kind").value || "").trim());
+    $("al-body").innerHTML = rows.join("") || "<tr><td colspan='6' class='empty'>" +
+      esc(emptyListText(alFiltered,
+        "筛选无结果：当前条件下没有匹配的审计事件——可清空搜索/kind 过滤重试",
+        "暂无审计事件（新部署或按保留期清理）")) + "</td></tr>";
     $("al-count").textContent = String(rowsSrc.length);
     forEach("[data-alrow]", function (tr) {
       tr.onclick = function () {

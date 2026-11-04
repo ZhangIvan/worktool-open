@@ -50,6 +50,17 @@ const canned = [
     events: [{ edge: "E01", fromState: "", toState: "queued", event: "created", detail: "受理", atMs: NOW }],
     results: [],
   })],
+  [/^\/api\/v1\/admin\/commands\/cmd-9999888877776666$/, () => ({
+    command: { commandId: "cmd-9999888877776666", target: "dev-1", type: 219,
+      payload: '{"type":219,"groupName":"交付群"}',
+      state: "failed", riskClass: "L2", dryRun: false, createdAtMs: NOW, dispatchedAtMs: NOW,
+      ackDeadlineMs: NOW + 600000, terminalAtMs: NOW + 1000, terminalState: "failed", epoch: 1, seq: 2 },
+    events: [
+      { edge: "E01", fromState: "", toState: "queued", event: "created", detail: "受理", atMs: NOW },
+      { edge: "E11", fromState: "running", toState: "failed", event: "exec_result", detail: "errorCode=201010", atMs: NOW + 1000 },
+    ],
+    results: [{ payload: { errorCode: 201010, reason: "目标 App 不在前台" }, atMs: NOW + 1000 }],
+  })],
   [/^\/api\/v1\/admin\/commands\?/, () => ({
     total: 2, offset: 0, count: 2, commands: [
       { commandId: CMD_ID, target: "dev-aaaabbbbccccdddd", type: 203, state: "succeeded", terminalState: "succeeded", riskClass: "L0", dryRun: false, createdAtMs: NOW },
@@ -251,6 +262,11 @@ ok((els["hm-dev"].textContent + els["hm-dev"].innerHTML).includes("—"), "工�
 sandbox.renderObsExecLogs();
 await settle();
 ok(els["el-body"].innerHTML.includes("加载失败"), "执行日志失败后落错误行（观测不吞异常）");
+// D9 回归锁定（前次复核中危项）：回调配置页 GET 失败不得吞成假空态——显示「加载失败+重试」
+sandbox.renderCallbacks();
+await settle();
+ok(els["cb-groups"].innerHTML.includes("回调绑定加载失败"), "回调配置：绑定列表读取失败 → 错误态+重试（不吞成假空态）", els["cb-groups"].innerHTML.slice(0, 120));
+ok(!els["cb-groups"].innerHTML.includes("还没有任何回调绑定"), "回调配置：失败时不得渲染「无绑定」假空态");
 fetchMode = "ok";
 
 /* ---------- F. 核心流程三步可达 ---------- */
@@ -265,8 +281,11 @@ sandbox.renderTasksSend();
 await settle();
 const sendHtml = renderedAll();
 ok(["id='send-device'", "id='send-type'", "id='send-dryrun'", "id='send-go'"].every(id => view.innerHTML.includes(id)), "发送页四要素：设备下拉/动作下拉/干跑按钮/提交按钮");
-ok(sendHtml.includes("演示设备A") && sendHtml.includes("离线：设备不可达，暂不可选"), "① 设备下拉含在线徽标与离线禁用说明");
+// D1：离线设备可选（下拉不 disabled），标签说明「可排队，提交前需确认」
+ok(sendHtml.includes("演示设备A") && sendHtml.includes("离线（可排队，提交前需确认）"), "① 设备下拉：离线可选并说明「可排队，提交前需确认」（规格 F01）");
+ok(!/value='dev-1111222233334444'[^>]*disabled/.test(sendHtml), "① 离线设备下拉项不再 disabled（可进草稿）");
 ok(sendHtml.includes("发送文本消息") || sendHtml.includes("目录加载中"), "② 动作下拉已按目录填充");
+ok(view.innerHTML.includes("send-cattabs"), "② 动作区含分组快捷筛选 quicktabs（交互图02）");
 ok(els["send-dryrun"].disabled === false || els["send-dryrun"].disabled === true, "干跑按钮受提交门条件禁用（updateGate 生效）");
 // 选设备 → 选动作 → 门解锁（纯 UI 链）
 sandbox.$("send-device").value = "dev-aaaabbbbccccdddd";
@@ -274,13 +293,37 @@ sandbox.WIZ.deviceId = "dev-aaaabbbbccccdddd";
 sandbox.$("send-type").value = "203";
 sandbox.onPick();
 await settle();
+{
+  const picked = renderedAll();
+  ok(picked.includes("真机验证：未验证") && picked.includes("设备支持：未上报"), "② 动作卡含证据与支持状态标签（目录/设备支持/真机验证，交互图02）");
+  ok(picked.includes("targetRoom"), "② 选 203 显示端侧 targetRoom 字段漂移警示（规格 C203）");
+}
 ok(sandbox.WIZ.type === 203 && els["send-fields"].innerHTML.includes("titleList"), "选动作 203 → 类型化表单生成（数组字段在位）");
 ok(els["send-fields"].innerHTML.includes("数组——每行一个值"), "数组参数渲染为多行输入");
+// D1：切到离线设备 → 需勾选「上线后排队」；勾选后提交门不再因离线拦截（缺必填仍拦）
+sandbox.$("send-device").value = "dev-1111222233334444";
+sandbox.WIZ.deviceId = "dev-1111222233334444";
+sandbox.onDeviceChange();
+await settle();
+ok(els["send-devinfo"].innerHTML.includes("send-offline-go"), "① 离线设备卡出现「设备上线后排队执行」确认勾选（交互图01）");
+ok(els["send-gate"].innerHTML.includes("上线后排队"), "提交门：离线未确认 → 显示「上线后排队」原因（含 E19）", els["send-gate"].innerHTML);
+sandbox.WIZ.offlineGo = true; sandbox.WIZ.offlineFor = "dev-1111222233334444";
+sandbox.updateGate();
+ok(!els["send-gate"].innerHTML.includes("上线后排队"), "提交门：勾选「上线后排队」后离线原因消失（缺必填仍在）", els["send-gate"].innerHTML);
+sandbox.WIZ.offlineGo = false; sandbox.WIZ.offlineFor = "";
+sandbox.$("send-device").value = "dev-aaaabbbbccccdddd";
+sandbox.WIZ.deviceId = "dev-aaaabbbbccccdddd";
+sandbox.onDeviceChange();
+await settle();
 const dec1 = sandbox.submitRouteDecision({ commandId: "c-123", state: "queued", replay: false });
 ok(dec1.kind === "task", "201+commandId → 直达任务轨迹决策", dec1);
 sandbox.CURRENT_CMD_ID = CMD_ID;
+sandbox.$("tc-auto").checked = true; // 模拟浏览器对 checked 属性的默认置位（stub 不解析 HTML）
 sandbox.renderTaskCurrent();
 await settle();
+// D4：自动刷新勾选框初始 checked → 轮询必须已在跑（修前 bindAuto 只在 change 时启动）
+ok(typeof sandbox.autoTimers["tc-auto"] !== "undefined",
+  "任务轨迹自动刷新初始态：checked 即启动轮询（无需手动切换）", sandbox.autoTimers);
 const curHtml = renderedAll();
 ok(view.innerHTML.includes("刷新核对"), "任务轨迹页含「刷新核对」按钮");
 ok(curHtml.includes("状态时间线") && curHtml.includes("E01"), "任务轨迹含 E01→E19 时间线");
@@ -294,6 +337,44 @@ sandbox.renderDevices();
 await settle();
 ok(renderedAll().includes("创建任务"), "设备页含「创建任务」入口（→ 发送页预选设备）");
 ok(renderedAll().includes("演示设备A"), "设备页含拓扑/选中卡设备名");
+// D1：离线/暂停设备的行内「创建任务」可进入草稿（提交门在发送页拦截），不再整行禁用
+{
+  const dvHtml = renderedAll();
+  ok(!/data-newtask='dev-1111222233334444'[^>]*disabled/.test(dvHtml), "设备行：离线设备「创建任务」可点（草稿入口不禁用，title 说明提交条件）", (dvHtml.match(/data-newtask='dev-1111222233334444'[^>]*>/) || [""])[0]);
+  ok(!/data-newtask='dev-eeeeffffgggghhhh'[^>]*disabled/.test(dvHtml), "设备行：暂停设备「创建任务」可点（规格 F01 暂停可填草稿）");
+}
+
+/* ---------- D+. 任务轨迹 ?id= 深链切换：URL id 始终为准（换 id 即换任务） ----------
+ * 回归：修前 renderTaskCurrent 只在 CURRENT_CMD_ID 为空时才采纳 ROUTE_Q.id——
+ * 已打开任务 A 后，再走 #/tasks-current?id=B（任务中心/审计/工作台跳转）会残留显示 A。 */
+{
+  sandbox.CURRENT_CMD_ID = CMD_ID; // 当前正看任务 A（cmd-aaaabbbbccccdddd）
+  sandbox.location.hash = "#/tasks-current?id=cmd-9999888877776666"; // 深链换到任务 B
+  sandbox.route();
+  await settle();
+  ok(String(sandbox.CURRENT_CMD_ID) === "cmd-9999888877776666",
+    "任务轨迹 ?id= 深链换 id 即换任务（CURRENT_CMD_ID 跟随 URL）", sandbox.CURRENT_CMD_ID);
+  const tcView = view.innerHTML;
+  ok(tcView.includes("cmd-9999…6666") && !tcView.includes("cmd-aaaa…dddd"),
+    "任务轨迹深链 B 后面包屑指向 B（不再指向旧任务 A）", tcView.slice(0, 160));
+  ok((els["tc-body"] ? els["tc-body"].innerHTML : "").includes("cmd-9999888877776666"),
+    "任务轨迹深链 B 后详情卡渲染 B 的元数据（tc-body 跟随新 id）");
+  sandbox.location.hash = "#/home"; // 还原，不干扰后续段
+}
+
+/* ---------- D+. 设备详情：暂停时禁用按钮旁有可见原因（设计08 底栏） ---------- */
+sandbox.ROUTE_Q = { id: "dev-eeeeffffgggghhhh" };
+{
+  let threw = null;
+  try { sandbox.renderDeviceDetail(); await settle(); } catch (e) { threw = e; }
+  ok(!threw, "renderDeviceDetail(暂停设备) 渲染不抛错", threw && threw.stack);
+  ok(renderedAll().includes("dd-gatereason"), "设备详情：提交禁用原因以可见文本呈现（不只 title，设计08）");
+}
+sandbox.ROUTE_Q = {};
+
+/* ---------- D+. 审批：批准/拒绝按钮禁用时均有可见 title 原因 ---------- */
+ok(els["ap-no"] && (els["ap-no"].title || "").includes("决议令牌"), "审批拒绝按钮禁用时带 title 原因（无决议令牌）", els["ap-no"] && els["ap-no"].title);
+ok(els["ap-ok"] && (els["ap-ok"].title || "").includes("决议令牌"), "审批批准按钮禁用时带 title 原因");
 
 /* ---------- G. 纯函数行为（行为变更回归点） ---------- */
 section("G. 纯函数行为");
@@ -325,8 +406,10 @@ ok(JSON.stringify(sandbox.missingRequired(e203, { type: 203, receivedContent: "x
 ok(sandbox.missingRequired(e203, { titleList: [], receivedContent: "x" }).includes("titleList"), "missingRequired：空数组视为缺");
 ok(sandbox.missingRequired(e202, { loop: { on: false } }).length === 0, "missingRequired：嵌套 false 是已填（不误报）");
 {
+  // D1（规格 F01/交互图01/07）：离线设备可编辑草稿；正式提交须显式勾选「上线后排队执行」
   const off = sandbox.deviceGate({ online: false, status: "active" });
-  ok(!off.selectable && off.reason.includes("离线"), "deviceGate：离线禁选并说明", off);
+  ok(off.selectable === true && off.submitBlocked === true && off.offline === true &&
+     off.reason.includes("上线后排队"), "deviceGate：离线可选可填草稿，提交须「上线后排队」确认", off);
   const paused = sandbox.deviceGate({ online: true, status: "paused" });
   ok(paused.selectable && paused.submitBlocked && paused.submitReason.includes("暂停"), "deviceGate：暂停可选可填草稿但禁提交并说明", paused);
   const good = sandbox.deviceGate({ online: true, status: "active" });
@@ -341,6 +424,45 @@ ok(sandbox.missingRequired(e202, { loop: { on: false } }).length === 0, "missing
   ok(!g3.blocked, "wizardGate：干跑豁免暂停/陈旧（服务端模拟不触达设备）", g3.reasons);
   const g4 = sandbox.wizardGate({ device: true, type: 203, missing: [], payloadError: "bad json" });
   ok(g4.blocked && g4.reasons.some(r => r.includes("JSON 解析失败")), "wizardGate：手写 JSON 解析失败 → 禁用并说明", g4.reasons);
+  // D1：离线未确认「上线后排队」→ 提交门拦截并说明；确认后放行；干跑豁免
+  const g5 = sandbox.wizardGate({ device: true, offlineNeed: true, type: 203, missing: [] });
+  ok(g5.blocked && g5.reasons.some(r => r.includes("上线后排队") && r.includes("E19")), "wizardGate：离线未勾选「上线后排队」→ 禁用并给原因（含 E19 队列 TTL）", g5.reasons);
+  const g6 = sandbox.wizardGate({ device: true, offlineNeed: false, type: 203, missing: [] });
+  ok(!g6.blocked, "wizardGate：离线已确认「上线后排队」→ 提交门放行", g6.reasons);
+  const g7 = sandbox.wizardGate({ device: true, offlineNeed: true, type: 203, missing: [], forDry: true });
+  ok(!g7.blocked, "wizardGate：干跑豁免离线确认（服务端模拟不触达设备）", g7.reasons);
+}
+{
+  // D5（规格 §2.2）：默认时间显示「YYYY-MM-DD HH:mm:ss UTC」
+  ok(sandbox.fmtMs(Date.UTC(2026, 10, 4, 6, 0, 0)) === "2026-11-04 06:00:00 UTC",
+    "fmtMs：UTC 后缀（规格 §2.2 示例格式）", sandbox.fmtMs(Date.UTC(2026, 10, 4, 6, 0, 0)));
+  ok(sandbox.fmtMs(0) === "—", "fmtMs：空值仍为 —");
+}
+{
+  // D6（规格 §2.3）：筛选无结果与首次无数据文案不同
+  ok(sandbox.emptyListText(true, "筛选无结果", "暂无数据") === "筛选无结果", "emptyListText：有筛选 → 筛选文案");
+  ok(sandbox.emptyListText(false, "筛选无结果", "暂无数据") === "暂无数据", "emptyListText：无筛选 → 首次文案");
+  ok(html.includes("筛选无结果：当前条件下没有任务") && html.includes("还没有任务：点右上「创建任务」提交第一条指令"),
+    "任务中心空态两分支文案在位（筛选/首次）");
+  ok(html.includes("筛选无结果：该目标/编号下没有 queued 待执行指令") && html.includes("队列为空（无 queued 待执行指令"),
+    "队列空态两分支文案在位");
+  ok(html.includes("筛选无结果：当前状态下没有投递记录") && html.includes("暂无投递记录（从未产生回调事件"),
+    "回调记录空态两分支文案在位");
+  ok(html.includes("筛选无结果：该任务编号下暂无事件") && html.includes("全局事件流暂无记录"),
+    "执行日志空态两分支文案在位");
+  ok(html.includes("筛选无结果：当前条件下没有匹配的审计事件") && html.includes("暂无审计事件（新部署或按保留期清理）"),
+    "审计空态两分支文案在位");
+}
+{
+  // D2/D3（规格 §12.1/12.3 对照 catalog.go/guard.go 当前源码）：分级漂移已由服务端统一
+  // （catalog 236/238/239/240/244=L2、223=L0 与 guard 一致）——UI 过期警告必须移除；
+  // 字段形态漂移按规格逐条如实警示（203 targetRoom 等）。
+  ok(sandbox.DRIFT_TYPES === undefined, "DRIFT_TYPES：过期分级漂移表已移除（catalog=管线单源，catalog.go:160-175）", sandbox.DRIFT_TYPES);
+  const fd = sandbox.FIELD_DRIFT_TYPES || {};
+  ok(fd[203] && fd[203].includes("targetRoom"), "FIELD_DRIFT_TYPES[203]：titleList→targetRoom 端侧读取警示", fd[203]);
+  ok(fd[202] && fd[202].includes("loopEnabled"), "FIELD_DRIFT_TYPES[202]：loop.on→loopEnabled 保留", fd[202]);
+  ok(["206", "207", "208", "209", "218", "225", "226", "229", "238", "511", "514"].every(k => fd[k] && fd[k].length > 8),
+    "FIELD_DRIFT_TYPES：规格 §12.3 已知字段漂移逐条登记（206/207/208/209/218/225/226/229/238/511/514）", Object.keys(fd));
 }
 ok(sandbox.submitRouteDecision({ commandId: "c1", state: "queued", replay: true }).replay === true, "submitRouteDecision：幂等重放标记透传");
 ok(sandbox.submitRouteDecision({}).kind === "invalid" && sandbox.submitRouteDecision(null).kind === "invalid", "submitRouteDecision：无法识别 → invalid（不轮换幂等键）");
