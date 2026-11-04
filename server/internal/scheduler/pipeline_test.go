@@ -659,3 +659,39 @@ func TestSubmitRejectE02(t *testing.T) {
 }
 
 var _ = sql.NullBool{} // 保持 database/sql 导入（NullTime 在生产代码使用）
+
+
+// TestScanQueuedTTL（E19，2026-11-04 所有者反馈修复）：排队超期 → cancelled。
+func TestScanQueuedTTL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short 模式跳过")
+	}
+	f := newFixture(t)
+	ctx := context.Background()
+	// 直落一条 25h 前创建的 queued 指令
+	if _, err := f.db.Exec(ctx,
+		`INSERT INTO commands(command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at)
+		 VALUES ('qt-1','dev-1',203,'{}','queued',0,0,'','L0',0,?)`, f.now.Add(-25*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := f.svc.ScanQueuedTTL(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(cancelled) != 1 || cancelled[0] != "qt-1" {
+		t.Fatalf("应取消 1 条：%v", cancelled)
+	}
+	rows, _ := f.db.QueryDump(ctx, `SELECT state FROM commands WHERE command_id='qt-1'`)
+	if rows[0][0] != "cancelled" {
+		t.Fatalf("终态应为 cancelled：%v", rows)
+	}
+	ev, _ := f.db.QueryDump(ctx, `SELECT edge_id FROM command_events WHERE command_id='qt-1' AND edge_id='E19'`)
+	if len(ev) != 1 {
+		t.Fatalf("应有 E19 事件留痕：%v", ev)
+	}
+	// 幂等：再扫无新取消
+	again, _ := f.svc.ScanQueuedTTL(ctx, 24*time.Hour)
+	if len(again) != 0 {
+		t.Fatalf("重扫应幂等：%v", again)
+	}
+}

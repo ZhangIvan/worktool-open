@@ -109,7 +109,12 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	// 后台任务：ACK TTL 扫描（E17/E18）+ 调度泵 + 回调投递 + cron 定时调度（FR-38）
 	bgCtx, bgStop := context.WithCancel(ctx)
 	defer bgStop()
-	go func() { _ = pipeline.RunAckTTLScanner(bgCtx, 10*time.Second) }()
+	go func() {
+		// 扫描器错误可观测（2026-11-04 E19 部署排障：此前 _ 丢弃致静默死亡）
+		if err := pipeline.RunAckTTLScanner(bgCtx, 10*time.Second); err != nil && ctx.Err() == nil {
+			logger.Printf("boot: TTL 扫描器退出: %v", err)
+		}
+	}()
 	go func() { _ = hub.RunDispatchPump(bgCtx, time.Second) }()
 	go func() { _ = worker.Run(bgCtx) }()
 	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()

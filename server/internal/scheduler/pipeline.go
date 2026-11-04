@@ -770,6 +770,51 @@ func (s *Service) ScanAckTTL(ctx context.Context) (expired []string, err error) 
 	return expired, nil
 }
 
+// ScanQueuedTTL 扫描排队超期（E19，2026-11-04 所有者反馈修复）：queued 态超过
+// 排队 TTL（默认 24h）仍无投递 → cancelled（离线积压清理；从未下发不涉成败推定）。
+// 与 E17/E18 不同：queued 从未出服务端，无对账歧义，可直接终态化。
+func (s *Service) ScanQueuedTTL(ctx context.Context, ttl time.Duration) (cancelled []string, err error) {
+	now := s.Now().UTC()
+	rows, err := s.db.QueryDump(ctx, `SELECT command_id FROM commands WHERE state='queued' AND created_at < ?`,
+		now.Add(-ttl).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		commandID := r[0]
+		migrated := false
+		txErr := s.withTx(ctx, func(tx *sql.Tx) error {
+			cur, ok, err := s.db.GetCommandForUpdate(ctx, tx, commandID)
+			if err != nil {
+				return err
+			}
+			if !ok || cur.State != "queued" {
+				return nil // 已迁移（幂等）
+			}
+			edge, found := s.m.EdgeFor("queued", "queue_ttl_expired")
+			if !found {
+				return fmt.Errorf("scheduler: 边集缺 queued/queue_ttl_expired（E19）")
+			}
+			if err := s.applyEdge(ctx, tx, &cur, edge,
+				fmt.Sprintf("排队 TTL %s 到期无投递（设备离线积压清理；从未下发，可重新提交）", ttl), now); err != nil {
+				return err
+			}
+			migrated = true
+			return nil
+		})
+		if txErr != nil {
+			return cancelled, txErr
+		}
+		if migrated {
+			cancelled = append(cancelled, commandID)
+		}
+	}
+	return cancelled, nil
+}
+
+// QueuedTTLDefault 排队超期默认值（24h；部署可配归 config 车道）。
+const QueuedTTLDefault = 24 * time.Hour
+
 // RunAckTTLScanner 周期扫描（UNKNOWN 对账任务入口之一：周期扫描；另一入口=重连触发）。
 func (s *Service) RunAckTTLScanner(ctx context.Context, interval time.Duration) error {
 	t := time.NewTicker(interval)
@@ -780,6 +825,9 @@ func (s *Service) RunAckTTLScanner(ctx context.Context, interval time.Duration) 
 			return ctx.Err()
 		case <-t.C:
 			if _, err := s.ScanAckTTL(ctx); err != nil {
+				return err
+			}
+			if _, err := s.ScanQueuedTTL(ctx, QueuedTTLDefault); err != nil {
 				return err
 			}
 		}

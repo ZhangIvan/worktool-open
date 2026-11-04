@@ -839,12 +839,27 @@ function renderQueue() {
       if ($("q-target").value.trim()) q = "?target=" + encodeURIComponent($("q-target").value.trim());
       api("GET", "/api/v1/admin/queue" + q).then(function (j) {
         var rows = (j.queue || []).map(function (c) {
+          var ageMs = Date.now() - (c.createdAtMs || 0);
+          var ageH = Math.floor(ageMs / 3600000);
+          var ageTxt = ageH >= 1 ? (ageH + " 小时") : Math.max(0, Math.floor(ageMs / 60000)) + " 分钟";
+          var stale = ageH >= 1;
           return "<tr><td>" + c.position + "</td><td>" + shortId(c.commandId) + "</td>" +
             "<td class='mono'>" + esc(c.target) + "</td><td>" + typeCell(c.type) + "</td>" +
-            "<td>" + riskPill(c.riskClass) + "</td><td class='mono'>" + fmtMs(c.createdAtMs) + "</td>" +
+            "<td>" + riskPill(c.riskClass) + "</td><td class='mono'>" + fmtMs(c.createdAtMs) +
+            (stale ? " <span class='pill st-awaiting_approval' title='排队超过 1 小时（24h 自动取消 E19）'>已等 " + ageTxt + "</span>" : "") + "</td>" +
             "<td><button class='mini' data-prio='" + esc(c.commandId) + "'>插队</button> " +
             "<button class='no mini' data-rm='" + esc(c.commandId) + "'>移除</button></td></tr>";
         });
+        var nQ = (j.queue || []).length;
+        var qBanner = $("q-stale-banner");
+        if (!qBanner) {
+          var div = document.createElement("div"); div.id = "q-stale-banner";
+          $("queue").insertBefore(div, $("queue").firstChild);
+          qBanner = div;
+        }
+        qBanner.innerHTML = nQ === 0 ? "" : (nQ >= 10
+          ? "<div class='warnbox'>队列积压 " + nQ + " 条：设备离线时指令持续入队——上线后按序投递；超过 24h 未投递自动取消（E19）。陈旧项可逐条移除或按目标清空。</div>"
+          : "<div class='oknote'>排队 " + nQ + " 条（设备上线后按序投递；24h 未投递自动取消）</div>");
         $("queue-body").innerHTML = rows.join("") || "<tr><td colspan='7' class='empty'>队列为空（无 queued 待执行指令）</td></tr>";
         forEach("[data-prio]", function (b) {
           b.onclick = function () {

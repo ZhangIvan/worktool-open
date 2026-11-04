@@ -12,6 +12,8 @@ import android.widget.EditText
 import android.widget.TextView
 import cn.worktool.open.app.AccessibilityUiDriver
 import cn.worktool.open.app.DevicePortImpls
+import cn.worktool.open.app.LogStoreWriter
+import kotlinx.serialization.json.put
 import cn.worktool.open.app.RuntimePortHub
 import cn.worktool.open.app.DeviceSessionLoop
 import cn.worktool.open.app.R
@@ -59,6 +61,9 @@ import java.util.Locale
 class LabPairingActivity : Activity() {
 
     private var loop: DeviceSessionLoop? = null
+
+    /** 进程级会话标识（301 快照 processSessionId；进程存活期恒定）。 */
+    private val processSessionId: String = java.util.UUID.randomUUID().toString()
     private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -245,6 +250,31 @@ class LabPairingActivity : Activity() {
         portHub.attach(l)
         l.start()
         loop = l
+        // FR-49 ③：WS onOpen 环境快照 301（与产品 SessionRuntime.sendEnvSnapshot301
+        // 同口径——lab 直发供真机验证；经 journal 队列连接建立即投递）
+        runCatching {
+            val dm = resources.displayMetrics
+            val bean = cn.worktool.open.core.protocol.WeworkMessageBean(
+                type = 301,
+                extras = kotlinx.serialization.json.buildJsonObject {
+                    put("appVersion", "0.1.0-lab-wm6")
+                    put("workVersion", packageManager.getPackageInfo("com.tencent.wework", 0).versionName ?: "?")
+                    put("resolution", "${dm.widthPixels}x${dm.heightPixels}")
+                    put("processSessionId", processSessionId)
+                    put("previousExitReason", "first_run")
+                    put(
+                        "logHealth",
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("enabled", true)
+                            put("todayFile", LogStoreWriter.fileFor(labFileDir).name)
+                            put("todayBytes", LogStoreWriter.fileFor(labFileDir).let { if (it.isFile) it.length() else 0L })
+                        },
+                    )
+                },
+            )
+            l.sendReportBeans(listOf(bean))
+            log("301 环境快照已入上报队列（FR-49 ③）")
+        }
         runOnUiThread { log("hello 已发送（ws=${response.wsPath}），等待 hello_ack…") }
     }
 
@@ -274,6 +304,9 @@ class LabPairingActivity : Activity() {
     }
 
     private fun log(line: String) {
+        // FR-49（W-M6 设备验证接线）：事件同步落盘（日期分区，510/514 的数据源；
+        // 产品 SessionRuntime.appendEvent 同型——lab 经此与产品同口径供 510/514 实测）
+        LogStoreWriter.appendLine(File(filesDir, "lab-509"), System::currentTimeMillis, line)
         runOnUiThread {
             findViewById<TextView>(R.id.lab_status).let { tv ->
                 tv.text = "${tv.text}\n[${timeFmt.format(Date())}] $line".takeLast(4000)

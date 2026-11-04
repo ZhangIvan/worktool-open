@@ -438,6 +438,15 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	state := res.State
 	body := map[string]any{"commandId": res.CommandID, "state": state, "replay": res.Replay, "dryRun": req.DryRun, "idempotencyKey": idemKey}
+	// 设备在线态透出（2026-11-04 所有者反馈：设备离线时指令入队静默无反馈）：
+	// queued + 离线 → UI 明示「设备离线，上线后投递；24h 未投递自动取消」。
+	if state == "queued" {
+		if dev, ok, derr := s.resolveDeviceForTarget(ctx, req.Target); derr == nil && ok && s.online != nil {
+			body["deviceOnline"] = s.online(dev.DeviceID)
+		} else if s.online != nil {
+			body["deviceOnline"] = s.online(req.Target) // 未解析到设备行：按原目标探测
+		}
+	}
 	if state == "awaiting_approval" {
 		status = http.StatusAccepted
 		body["approvalId"] = res.ApprovalID
