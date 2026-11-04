@@ -263,12 +263,22 @@ func TestL1Whitelist(t *testing.T) {
 		t.Fatalf("期望 RECIPIENT_NOT_WHITELISTED，实际 %s", code)
 	}
 
-	// L0 指令不受白名单约束（203 发普通消息）
+	// 203（L0）发消息同样受白名单约束（P0-1 修复，2026-11-04 外部审计：
+	// 误发保护的主对象=发消息，旧豁免即旁路本体；白名单外收件人拒绝）
 	if _, err := f.svc.Submit(ctx, SubmitRequest{
 		Actor: "op-1", Target: testTarget, CommandType: 203,
 		Payload: `{"type":203,"targetRoom":"未登记群","receivedContent":"普通消息不受白名单约束"}`,
+	}); err == nil {
+		t.Fatal("L0 携收件人指令应受白名单约束（误发保护主对象，旧豁免=旁路）")
+	} else if code := guardCode(t, err); code != ErrCodeNotWhitelisted {
+		t.Fatalf("期望 RECIPIENT_NOT_WHITELISTED，实际 %s", code)
+	}
+	// 白名单内收件人的 203 正常放行
+	if _, err := f.svc.Submit(ctx, SubmitRequest{
+		Actor: "op-1", Target: testTarget, CommandType: 203,
+		Payload: `{"type":203,"targetRoom":"白名单群","receivedContent":"白名单内放行"}`,
 	}); err != nil {
-		t.Fatalf("L3 不应受白名单约束: %v", err)
+		t.Fatalf("白名单内 203 应放行: %v", err)
 	}
 
 	// WhitelistDefaultDeny=true：另一目标未配置白名单 → 默认拒收
@@ -418,5 +428,34 @@ func TestL1WhitelistGroupMembers(t *testing.T) {
 		t.Fatal("addMembers 形态不可识别应默认拒收")
 	} else if code := guardCode(t, err); code != ErrCodeNotWhitelisted {
 		t.Fatalf("期望 RECIPIENT_NOT_WHITELISTED，实际 %s", code)
+	}
+}
+
+
+// TestL1WhitelistCanonicalFields（P0-1 负向回归，2026-11-04 外部审计实锤修复）：
+// 规范目录字段（titleList/selectList/friend.name/friend.phone）此前不在白名单
+// 提取集——规范字段请求绕过白名单入队。修复后必须与其他收件人字段同等拦截。
+func TestL1WhitelistCanonicalFields(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.svc.SetGuardConfig(GuardConfig{L1Window: time.Minute, L1MaxPerTx: 100, WhitelistDefaultDeny: true})
+
+	cases := []struct {
+		name    string
+		cmd     int
+		payload string
+	}{
+		{"203 titleList 规范字段", 203, `{"type":203,"titleList":["张三"],"receivedContent":"hi"}`},
+		{"206 selectList 拉人字段", 206, `{"type":206,"groupName":"客户群","selectList":["张三"]}`},
+		{"213 friend.phone 嵌套字段", 213, `{"type":213,"friend":{"phone":"13800000000"}}`},
+		{"234 friend.name 嵌套字段", 234, `{"type":234,"friend":{"name":"张三"}}`},
+	}
+	for _, c := range cases {
+		_, err := f.svc.Submit(ctx, SubmitRequest{
+			Actor: "op-1", Target: "device-no-whitelist", CommandType: c.cmd, Payload: c.payload,
+		})
+		if err == nil {
+			t.Fatalf("%s：规范收件人字段必须受 WhitelistDefaultDeny 拦截（不得旁路）", c.name)
+		}
 	}
 }

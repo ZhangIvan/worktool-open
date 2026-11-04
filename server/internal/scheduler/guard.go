@@ -290,7 +290,7 @@ func (s *Service) checkWhitelist(ctx context.Context, target, payload string) er
 	recipients, present, recognized := payloadRecipients(payload)
 	if !present {
 		return s.db.InsertAudit(ctx, nil, "whitelist_skip_no_recipient", target,
-			"L1 载荷无接收人字段（targetRoom/receivedName），白名单不判定", s.Now().UTC())
+			"L1 载荷无收件人字段（targetRoom/titleList/selectList/friend.* 等），白名单不判定", s.Now().UTC())
 	}
 	if present && !recognized {
 		return &GuardError{Code: ErrCodeNotWhitelisted,
@@ -298,7 +298,7 @@ func (s *Service) checkWhitelist(ctx context.Context, target, payload string) er
 	}
 	if len(recipients) == 0 {
 		return s.db.InsertAudit(ctx, nil, "whitelist_skip_no_recipient", target,
-			"L1 载荷接收人字段为空值（targetRoom/receivedName），白名单不判定", s.Now().UTC())
+			"L1 载荷收件人字段为空值，白名单不判定", s.Now().UTC())
 	}
 	listed, err := s.db.WhitelistForTarget(ctx, target)
 	if err != nil {
@@ -337,7 +337,14 @@ func payloadRecipients(payload string) (recipients []string, present, recognized
 	if err := json.Unmarshal([]byte(payload), &probe); err != nil {
 		return nil, false, false // 载荷非 JSON 对象（Submit 静态校验兜底，此处防御）
 	}
-	fields := []json.RawMessage{probe["targetRoom"], probe["receivedName"], probe["groupMembers"], probe["addMembers"]}
+	// P0-1（2026-11-04 外部审计实锤修复）：原仅提取 4 个旧字段——规范目录字段
+	// titleList（203/204/205/221/226/227/229/238 等）、selectList（206/225）与嵌套
+	// friend.name/friend.phone（213/220/234/236）不受白名单判定 = 旁路。补齐同语义
+	// 提取；字段形态规则不变（字符串/字符串数组；对象 → friend 嵌套取 name/phone）。
+	fields := []json.RawMessage{
+		probe["targetRoom"], probe["receivedName"], probe["groupMembers"], probe["addMembers"],
+		probe["titleList"], probe["selectList"],
+	}
 	out := []string{}
 	present, recognized = false, true
 	for _, raw := range fields {
@@ -362,6 +369,24 @@ func payloadRecipients(payload string) (recipients []string, present, recognized
 			continue
 		}
 		recognized = false // 存在但形态不可识别（fail-closed 由调用方拒收）
+	}
+	// 嵌套对象字段：friend{name, phone, markName}——任一子字段为收件人语义。
+	if friendRaw, ok := probe["friend"]; ok && len(friendRaw) > 0 {
+		present = true
+		var friend struct {
+			Name  string `json:"name"`
+			Phone string `json:"phone"`
+		}
+		if err := json.Unmarshal(friendRaw, &friend); err != nil {
+			recognized = false // friend 形态不可识别 → fail-closed
+		} else {
+			if friend.Name != "" {
+				out = append(out, friend.Name)
+			}
+			if friend.Phone != "" {
+				out = append(out, friend.Phone)
+			}
+		}
 	}
 	return out, present, recognized
 }

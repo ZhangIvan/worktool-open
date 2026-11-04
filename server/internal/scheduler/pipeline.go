@@ -190,15 +190,18 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, 
 		l2Approval = a
 	}
 
-	// FR-53 L1：接收人白名单（配置即强制）+ 每目标限速（默认 10/min）
-	if risk == RiskL1 {
-		if err := s.checkWhitelist(ctx, req.Target, req.Payload); err != nil {
-			var ge *GuardError
-			if errors.As(err, &ge) {
-				return s.rejectGuard(ctx, now, ge)
-			}
-			return SubmitResult{}, err
+	// FR-53 接收人白名单：**所有携带收件人字段的指令**（不限风险级——P0-1 修复，
+	// 2026-11-04 外部审计实锤：规范字段 203（L0）旁路）。checkWhitelist 内部对
+	// 无收件人载荷直接放行（审计留痕），对形态不可识别 fail-closed；每目标限速
+	// （默认 10/min）仍仅 L1。
+	if err := s.checkWhitelist(ctx, req.Target, req.Payload); err != nil {
+		var ge *GuardError
+		if errors.As(err, &ge) {
+			return s.rejectGuard(ctx, now, ge)
 		}
+		return SubmitResult{}, err
+	}
+	if risk == RiskL1 {
 		if !s.guard.allowL1Rate(req.Target, now) {
 			return s.rejectGuard(ctx, now, &GuardError{Code: ErrCodeRateLimited,
 				Msg: fmt.Sprintf("L1 指令限速：目标 %s 超出 %d 条/%s（FR-53 默认限速）",

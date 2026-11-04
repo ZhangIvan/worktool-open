@@ -135,6 +135,13 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	// （flag -enable-v1-compat）显式开启才暴露 /webserver/wework/{robotId}。
 	mux := api.NewServeMux(api.Options{Server: srv, EnableV1Compat: cfg.EnableV1Compat})
 	adminSrv.Register(mux)
+	// P0-2（2026-11-04 外部审计实锤：ApplyPersistedSettings 无启动调用点——重启后
+	// 持久化 guard 策略实际失效，查询接口却显示已保存=假成功）。先恢复并验证策略，
+	// 再开始接流量；恢复失败拒绝启动（fail-fast，不保留假成功）。
+	if err := adminSrv.ApplyPersistedSettings(context.Background()); err != nil {
+		return fmt.Errorf("boot: 恢复持久化管理设置失败（拒绝启动，防止策略失效假成功）: %w", err)
+	}
+	logger.Printf("boot: 持久化管理设置已恢复并应用（guard 策略实际生效）")
 	httpSrv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
