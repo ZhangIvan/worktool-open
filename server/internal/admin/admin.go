@@ -111,6 +111,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/admin/queue/{commandId}", s.handleQueueRemove)
 	mux.HandleFunc("POST /api/v1/admin/queue/{commandId}/priority", s.handleQueuePriority)
 	mux.HandleFunc("/api/v1/admin/callbacks", s.handleCallbacks)
+	mux.HandleFunc("GET /api/v1/admin/catalog", s.handleCatalog)
 	mux.HandleFunc("POST /api/v1/admin/callbacks/test", s.handleCallbackTest)
 	mux.HandleFunc("GET /api/v1/admin/callbacks/logs", s.handleCallbackLogs)
 	mux.HandleFunc("GET /api/v1/admin/logs/executions", s.handleExecutionLogs)

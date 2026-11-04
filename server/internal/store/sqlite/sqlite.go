@@ -525,6 +525,39 @@ FROM devices WHERE device_id = ?`, deviceID)
 	return d, true, nil
 }
 
+// GetDeviceByEd25519 按签名公钥查设备（设备身份唯一性：同一物理设备重装/换
+// 前缀后 deviceId 变化，但 Ed25519 身份公钥稳定——配对按此归并，防同机多记录）。
+func (db *DB) GetDeviceByEd25519(ctx context.Context, ed25519PublicKeyHex string) (Device, bool, error) {
+	row := db.sql.QueryRowContext(ctx, `
+SELECT device_id, COALESCE(robot_id,''), device_name, ed25519_public_key, device_x25519_public, token_hash, token_version, status, epoch, paired_at
+FROM devices WHERE ed25519_public_key = ?`, ed25519PublicKeyHex)
+	var d Device
+	var paired int64
+	if err := row.Scan(&d.DeviceID, &d.RobotID, &d.DeviceName, &d.Ed25519PublicKey, &d.DeviceX25519Public, &d.TokenHash, &d.TokenVersion, &d.Status, &d.Epoch, &paired); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Device{}, false, nil
+		}
+		return Device{}, false, err
+	}
+	d.PairedAt = time.UnixMilli(paired)
+	return d, true, nil
+}
+
+// DeleteDevice 删除设备行（管理面清理陈旧记录：同物理机旧公钥时代/误配对）。
+// 关联清理：该设备 openapi-tokens 保留（robot 维度）；device_sessions 级联由
+// 调用方决定（历史会话留审计）。返回是否删除（不存在=false）。
+func (db *DB) DeleteDevice(ctx context.Context, deviceID string) (bool, error) {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM devices WHERE device_id = ?`, deviceID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // GetDeviceByRobot 按 v1 robotId 查询（v1 兼容路径桥接）。
 func (db *DB) GetDeviceByRobot(ctx context.Context, robotID string) (Device, bool, error) {
 	var deviceID string

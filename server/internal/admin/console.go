@@ -115,6 +115,41 @@ func (s *Server) ApplyPersistedSettings(ctx context.Context) error {
 
 // ---- ① 概览聚合：GET /api/v1/admin/overview ----
 
+// handleCatalog 指令目录（2026-11-04 所有者反馈②③：数字 type 不可读/发送页无
+// 引导）——52 条 REST 可提交指令的中文场景名/风险级/必填参数/示例载荷，供管理台
+// 发送页分组选择与历史/队列/日志页枚举化渲染。单一事实源：openapi 注册表（编号）×
+// scheduler plannedActionNames（中文名）× ClassifyRisk（风险级）× compat 必填表。
+func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"commands": buildCommandCatalog(),
+		"statusLegend": map[string]string{
+			"queued": "已入队（待会话投递）", "dispatched": "已下发（待回执）",
+			"succeeded": "成功", "failed": "失败", "expired": "超期",
+			"rejected": "拒收", "execution_unknown": "结果未知（对账中）",
+			"awaiting_approval": "待审批（L2）",
+		},
+		"riskLegend": map[string]string{
+			"L0": "只读/零副作用（查询类）", "L1": "低风险写操作（可撤销/定向）",
+			"L2": "高风险（群解散/删联系人/清缓存等，需独立审批）",
+		},
+	})
+}
+
+// buildCommandCatalog 由常量表合成（编号×中文名×风险×必填×示例）。
+func buildCommandCatalog() []map[string]any {
+	out := make([]map[string]any, 0, len(adminCommandCatalog))
+	for _, c := range adminCommandCatalog {
+		out = append(out, map[string]any{
+			"type": c.Type, "name": c.Name, "risk": c.Risk,
+			"required": c.Required, "example": c.Example, "group": c.Group,
+		})
+	}
+	return out
+}
+
 // handleOverview 概览聚合（在线设备数/今日指令数/错误率/最近回调 + 队列与审批
 // 待办）。今日 = 服务端 UTC 当天零点起；错误率分母仅计真实执行终态（干跑不
 // 计入，FR-54 防污染风控统计）。
@@ -203,6 +238,9 @@ func atoiDefault(s string) int {
 //   - unbind：robot_id 置空（v1 兼容面绑定解除）。注：2026-11-03 起同身份重配对
 //     （Ed25519 公钥不变）不再清空绑定（UpsertDevice 保留规则，会话 9 根因修复）；
 //     公钥变化的重配对仍清空。
+//   - delete：删除设备行（2026-11-04 所有者反馈——同物理机旧公钥时代的陈旧记录
+//     清理；配对已按 Ed25519 归并防新增重复，存量异钥旧行经此清理）。历史
+//     commands/sessions 行保留（审计不可毁）；robot 绑定随行删除。
 func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -248,6 +286,18 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"deviceId": deviceID, "status": status, "changed": true})
+	case "delete":
+		if !found {
+			(&adminError{http.StatusNotFound, "DEVICE_NOT_FOUND", "设备 " + deviceID + " 不存在"}).write(w)
+			return
+		}
+		deleted, err := s.db.DeleteDevice(ctx, deviceID)
+		if err != nil {
+			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			return
+		}
+		_ = s.db.InsertAudit(ctx, nil, "device_delete", deviceID, "管理面删除设备（陈旧记录清理）", now)
+		writeJSON(w, http.StatusOK, map[string]any{"deviceId": deviceID, "deleted": deleted})
 	case "unbind":
 		if !found {
 			(&adminError{http.StatusNotFound, "DEVICE_NOT_FOUND", "设备 " + deviceID + " 不存在"}).write(w)

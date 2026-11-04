@@ -105,6 +105,19 @@ func (s *Server) HandlePair(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "KEYGEN", err.Error())
 		return
 	}
+	// 设备身份唯一性（2026-11-04 所有者反馈：同一物理设备不得多条记录）：
+	// 先按 Ed25519 签名公键归并——命中即视为**同一设备重配对**（重装/换前缀后
+	// deviceId 变化但身份公钥稳定），沿用既有 device 行（保留 robot 绑定/epoch
+	// 水位），响应既有 deviceId（端侧凭据随之归一）。
+	if existing, found, err := s.DB.GetDeviceByEd25519(ctx, req.Ed25519PublicKey); err != nil {
+		writeErr(w, http.StatusInternalServerError, "STORE", err.Error())
+		return
+	} else if found && existing.DeviceID != req.DeviceID {
+		req.DeviceID = existing.DeviceID
+		if req.DeviceName == "" {
+			req.DeviceName = existing.DeviceName
+		}
+	}
 	// 重复 deviceId 携新配对码 = 重新绑定（覆盖注册公钥，旧 deviceToken 失效——
 	// 新凭据 putCred 覆盖内存注册表即达成）
 	if err := s.DB.UpsertDevice(ctx, sqlite.Device{
