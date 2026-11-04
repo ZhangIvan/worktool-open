@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"cn.worktool.open/server/internal/admin"
 	"cn.worktool.open/server/internal/api"
 	"cn.worktool.open/server/internal/config"
 	"cn.worktool.open/server/internal/gateway"
@@ -78,6 +79,22 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	hub := gateway.New(db, pipeline, machine, logger)
 	srv := api.NewServer(db, hub, pipeline, machine, logger)
 
+	// 管理面（admin/README：装配处接线；UI 经 -admin-ui 指向仓库 admin/ 目录）。
+	adminSrv := admin.New(admin.Deps{
+		DB: db, Pipeline: pipeline, Log: logger,
+		Online: hub.HasActiveSession, // 设备列表在线态（网关只读快照）
+		UIDir: cfg.AdminUIDir,
+	})
+	if cfg.IssueAdminToken {
+		raw, err := adminSrv.IssueAdminToken(ctx)
+		if err != nil {
+			return fmt.Errorf("issue admin token: %w", err)
+		}
+		fmt.Fprintf(stdout, "ADMIN_TOKEN=%s\n", raw)
+		fmt.Fprintln(stdout, "(仅此一次显示；库中仅存 SHA-256 hash。浏览器打开 /admin/ 粘贴令牌登录)")
+		return nil
+	}
+
 	// 回调 outbox（默认禁外网；URL 非 loopback 且未放行 → 启动即拒绝）
 	worker, err := api.NewOutboxWorker(db, api.OutboxConfig{
 		CallbackURL:      cfg.CallbackURL,
@@ -97,8 +114,10 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	go func() { _ = worker.Run(bgCtx) }()
 	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()
 
+	mux := api.NewServeMux(api.Options{Server: srv})
+	adminSrv.Register(mux)
 	httpSrv := &http.Server{
-		Handler:           api.NewServeMux(api.Options{Server: srv}),
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	ln, err := net.Listen("tcp", cfg.Listen)

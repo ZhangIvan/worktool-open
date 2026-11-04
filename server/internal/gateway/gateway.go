@@ -125,6 +125,14 @@ func (h *Hub) HasLiveCred(deviceID string) bool { return h.getCred(deviceID) != 
 
 // ---- 调度泵：把 queued 指令推到在线端点 ----
 
+// HasActiveSession 报告目标（deviceId）是否有当前活动 v2 会话（admin 面在线态
+// 只读快照；admin/README 建议接线点）。
+func (h *Hub) HasActiveSession(deviceID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.v2ByDev[deviceID] != nil
+}
+
 // DispatchQueued 对目标端点做一次调度：v2 会话在线走加密鉴权通道，v1 连接在线
 // 走兼容信封；均不在线则指令留队（会话建立时补发）。
 func (h *Hub) DispatchQueued(ctx context.Context, target string) (int, error) {
