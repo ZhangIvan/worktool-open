@@ -308,6 +308,7 @@ class DeviceSessionLoop(
         }
         val epoch = pendingEpoch
         val startedAt = clock()
+        currentCommandId = commandId // 结构化推送对账键（见 sendStructuredReport）
         val normalized = normalizer.normalize(bean)
         if (normalized !is NormalizedIntent.Valid) {
             val (code, reason) = when (normalized) {
@@ -489,14 +490,21 @@ class DeviceSessionLoop(
         onEvent?.invoke("RAW_CONFIRM commandId=$commandId type=$commandType errorCode=$errorCode")
     }
 
+    /** 当前执行指令号（结构化推送回填对账键用；回路单线程执行窗口内有效）。 */
+    @Volatile
+    private var currentCommandId: String? = null
+
     /**
      * 结构化查询结果上行（W-M6 RuntimePortHub.StructuredResultSink 出口）：
      * socketType=2 上报帧（同 101/102 上报通道），载荷键值经 bean.extras 原样
      * 上送（511/512/513/515 契约字段；网关侧 HandleQueryResult 消费）。
+     * meta.commandId=当前执行指令号（events.md 对账键——回调闭环实证：缺此键
+     * 服务端 query_result 行无法路由 per-robot 绑定而静默 pending）。
      */
     fun sendStructuredReport(commandType: Int, payload: JsonObject) {
         session.sendReport(
             WeworkMessageBean(type = commandType, extras = payload),
+            commandId = currentCommandId ?: "",
         )
     }
 

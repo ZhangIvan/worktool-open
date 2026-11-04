@@ -293,11 +293,17 @@ object ProtocolClient {
          */
         fun reconnectAttempts(): Int = ws.reconnectAttempts()
 
-        /** 发送上报（socketType=2）——经 AtLeastOnce 队列（先落盘后发送）；eventId 由帧构造器分配。 */
-        fun sendReport(vararg beans: WeworkMessageBean, encrypt: Boolean = false): Boolean {
+        /**
+         * 发送上报（socketType=2）——经 AtLeastOnce 队列（先落盘后发送）；eventId 由帧构造器分配。
+         * [commandId]：结构化查询推送（511~515）回填提交侧指令号（events.md 对账键，
+         * W-M6 回调闭环实证：缺此键则服务端 query_result 行路由回退全局 URL 而静默
+         * pending）；常规上报（101 等）留空。
+         */
+        fun sendReport(vararg beans: WeworkMessageBean, encrypt: Boolean = false, commandId: String = ""): Boolean {
             val built = builder.build(
                 socketType = MessageTypes.SOCKET_MESSAGE_LIST,
                 apiSend = 0,
+                commandId = commandId,
                 list = beans.toList(),
                 encrypt = encrypt,
             )

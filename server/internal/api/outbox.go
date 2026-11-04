@@ -11,6 +11,7 @@ package api
 
 import (
 	"bytes"
+	"log"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -60,6 +61,8 @@ type OutboxWorker struct {
 	// Server.wireOutboxCompat 装配注入——worker 与 Server 独立构造，装配序 =
 	// main 先挂 srv.Outbox 再 NewServeMux）。
 	reply *scheduler.Service
+	// warnedNoReceiver：无接收器一次性告警（状态翻转重复告警抑制）。
+	warnedNoReceiver bool
 }
 
 // SetReplyPipeline 注入代回复指令管线（K5；不绕过 FR-53——复用同一管线实例，
@@ -74,6 +77,9 @@ func (w *OutboxWorker) compatAliasesOn() bool {
 // NewOutboxWorker 创建 worker；URL 非 loopback 且未显式放行 → 返回禁用错误
 // （启动即拒绝式样，与 config SR-09 断言同型）。
 func NewOutboxWorker(db *sqlite.DB, cfg OutboxConfig, logger interface{ Printf(string, ...any) }) (*OutboxWorker, error) {
+	if logger == nil {
+		logger = log.Default() // 测试直构容错（nil logger 不再 panic）
+	}
 	if cfg.RetryDelays == nil {
 		cfg.RetryDelays = DefaultRetryDelays
 	}
@@ -131,6 +137,7 @@ func VerifySign(secret string, tsMillis int64, body []byte, signatureHex string)
 
 // Run 启动投递循环（周期 claim 待投递行 → POST → 状态机：delivered/retry/dead）。
 func (w *OutboxWorker) Run(ctx context.Context) error {
+	w.log.Printf("api/outbox: worker 启动 poll=%v global_url=%q", w.cfg.PollInterval, w.cfg.CallbackURL)
 	tk := time.NewTicker(w.cfg.PollInterval)
 	defer tk.Stop()
 	for {
@@ -151,14 +158,38 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 // pending（禁外网缺省形态不变）。
 func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
 	if w.cfg.CallbackURL == "" && !w.hasRobotCallbacks(ctx) {
+		if !w.warnedNoReceiver {
+			w.warnedNoReceiver = true
+			w.log.Printf("api/outbox: 无任何回调接收器（全局 URL 空且 openapi_callbacks 空）——行保持 pending（一次性告警）")
+		}
 		return nil // 未配置任何接收器：行保持 pending（禁外网缺省形态）
 	}
+	w.warnedNoReceiver = false
 	now := w.now().UTC()
 	items, err := w.db.DueOutbox(ctx, now, 32)
 	if err != nil {
 		return err
 	}
+	if len(items) > 0 {
+		w.log.Printf("api/outbox: claim %d 行待投递", len(items))
+	}
 	for _, it := range items {
+		target := w.callbackURLFor(ctx, it)
+		if target == "" {
+			// W-M6 回调闭环根因修复：无投递目标（该 kind 对应回调域未配置且无全局
+			// URL）→ **终态 skipped** 而非永久 pending——原语义下存量行按 id 序
+			// 占满 claim 窗口（LIMIT 32）饿死后续可投递行（S1 实证：exec_result
+			// 无 type=1 绑定的存量行 pending 至今，179/181 query_result 永不被
+			// claim）。E7「未配置=仅回执不推送」按行终态化承接。
+			it.Status = "skipped"
+			it.LastError = "no_receiver: 该 kind 对应回调类型未配置且全局 URL 空"
+			it.UpdatedAt = now
+			if err := w.db.UpdateOutbox(ctx, it); err != nil {
+				return err
+			}
+			w.log.Printf("api/outbox: 行 id=%d kind=%s 无接收器 → skipped（终态，E7 仅回执不推送）", it.ID, it.Kind)
+			continue
+		}
 		if err := w.deliverOne(ctx, it, now); err != nil {
 			return err
 		}
