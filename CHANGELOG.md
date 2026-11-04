@@ -5,6 +5,58 @@
 
 ## [Unreleased]
 
+### v0.1.0-rc2（2026-11-04，发布候选——选择器真机校准批 + 管理台 v3 设计稿对齐整改）
+
+> 候选版内容汇总（未打 tag）。端侧执行面口径不变：支持矩阵仅 501/502 真机翻格 ✅；
+> 本批新增 detect-only 指令前置条件（企微须人工前台）与 NOT_CALIBRATED 选择器现状
+> 补记，见 docs/05 v1.7。
+
+#### 新增
+
+- **选择器 contentDesc 匹配支持**：`MatchSpec` 新增 content-desc 匹配维度，规则解析器
+  同步支持（外置 RuleConfig 与内置 DEFAULTS 两面一致）——企微部分控件（搜索、聊天
+  「更多」等）为纯 desc 无 text/resource-id 可锚，此前无法稳定命中（e539dd8）。
+- **管理台 v3 设计稿对齐整改**：按 16 张设计稿 PNG + v3 规格重建——五工作区
+  （工作台/设备/任务/集成/设置与审计）16 路由（含旧路由重定向）；六步任务创建向导
+  （选设备→选动作→填参→干跑→提交→详情）；任务详情 E01→E19 时间线/结论/rawMsg；
+  cron 管理、L2 双令牌审批、回调按机器人分组、审计日志叙事化；既有 API 逻辑
+  （token/confirmBox/stale/幂等）全保留；零外部资源（sanitize 0 命中）；130 例 UI
+  测试全绿（test/admin_ui_v3.spec.mjs）（44a16bb 落地 + 4cf9f0d 收口）。
+
+#### 修复
+
+- **核心选择器按 D1 真机 dump 校准（证据 session21）**：会话列表 ibi、聊天标题 o6j、
+  输入框 iu5、消息文本 ith、搜索 m0f、通讯录 l_8/hlo、群名行 hn1→lm8（兄弟链）、
+  首页搜索 desc 等 DEFAULTS 全部按真机 dump 实测重校，fixture 同步；**群设置入口改
+  经「更多」按钮**（真机实证标题点击为 no-op，保留标题兜底）；JVM 门禁
+  accessibility+executor+app 320/320 绿（e539dd8）。
+- **detect-only 前台检测（所有者安全指令）**：端侧禁用企微自动拉起——
+  `ensureTargetForeground` 只检测不操作（rootInActiveWindow/isActive 窗口判定），
+  企微不在前台时指令如实失败（201010）并提示「请手动将企微切到前台」；全部
+  startActivity 拉起逻辑移除，消除自动拉起触发企微风控的风险（44a16bb）。
+- **rc 门禁两阻断项（rc 评审发现，均实证）**：①管理台 CSP 此前 default-src 'none'
+  未配 connect-src，同源 fetch 全被浏览器拦截（v3 数据面真实浏览器不可用，FETCH_BLOCKED
+  对照 401 控制页验证）——补 `connect-src 'self'` 一行（script/style 锁紧不变）；
+  ②pause_skip_dispatch 审计对积压暂停设备每秒泵周期逐条写入（24h TTL 下约
+  8 分钟灌满 500 行审计窗）——改为每设备 1h 时间窗去重后再 InsertAudit（ac07590）。
+
+#### 安全与卫生
+
+- 设备日志 zip 出库：运行期产物 zip 曾被误入 git 跟踪，已 untrack（历史不重写），
+  .gitignore 防回流（c802312）。
+
+#### NOT_RUN 与已知边界（如实登记）
+
+- **设备链路修复（linkfix 车道）= NOT_RUN**：本条目登记时点（2026-11-04，
+  zcode/main @ e539dd8）全分支/提交/文档均未检索到 linkfix 车道交付物，按 NOT_RUN
+  如实登记、不虚构闭环；该车道产出后滚动补记。
+- **511 会议详情族选择器仍 NOT_CALIBRATED**：日历会议列表滚动容器、详情预定时间/
+  实际时间/组织人值文本共 4 项占位（`WeworkScreenRules.kt` 逐项标注），真机未命中
+  如实 NODE_NOT_FOUND；515「搜索到已退出群聊」分支 JVM 绿仅为分支证据——均待 D1
+  真机 dump 校准（docs/05 v1.7 同步补记）。
+- rc1 条目「NOT_RUN 与已知边界」全部继续有效（501 openConversation 滚动兜底硬化项、
+  MIUI BAL 201010、Ed25519 装配/取证 deferred 等）。
+
 ### v0.1.0-rc1（2026-11-04，发布候选——六车道交付批 + 审计修复批收口）
 
 > 候选版内容汇总（未打 tag，发布门 docs/04 §5.1 未全绿）。端侧执行面如实口径：
