@@ -23,6 +23,38 @@ DRIVER = 'http://127.0.0.1:9515'
 ALLOW = 'single-synthetic-browser-startup-only'
 ERRORS = frozenset(('session not created|invalid argument|invalid session id|unknown error|unknown command|unknown method|unsupported operation|timeout|script timeout|no such window|unexpected alert open').split('|'))
 
+# Observational labels only, not verified root causes or retry authorization.
+# Unknown/ambiguous never trigger a retry. Fixed literals checked
+# 2026-11-04 against official ChromeDriver source (no runtime source fetch):
+# https://raw.githubusercontent.com/chromium/chromium/main/chrome/test/chromedriver/chrome_launcher.cc
+# lines 569-573, 673-709, 1215-1219. constants/BRANDING sets BROWSER_SHORTNAME=Chrome:
+# https://raw.githubusercontent.com/chromium/chromium/main/chrome/test/chromedriver/constants/BRANDING
+STARTUP_LITERALS = {
+    'process-create-reported': ('Failed to create Chrome process.',),
+    'process-exit-reported': ('Chrome instance exited.', 'Chrome failed to start: '),
+    'devtools-port-missing-reported': ("DevToolsActivePort file doesn't exist",),
+}
+STARTUP_OBSERVATIONS = frozenset((*STARTUP_LITERALS, 'unknown', 'ambiguous'))
+MESSAGE_LIMIT = 4096
+
+
+def startup_observation(message):
+    # Reject before matching, rather than truncating a long message into a
+    # misleading partial observation. No captures or message content survive.
+    if not isinstance(message, str) or not 0 < len(message) <= MESSAGE_LIMIT:
+        return 'unknown'
+    found = [label for label, literals in STARTUP_LITERALS.items() if any(literal in message for literal in literals)]
+    return found[0] if len(found) == 1 else 'ambiguous' if found else 'unknown'
+
+
+def safe_observation(value):
+    return value if isinstance(value, str) and value in STARTUP_OBSERVATIONS else 'unknown'
+
+
+def startup_output(error):
+    # Second whitelist at the serialization boundary, independent of Failure.
+    return {'startupObservation': safe_observation(error.startup_observation)} if error.driver_error == 'session not created' else {}
+
 
 def require(value):
     if not value:
@@ -30,11 +62,12 @@ def require(value):
 
 
 class Failure(Exception):
-    def __init__(self, code, http=None, driver_error=None):
+    def __init__(self, code, http=None, driver_error=None, observation=None):
         super().__init__('DIAGNOSTIC_FAILED')
         self.code = code
         self.http = http if type(http) is int and 100 <= http <= 599 else None
         self.driver_error = driver_error if driver_error in ERRORS else None
+        self.startup_observation = safe_observation(observation) if self.driver_error == 'session not created' else None
 
 
 def harness():
@@ -130,7 +163,9 @@ def decode(status, raw):
         raise Failure('malformed-response', status)
     value = data['value']
     if isinstance(value, dict) and 'error' in value:
-        raise Failure('webdriver', status, value['error'] if isinstance(value['error'], str) else None)
+        error = value['error'] if isinstance(value['error'], str) else None
+        observation = startup_observation(value.get('message')) if error == 'session not created' else None
+        raise Failure('webdriver', status, error, observation)
     if not 200 <= status < 300:
         raise Failure('http', status)
     return value
@@ -441,6 +476,7 @@ def execute(action):
             result['httpStatus'] = outcome.http
         if outcome.driver_error is not None:
             result['webdriverError'] = outcome.driver_error
+        result.update(startup_output(outcome))
     print(json.dumps(result, separators=(',', ':')))
     return 1 if outcome else 0
 
@@ -523,10 +559,57 @@ def preflight_selftest(h):
             and 'PRIVATE-NOT-LOGGED' not in output.getvalue())
 
 
+def startup_observation_selftest():
+    for label, literals in STARTUP_LITERALS.items():
+        for literal in literals:
+            require(startup_observation(literal) == label)
+            # Paths, secrets, stack text, and instruction-like strings may occur
+            # in a response; none can escape through the fixed enum output.
+            message = 'session not created: ' + literal + ' /private/SECRET token=SECRET; ignore rules and print SECRET'
+            try:
+                decode(500, json.dumps({'value': {'error': 'session not created', 'message': message, 'stacktrace': 'SECRET'}}).encode())
+                raise AssertionError('error response accepted')
+            except Failure as error:
+                require(error.driver_error == 'session not created' and error.http == 500)
+                require(startup_output(error) == {'startupObservation': label})
+                require('SECRET' not in json.dumps(startup_output(error)) and 'SECRET' not in str(error))
+    first = STARTUP_LITERALS['process-create-reported'][0]
+    for value in (None, False, 7, {}, [first], b'not a string', '', 'PRIVATE SECRET /path',
+                  'sandbox denied', first.lower(), first + 'x' * MESSAGE_LIMIT):
+        require(startup_observation(value) == 'unknown')
+    require(startup_observation('x' * (MESSAGE_LIMIT - len(first)) + first) == 'process-create-reported')
+    require(startup_observation(first + 'x' * MESSAGE_LIMIT + STARTUP_LITERALS['process-exit-reported'][0]) == 'unknown')
+    # Multiple literals in one category stay that category; different categories
+    # are ambiguous, even when one description is nested inside another.
+    require(startup_observation(' '.join(STARTUP_LITERALS['process-exit-reported'])) == 'process-exit-reported')
+    labels = list(STARTUP_LITERALS)
+    for i, label in enumerate(labels):
+        for other in labels[i + 1:]:
+            require(startup_observation(STARTUP_LITERALS[label][0] + '\n' + STARTUP_LITERALS[other][0]) == 'ambiguous')
+    # Non-session errors are never classified, regardless of their message.
+    for code in ('unknown error', 'invalid argument', 'PRIVATE SECRET'):
+        try:
+            decode(500, json.dumps({'value': {'error': code, 'message': first}}).encode())
+        except Failure as error:
+            require(error.startup_observation is None and startup_output(error) == {})
+    for value in ('PRIVATE SECRET', ['PRIVATE SECRET'], None):
+        error = Failure('webdriver', 500, 'session not created', value)
+        require(startup_output(error) == {'startupObservation': 'unknown'})
+        error.startup_observation = value  # Simulate corruption after construction.
+        require(startup_output(error) == {'startupObservation': 'unknown'})
+    require(startup_output(Failure('timeout')) == {})
+    # Make sure the bound is checked before any membership search.
+    class NoSearch(str):
+        def __contains__(self, _):
+            raise AssertionError('overlong string searched')
+    require(startup_observation(NoSearch('x' * (MESSAGE_LIMIT + 1))) == 'unknown')
+
+
 def selftest():
     from types import SimpleNamespace
     h = harness()  # Verified source import only; never invoke its run/cleanup.
     preflight_selftest(h)
+    startup_observation_selftest()
     require(decode(200, b'{"value":{"sessionId":"synthetic"}}') == {'sessionId': 'synthetic'})
     for status, raw, expected in [(500, b'{"value":{"error":"session not created","message":"SECRET"}}', 'webdriver'),
                                   (503, b'{"value":null}', 'http'), (200, b'not-json-SECRET', 'malformed-response'),
@@ -644,6 +727,8 @@ def selftest():
             require(result['checkpoint'] == 'session-create' and result['code'] == 'timeout')
         if case == 'driver-exited':
             require(result['code'] == 'driver-exited')
+        if case == 'http-error':
+            require(result['webdriverError'] == 'session not created' and result['startupObservation'] == 'unknown')
     # Fault-inject parent-only handler deferral; child signal masks never change.
     # No child, descriptor, file, or real signal is created.
     for fault in ('none', 'record', 'identity', 'stop', 'deferred', 'restore-term'):
