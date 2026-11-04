@@ -500,6 +500,16 @@ func (h *Hub) dispatchV2Payload(ctx context.Context, s *v2Session, env *wire.Env
 		h.Log.Printf("gateway: list 解析失败: %v", err)
 		return
 	}
+	// W-M6 事件旁路：socketType=2 上报帧先过 HandleEventFrameItems（102~105 事件
+	// + 511/512/513/515 查询推送 → 回调 outbox）；其分发器自过滤——101 消息上报/
+	// 结果/日志类不消费，落回下方既有管线（不双发）。
+	if env.SocketType == wire.SocketMessageList && h.EventBypass != nil {
+		if n, err := h.EventBypass(ctx, s.DeviceID, meta.CommandID, json.RawMessage(listJSON)); err != nil {
+			h.Log.Printf("gateway: 事件旁路失败 deviceId=%s: %v", s.DeviceID, err)
+		} else if n > 0 {
+			h.Log.Printf("gateway: 事件旁路 deviceId=%s → %d 项入回调 outbox", s.DeviceID, n)
+		}
+	}
 	now := h.Now().UTC()
 	for _, item := range items {
 		switch t := wire.ListItemType(item); {

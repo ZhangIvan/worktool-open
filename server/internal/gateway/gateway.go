@@ -50,6 +50,12 @@ type Hub struct {
 	// MarkDispatched 409；T3.2 修复的既有竞态）。
 	flushMu sync.Mutex
 
+	// EventBypass 为 socketType=2 事件帧旁路（W-M6 接线，api.Server 装配时注入
+	// = HandleEventFrameItems：102~105 被动事件 + 511/512/513/515 查询推送 →
+	// 事件回调 outbox；101/结果类交回既有管线——内部分发器自过滤，gateway 不
+	// 识别具体类型）。nil = 不旁路（历史行为）。
+	EventBypass func(ctx context.Context, target, commandID string, list json.RawMessage) (int, error)
+
 	upgrader websocket.Upgrader
 }
 

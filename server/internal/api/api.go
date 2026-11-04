@@ -77,10 +77,17 @@ func NewServer(db *sqlite.DB, hub *gateway.Hub, pipeline *scheduler.Service, m *
 		logger = log.Default()
 	}
 	cfg := OpenAPIConfig{}.withDefaults()
-	return &Server{
+	s := &Server{
 		DB: db, Hub: hub, Pipeline: pipeline, Machine: m, Now: time.Now, Log: logger,
 		openapiCfg: cfg, openapiLimiter: newOpenAPILimiter(cfg),
 	}
+	// W-M6 事件旁路接线（api/events.go: 网关车道旁路调用点）：设备 socketType=2
+	// 事件帧 → HandleEventFrameItems（102~105 事件 + 511/512/513/515 查询推送
+	// → 回调 outbox；101/结果类分发器自过滤不消费）。hub 可空（单测骨架装配）。
+	if hub != nil {
+		hub.EventBypass = s.HandleEventFrameItems
+	}
+	return s
 }
 
 // SetOpenAPIConfig 调整兼容面限流配置（默认 60QPM；部署/测试注入）。
