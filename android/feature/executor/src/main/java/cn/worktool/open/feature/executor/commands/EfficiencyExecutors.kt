@@ -232,13 +232,40 @@ class SwitchCorpExecutor(
         description = "在企业列表点击「${intent.targetCorp}」",
     ) { driver ->
         if (alreadySwitched) return@PlanStep StepOutcome.Success
+        // B3-223 收口：企业列表滚动查找（契约 S5 滚动 1 轮；对齐 openConversation
+        // 兜底口径——首屏未命中→可滚动容器内翻页重查）。
         val item = driver.awaitNode(timeouts.awaitNodeMs, timeouts.pollMs, "企业「${intent.targetCorp}」") { root ->
             rules.findByText(root, intent.targetCorp)
+                ?: scrollFindText(driver, root, intent.targetCorp)
         } ?: return@PlanStep StepOutcome.Failure(
             ExecutorErrorCodes.NODE_NOT_FOUND,
             "未找到目标企业: ${intent.targetCorp}",
         )
         CommonSteps.clickOrReject(driver, item, "企业「${intent.targetCorp}」")
+    }
+
+    /** 滚动查找文本（≤4 页；容器=树内首个可滚动节点；无容器/滚不动=null）。 */
+    private fun scrollFindText(driver: cn.worktool.open.feature.executor.runtime.UiDriver, root: cn.worktool.open.core.accessibility.tree.UiNode, text: String): cn.worktool.open.core.accessibility.tree.UiNode? {
+        var container: cn.worktool.open.core.accessibility.tree.UiNode? = null
+        fun findScrollable(node: cn.worktool.open.core.accessibility.tree.UiNode): Boolean {
+            if (node.isScrollable) {
+                container = node
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                if (node.childAt(i)?.let(::findScrollable) == true) return true
+            }
+            return false
+        }
+        findScrollable(root)
+        val c = container ?: return null
+        repeat(4) {
+            if (!driver.scroll(c, cn.worktool.open.core.accessibility.tree.ScrollDirection.FORWARD)) return null
+            driver.currentRoot()?.let { r ->
+                rules.findByText(r, text)?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun verifySwitchedStep(intent: CommandIntent.SwitchCorp): PlanStep = PlanStep(

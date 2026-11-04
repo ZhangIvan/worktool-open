@@ -162,6 +162,26 @@ class CommandRunner(
         }
 
         val executed = ArrayList<StepRecord>(plan.steps.size)
+        val outcomeReport: ExecutionReport = try {
+            runSteps(plan, executed, ::report)
+        } finally {
+            // 计划级清理钩子（W-M6 B3-237 收口）：成功/失败/暂停/步骤异常**全部**
+            // 终态路径后执行——对齐上游「异常即释放互斥」语义；幂等性归执行器
+            // （AtomicSingleFlightGuard.release 幂等）。
+            plan.cleanup?.invoke()
+        }
+        return outcomeReport
+    }
+
+    /** 步骤循环（含 FR-52 步间断点与首错即停；报告经 [report] 闭包装配）。 */
+    private fun runSteps(
+        plan: ExecutionPlan,
+        executed: ArrayList<StepRecord>,
+        report: (
+            status: ExecutionStatus, errorCode: Int, reason: String?, errorStepId: String?,
+            plan: ExecutionPlan?, executed: List<StepRecord>, pausedSource: String?,
+        ) -> ExecutionReport,
+    ): ExecutionReport {
         for ((index, step) in plan.steps.withIndex()) {
             // FR-52 安全断点：步边界重查暂停门（进行中序列执行至安全断点停止）。
             if (pauseManager.isPaused()) {
@@ -201,11 +221,12 @@ class CommandRunner(
                         step.id,
                         plan,
                         executed,
+                        null,
                     )
                 }
             }
         }
-        return report(ExecutionStatus.SUCCEEDED, 0, null, null, plan, executed)
+        return report(ExecutionStatus.SUCCEEDED, 0, null, null, plan, executed, null)
     }
 
     private fun unsupportedDryRun(intent: CommandIntent): DryRunReport = DryRunReport(

@@ -37,6 +37,12 @@ class ExecutionPlan(
     /** 参数摘要（干跑报告「参数」字段；注意不落敏感正文，报告消费方按 SR-06 脱敏）。 */
     val paramsSummary: String,
     val steps: List<PlanStep>,
+    /**
+     * 计划级清理钩子（W-M6 B3-237 收口）：成功/失败/暂停/异常**全部**终态路径后由
+     * [CommandRunner] 执行一次——互斥锁等资源的异常安全释放（对齐上游「异常即
+     * 释放」；幂等性归调用方，如 AtomicSingleFlightGuard.release）。null=无清理。
+     */
+    val cleanup: (() -> Unit)? = null,
 )
 
 /** 单步结果。 */

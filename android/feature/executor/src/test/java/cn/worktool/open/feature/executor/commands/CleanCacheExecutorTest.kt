@@ -84,7 +84,9 @@ class CleanCacheExecutorTest {
         assertEquals(ExecutionStatus.FAILED, report.status)
         assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
         assertEquals("click-clean", report.errorStepId)
-        assertTrue("失败路径互斥保持（护栏语义）", guard.held)
+        // B3-237 收口（对齐上游「异常即释放」）：失败路径同样释放互斥——
+        // 异常后重试不再 MUTEX_BUSY（原护栏语义废除）。
+        assertTrue("失败路径互斥已由 cleanup 释放", !guard.held)
     }
 
     @Test

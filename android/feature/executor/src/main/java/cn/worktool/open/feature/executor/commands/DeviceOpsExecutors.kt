@@ -132,7 +132,13 @@ class GetLogSnippetExecutor(
                         commandType,
                         buildJsonObject {
                             put("fileBase64", snippet.payloadBase64)
-                            put("metaJson", snippet.meta.entries.joinToString(",") { "${it.key}=${it.value}" })
+                            // B3-514 收口：metaJson=JSON 对象（原 k=v 逗号串与契约不符）
+                            put(
+                                "metaJson",
+                                buildJsonObject {
+                                    snippet.meta.forEach { (k, v) -> put(k, v) }
+                                },
+                            )
                         },
                     )
                     StepOutcome.Success

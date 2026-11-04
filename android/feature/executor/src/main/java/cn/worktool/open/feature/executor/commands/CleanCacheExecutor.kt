@@ -48,6 +48,9 @@ class CleanCacheExecutor(
                 confirmStep(),
                 releaseGuardStep(),
             ),
+            // B3-237 收口：失败/暂停/异常路径同样释放互斥（对齐上游「异常即释放」，
+            // 原 KDoc 护栏语义废除——契约 S4 异常后重试不再 MUTEX_BUSY）。
+            cleanup = { guard.release() },
         )
 
     /** 互斥首步：清理进行中 → MUTEX_BUSY（上游 101012 互斥码族）。 */
@@ -110,7 +113,7 @@ class CleanCacheExecutor(
         CommonSteps.clickOrReject(driver, confirm, "清理确认「确定」")
     }
 
-    /** 末步：释放互斥锁（成功路径；失败路径锁保持=下次触发 MUTEX_BUSY，护栏语义）。 */
+    /** 末步：成功路径释放互斥锁（失败/暂停路径由 plan.cleanup 兜底释放）。 */
     private fun releaseGuardStep(): PlanStep = PlanStep(
         id = "release-mutex",
         description = "清理完成释放互斥锁",
