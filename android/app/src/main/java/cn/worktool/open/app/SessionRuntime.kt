@@ -181,6 +181,7 @@ class SessionRuntime(
                         is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
                     }
                     appendEvent("查询结果 type=$type → $summary")
+                    loop?.collectQueryResult(type, result) // apifox 契约：名单数据进 RAW_CONFIRM rawMsg
                 },
                 files = object : LocalFilePort {
                     override fun defaultLogFilePath(): String = logFile.absolutePath

@@ -206,6 +206,7 @@ class LabPairingActivity : Activity() {
                         is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
                     }
                     log("查询结果 type=$type → $summary")
+                    portHub.loop?.collectQueryResult(type, result) // apifox 契约：名单进 rawMsg
                 },
                 files = object : LocalFilePort {
                     override fun defaultLogFilePath(): String = File(labFileDir, "worktool-lab.log").absolutePath

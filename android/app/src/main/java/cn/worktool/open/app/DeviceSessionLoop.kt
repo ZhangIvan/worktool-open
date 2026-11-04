@@ -472,11 +472,26 @@ class DeviceSessionLoop(
     ) {
         // W-M6：批量结果并入回执（有逐格上报则覆盖单目标归档；空批=首批行为）。
         val batch = takeBatchOutcomes?.invoke().orEmpty()
-        val successList = batch.filter { it.succeeded }.map { it.target }.ifEmpty {
-            if (success && target != null) listOf(target) else emptyList()
-        }
+        // apifox 契约（api-44952776）：successList/failList **成功时不提供**——
+        // 原实现成功时塞计划目标描述串=契约违约（会话 11 所有者实测发现）。
+        // 失败时 failList=目标/原因；部分成功（批次含败格）双列表按格填。
+        val successList = batch.filter { it.succeeded }.map { it.target }
         val failList = batch.filter { !it.succeeded }.map { it.target }.ifEmpty {
             if (!success && target != null) listOf(target) else emptyList()
+        }
+        // 查询类结果 → rawMsg（JSON；名单数据本体，契约字段）。干跑无结果不入。
+        val queryResults = takeQueryResults(commandId)
+        val rawMsgJson: String? = if (queryResults.isNotEmpty()) {
+            buildJsonArray {
+                queryResults.forEach { (_, payload) ->
+                    add(buildJsonObject {
+                        put("type", payload.type)
+                        payload.extras.forEach { (k, v) -> put(k, v) }
+                    })
+                }
+            }.toString()
+        } else {
+            null
         }
         val bean = WeworkMessageBean(
             type = commandType,
@@ -484,6 +499,7 @@ class DeviceSessionLoop(
             errorReason = errorReason ?: "",
             runTime = RUN_TIME_FORMAT.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault())),
             timeCost = timeCostMillis,
+            rawMsg = rawMsgJson,
             successList = successList,
             failList = failList,
             metaJson = buildJsonObject {
@@ -500,6 +516,53 @@ class DeviceSessionLoop(
     /** 当前执行指令号（结构化推送回填对账键用；回路单线程执行窗口内有效）。 */
     @Volatile
     private var currentCommandId: String? = null
+
+    /**
+     * 查询类指令结构化结果捕获（按 commandId；apifox 契约 2026-11-04 修正）：
+     * 501/502 等查询指令的名单数据须进 RAW_CONFIRM 的 **rawMsg**（JSON）——
+     * 原实现只进日志，回执 successList 塞步骤描述串=契约违约（所有者实测发现）。
+     * 契约口径（api-44952776）：successList/failList **成功时不提供**。
+     */
+    private val capturedQueryResults = LinkedHashMap<String, MutableList<Pair<Int, cn.worktool.open.core.protocol.WeworkMessageBean>>>()
+
+    /**
+     * 查询结果出口（装配层 querySink 转调；挂在当前执行指令下）。载荷字段对齐
+     * 原 APK：名单 → nameList（WeworkMessageBean 序列化形态）。
+     */
+    fun collectQueryResult(type: Int, result: cn.worktool.open.feature.executor.query.QueryResult) {
+        val cid = currentCommandId ?: return
+        fun nameListBean(t: Int, names: List<String>) = WeworkMessageBean(
+            type = t,
+            extras = buildJsonObject {
+                put("nameList", buildJsonArray { names.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
+            },
+        )
+        val payload = when (result) {
+            is cn.worktool.open.feature.executor.query.QueryResult.GroupList ->
+                nameListBean(type, result.groups)
+            is cn.worktool.open.feature.executor.query.QueryResult.FriendList ->
+                nameListBean(type, result.friends)
+            is cn.worktool.open.feature.executor.query.QueryResult.LocalFile ->
+                WeworkMessageBean(
+                    type = type,
+                    extras = buildJsonObject {
+                        put("fileName", result.fileName)
+                        put("path", result.path)
+                        put("sizeBytes", kotlinx.serialization.json.JsonPrimitive(result.sizeBytes))
+                    },
+                )
+        }
+        synchronized(capturedQueryResults) {
+            capturedQueryResults.getOrPut(cid) { mutableListOf() }.add(type to payload)
+        }
+    }
+
+    /** 取走并清空该指令的查询结果（reportResult 组装 rawMsg 用）。 */
+    private fun takeQueryResults(commandId: String): List<Pair<Int, cn.worktool.open.core.protocol.WeworkMessageBean>> {
+        synchronized(capturedQueryResults) {
+            return capturedQueryResults.remove(commandId) ?: emptyList()
+        }
+    }
 
     /**
      * 结构化查询结果上行（W-M6 RuntimePortHub.StructuredResultSink 出口）：
