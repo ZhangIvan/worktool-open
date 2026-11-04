@@ -64,90 +64,18 @@ class AccessibilityUiDriver(
     }
 
     /**
-     * 拉起企微到前台并等待其界面树可得（2026-11-03 会话 9 补位，对齐原 APK
-     * 「收到指令拉起企微」行为）：已在前台→立即 true；否则经服务上下文
-     * startActivity（NEW_TASK）拉起 launcher intent，轮询 ≤10s 等 wework 窗口。
-     * 失败分支原因写入 [lastForegroundFailure]（执行报告 errorReason 用——
-     * 会话 9c 实证 timeCost=31ms 秒退需分支级定位，不再笼统）。
+     * 检测企微是否在前台（2026-11-04 所有者安全指令）：**只检测不操作**——
+     * 禁止对企微主动拉起/高频操作。企微须由用户手动打开到前台，
+     * 驱动只在企微已前台时才执行 UI 操作。不在前台→如实 false。
      */
     override fun ensureTargetForeground(): Boolean {
         val s = service ?: run {
-            android.util.Log.w("WTLaunch", "ensureTargetForeground: service instance=null")
-            lastForegroundFailure = "无障碍服务未连接（instance=null，绑定被系统回收/未完成？）"
+            lastForegroundFailure = "无障碍服务未连接"
             return false
         }
         if (hasTargetRoot()) return true
-        // 诊断面包屑（会话 9h：企微已前台但 hasTargetRoot 20s 不中——定位 windows/root 判定）
-        runCatching {
-            val wins = s.interactiveRoots()
-            android.util.Log.i(
-                "WTLaunch",
-                "pre-launch windows=${wins.size} pkgs=" +
-                    s.windows?.mapNotNull { it.root?.packageName ?: "<nullroot:${it.title ?: "?"}>" }?.joinToString(","),
-            )
-        }
-        val pm = try {
-            s.packageManager
-        } catch (e: Exception) {
-            lastForegroundFailure = "PackageManager 不可得: ${e.javaClass.simpleName}"
-            return false
-        }
-        val intent = try {
-            pm.getLaunchIntentForPackage(WETARGET_PACKAGE)
-        } catch (_: Exception) {
-            null
-        } ?: android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-            addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-            setPackage(WETARGET_PACKAGE)
-            component = android.content.ComponentName(WETARGET_PACKAGE, "$WETARGET_PACKAGE.launch.LaunchSplashActivity")
-        }
-        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        return try {
-            // 拉起优先级（会话 9 收口）：前台 Activity 上下文（MIUI 恒放行）→
-            // 服务上下文 → application 上下文；任一未抛即视为已发出。
-            var launched = false
-            val actx = foregroundActivityContext?.invoke()
-            if (actx != null) launched = runCatching { actx.startActivity(intent) }.isSuccess
-            if (!launched) launched = runCatching { s.startActivity(intent) }.isSuccess
-            if (!launched) launched = runCatching { s.applicationContext.startActivity(intent) }.isSuccess
-            if (!launched) {
-                lastForegroundFailure = "三种上下文拉起企微均异常"
-                android.util.Log.w("WTLaunch", "拉起企微：三种上下文全部异常")
-                return false
-            }
-            if (awaitTargetRoot()) return true
-            lastForegroundFailure = "拉起已发出但 ${LAUNCH_WAIT_MS}ms 内企微窗口未就绪"
-            awaitTargetRoot()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            lastForegroundFailure = "等待企微就绪被中断"
-            false
-        } catch (e: Exception) {
-            lastForegroundFailure = "startActivity 异常: ${e.javaClass.simpleName}: ${e.message?.take(80)}"
-            false
-        }
-    }
-
-    /** 轮询等企微窗口出现（≤[LAUNCH_WAIT_MS]）。 */
-    private fun awaitTargetRoot(): Boolean {
-        val deadline = System.currentTimeMillis() + LAUNCH_WAIT_MS
-        var ticks = 0
-        while (System.currentTimeMillis() < deadline) {
-            if (hasTargetRoot()) {
-                android.util.Log.i("WTLaunch", "目标就绪 poll#$ticks")
-                return true
-            }
-            if (++ticks % 5 == 0) runCatching {
-                val s = service
-                android.util.Log.i(
-                    "WTLaunch",
-                    "poll#$ticks windows=${s?.windows?.size} roots=${s?.interactiveRoots()?.size} " +
-                        "activeRoot=${s?.rootInActiveWindow?.packageName}",
-                )
-            }
-            Thread.sleep(LAUNCH_POLL_MS)
-        }
-        return hasTargetRoot()
+        lastForegroundFailure = "企微不在前台——请手动将企微切到前台后再下发指令（自动拉起已禁用）"
+        return false
     }
 
     /**

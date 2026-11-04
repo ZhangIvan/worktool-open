@@ -4,10 +4,10 @@
  * 覆盖（与车道自查项一一对应）：
  *  A. JS 语法/括号配平      —— vm.Script 编译（SyntaxError 即失败）
  *  B. $('id') 引用完整性    —— 脚本内每个 $("X") 在 HTML/模板中存在 id='X' 或 id="X"
- *  C. 五工作区导航可达      —— nav 5 个 data-ws + 13 条路由 + 10 条旧路由重定向
+ *  C. 五工作区导航可达      —— nav 5 个 data-ws + 16 条路由 + 10 条旧路由重定向
  *  D. 各页渲染不抛错且关键标记在位（注入合成 fixture 的 fetch，行模板真实渲染）
  *  E. 异步失败路径          —— fetch 拒绝后列表落「加载失败」而非卡「加载中」；失败不归零
- *  F. 核心流程三步可达      —— 工作台→新建任务→提交路由决策→当前任务详情（时间线/投递独立）
+ *  F. 核心流程三步可达      —— 工作台→新建任务→提交路由决策→任务轨迹（时间线/投递独立）
  *  G. 纯函数行为（本车道行为变更的回归点，逐条断言）
  *  H. 视觉基线与脱敏        —— 浅色 token 在位；无 000000 占位/真实网段/手机号/外部资源
  *
@@ -97,6 +97,8 @@ function makeEl(id) {
     classList: { toggle() {}, add() {}, remove() {} },
     addEventListener() {}, appendChild() {}, removeChild() {},
     querySelector() { return null; },
+    querySelectorAll() { return []; },
+    insertBefore() {},
     setAttribute() {}, getAttribute() { return null; },
     onclick: null, oninput: null, onchange: null,
   };
@@ -140,32 +142,46 @@ const settle = () => new Promise(r => setTimeout(r, 60));
 section("B. $('id') 引用完整性");
 const refIds = new Set();
 for (const mm of src.matchAll(/\$\("([A-Za-z0-9_-]+)"\)/g)) refIds.add(mm[1]);
-const missing = [...refIds].filter(id => !html.includes('id="' + id + '"') && !html.includes("id='" + id + "'"));
-ok(missing.length === 0, `所有 $("…") 引用的 id 均存在（共 ${refIds.size} 个，含动态模板）`, missing);
+// btnPrimary/btnGhost 助手以第一参生成 id 属性（运行时拼接，源码无字面 id='X'）
+const helperIds = new Set();
+for (const mm of src.matchAll(/btn(?:Primary|Ghost)\("([A-Za-z0-9_-]+)"/g)) helperIds.add(mm[1]);
+const missing = [...refIds].filter(id => !html.includes('id="' + id + '"') && !html.includes("id='" + id + "'") && !helperIds.has(id));
+ok(missing.length === 0, `所有 $("…") 引用的 id 均存在（共 ${refIds.size} 个引用 + ${helperIds.size} 个助手按钮 id，含动态模板）`, missing);
+const helperMissing = [...helperIds].filter(id => !html.includes('id="' + id + '"') && !html.includes("id='" + id + "'"));
+ok(helperMissing.length === 0, "助手按钮（btnPrimary/btnGhost）声明的 id 与 $("…") 引用成对", helperMissing);
 
 /* ---------- C. 五工作区导航 + 旧路由重定向 ---------- */
 section("C. 五工作区导航与路由");
 const WORKSPACES = sandbox.WORKSPACES, ROUTES = sandbox.ROUTES, LEGACY = sandbox.LEGACY;
-ok(!!WORKSPACES && Object.keys(WORKSPACES).length === 5, "WORKSPACES 恰为五个工作区", WORKSPACES);
+ok(!!WORKSPACES && Object.keys(WORKSPACES).length === 5 &&
+   Object.values(WORKSPACES).join(",") === "工作台,设备,任务,观测,设置", "WORKSPACES 恰为五个工作区（工作台/设备/任务/观测/设置）", WORKSPACES);
 const navWs = [...html.matchAll(/data-ws="([a-z]+)"/g)].map(m => m[1]);
 ok(navWs.length === 5 && Object.keys(WORKSPACES).every(w => navWs.includes(w)), "nav 恰有 5 个工作区链接且与 WORKSPACES 对齐", navWs);
-ok(!!ROUTES && Object.keys(ROUTES).length === 13, "路由表 13 条（5 工作区默认页 + 8 子页）", Object.keys(ROUTES || {}));
+ok(!!ROUTES && Object.keys(ROUTES).length === 16, "路由表 16 条（工作台1 + 设备3 + 任务6 + 观测3 + 设置3）", Object.keys(ROUTES || {}));
 ok(Object.keys(ROUTES).every(k => ROUTES[k].ws in WORKSPACES), "每条路由都归属一个工作区");
 const needLegacy = ["dashboard", "send", "commands", "queue", "approvals", "cron-jobs", "callbacks", "callback-logs", "logs-exec", "logs-audit"];
 ok(!!LEGACY && needLegacy.every(k => k in LEGACY && LEGACY[k] in ROUTES), "旧 URL 全部重定向到有效路由（history/executions/callbacks/logs 等）", LEGACY);
 const tasksKids = ["tasks-send", "tasks-current", "tasks-history", "tasks-queue", "tasks-approvals", "tasks-cron"];
-ok(tasksKids.every(k => ROUTES[k].ws === "tasks"), "任务工作区含发送/当前任务/历史/队列/审批/定时六子页");
-const intKids = ["int-callbacks", "int-deliveries", "int-api"];
-ok(intKids.every(k => ROUTES[k].ws === "integrations"), "集成工作区含回调配置/投递记录/OpenAPI 三子页");
-// 旧路由重定向实际生效：#commands → 渲染历史页（面包屑验证）
+ok(tasksKids.every(k => ROUTES[k].ws === "tasks"), "任务工作区含发送/当前任务/任务中心/队列/审批/定时六子页");
+const obsKids = ["obs-execlogs", "int-deliveries", "audit"];
+ok(obsKids.every(k => ROUTES[k].ws === "obs"), "观测工作区含执行日志/回调记录/审计日志三子页");
+const configKids = ["int-callbacks", "int-api", "settings"];
+ok(configKids.every(k => ROUTES[k].ws === "config"), "设置工作区含回调配置/OpenAPI/安全设置三子页");
+const deviceKids = ["devices", "devices-detail", "devices-pair"];
+ok(deviceKids.every(k => ROUTES[k].ws === "devices"), "设备工作区含设备中心/设备详情/添加设备三子页");
+// 旧路由重定向实际生效：#commands → 渲染任务中心（面包屑验证）
 sandbox.location.hash = "#/commands";
 sandbox.route();
 await settle();
-ok(sandbox.$("crumb-view").textContent === "历史任务" && sandbox.$("crumb-ws").textContent === "任务", "旧路由 #/commands 重定向到 任务/历史任务", sandbox.$("crumb-view").textContent);
+ok(sandbox.$("crumb-view").textContent === "任务中心" && sandbox.$("crumb-ws").textContent === "任务", "旧路由 #/commands 重定向到 任务/任务中心", sandbox.$("crumb-view").textContent);
 sandbox.location.hash = "#/logs-audit";
 sandbox.route();
 await settle();
-ok(sandbox.$("crumb-ws").textContent === "设置与审计" && sandbox.$("crumb-view").textContent === "审计日志", "旧路由 #/logs-audit 重定向到 设置与审计/审计日志");
+ok(sandbox.$("crumb-ws").textContent === "观测" && sandbox.$("crumb-view").textContent === "审计日志", "旧路由 #/logs-audit 重定向到 观测/审计日志");
+sandbox.location.hash = "#/logs-exec";
+sandbox.route();
+await settle();
+ok(sandbox.$("crumb-ws").textContent === "观测" && sandbox.$("crumb-view").textContent === "执行日志", "旧路由 #/logs-exec 重定向到 观测/执行日志");
 sandbox.location.hash = "#/home";
 sandbox.route();
 
@@ -177,19 +193,20 @@ function renderedAll() {
   return view.innerHTML + " " + Object.values(els).map(e => String(e.innerHTML) + " " + String(e.textContent)).join(" ");
 }
 const renderCases = [
-  ["renderHome", ["工作台", "新建任务", "待处理", "设备就绪摘要", "近期任务", "结果未知", "去处理"]],
-  ["renderDevices", ["添加设备", "执行就绪", "最近联系", "创建任务", "未知（权限未上报）"]],
-  ["renderTasksSend", ["① 选择执行设备", "② 选择业务动作", "③ 参数", "④ 干跑预检", "高级模式", "任务摘要", "发送审批申请|提交执行"]],
-  ["renderTaskCurrent", ["尚未打开任务详情", "新建任务", "去历史选择"]],
-  ["renderCommands", ["历史任务", "查询", "干跑", "详情", "发送文本消息"]],
-  ["renderQueue", ["队列", "移到队首", "取消待执行", "清空该目标队列", "最长等待"]],
-  ["renderApprovals", ["审批", "决议令牌", "批准", "拒绝"]],
-  ["renderCronJobs", ["定时任务", "cron", "预览触发时刻", "启用中"]],
-  ["renderCallbacks", ["回调配置", "回调类型说明", "保存", "http://127.0.0.1:9999/cb"]],
-  ["renderCallbackLogs", ["投递记录", "下次尝试", "不会自动重试", "未投递"]],
-  ["renderApi", ["OpenAPI 接入", "令牌凭据", "吊销该 robot 全部有效令牌", "一次显示"]],
-  ["renderSettings", ["限流与接收对象白名单", "全局熔断器", "通讯加密", "白名单", "风险分级查询"]],
-  ["renderAuditLogs", ["审计日志", "主体（谁）", "动作（做了什么）", "对象（对什么）", "提交了指令任务"]],
+  ["renderHome", ["工作台", "创建任务", "需要处理", "设备会话概览", "近期任务", "待关注任务", "去处理"]],
+  ["renderDevices", ["设备中心", "添加设备", "机器人绑定", "最近联系", "创建任务", "未知（权限未上报）"]],
+  ["renderDevicesPair", ["接入 Android 设备", "一次性配对码", "生成一次性配对码", "等待连接"]],
+  ["renderTaskCurrent", ["尚未打开任务轨迹", "新建任务", "去任务中心选择"]],
+  ["renderCommands", ["任务中心", "创建任务", "干跑", "详情", "选中任务", "结果未知"]],
+  ["renderQueue", ["指令队列", "移到队首", "取消待执行", "清空该目标队列", "最长等待"]],
+  ["renderApprovals", ["审批", "决议令牌", "通过审批", "审批前核对", "去处理"]],
+  ["renderCronJobs", ["定时任务", "cron", "预览触发时刻", "启用中", "今日计划预览"]],
+  ["renderObsExecLogs", ["执行日志", "结构化事件", "原始记录", "打开任务轨迹", "结果未知"]],
+  ["renderCallbackLogs", ["回调记录", "下次尝试", "不会自动重试", "未投递", "接收器"]],
+  ["renderAuditLogs", ["系统审计日志", "主体（谁）", "动作（做了什么）", "对象（对什么）", "提交了指令任务"]],
+  ["renderCallbacks", ["回调配置", "回调类型说明", "保存", "http://127.0.0.1:9999/cb", "投递链路"]],
+  ["renderApi", ["OpenAPI 接入", "令牌凭据", "吊销该 robot 全部有效令牌", "一次显示", "签发令牌"]],
+  ["renderSettings", ["系统安全设置", "限流与接收对象白名单", "全局熔断器", "通讯加密", "风险分级查询", "保存安全草稿"]],
 ];
 for (const [fn, marks] of renderCases) {
   let threw = null;
@@ -201,6 +218,19 @@ for (const [fn, marks] of renderCases) {
     ok(miss.length === 0, `${fn}() 关键标记在位`, miss.flat());
   }
 }
+// 设备详情（需 ROUTE_Q 指向已有设备）
+sandbox.ROUTE_Q = { id: "dev-aaaabbbbccccdddd" };
+{
+  let threw = null;
+  try { sandbox.renderDeviceDetail(); await settle(); } catch (e) { threw = e; }
+  ok(!threw, "renderDeviceDetail() 渲染不抛错", threw && threw.stack);
+  if (!threw) {
+    const rendered = renderedAll();
+    const miss = ["设备信息", "暂停接收任务", "此设备的任务", "最近会话"].filter(mk => !rendered.includes(mk));
+    ok(miss.length === 0, "renderDeviceDetail() 关键标记在位", miss);
+  }
+}
+sandbox.ROUTE_Q = {};
 ok(!/id=["'](token|save-token)["']/.test(html.slice(html.indexOf('id="topbar"'), html.indexOf("</nav>"))), "顶栏无常驻令牌输入框（令牌管理收进「会话」弹层）");
 ok(html.includes("id='token'") && html.includes("save-token") && html.includes("TOKEN_KEY"), "令牌管理逻辑保留（localStorage + 保存/清除 + #token= 深链吸收）");
 ok(html.includes("wt_approver_token") && html.includes("approverToken"), "P0-3 决议令牌分持逻辑保留");
@@ -213,19 +243,22 @@ await settle();
 ok(els["queue-body"].innerHTML.includes("加载失败"), "队列页失败后落错误行（S11：不吞异常停在「尚未加载」）", els["queue-body"].innerHTML.slice(0, 120));
 sandbox.renderCommands();
 await settle();
-ok(els["commands-body"].innerHTML.includes("加载失败"), "历史页失败后落错误行");
+ok(els["commands-body"].innerHTML.includes("加载失败"), "任务中心失败后落错误行");
 sandbox.renderHome();
 await settle();
 ok(els["hm-recent"].innerHTML.includes("加载失败"), "工作台近期任务面板独立失败（其余面板继续）");
 ok((els["hm-dev"].textContent + els["hm-dev"].innerHTML).includes("—"), "工作台指标失败不归零（保持 —）", els["hm-dev"].innerHTML);
+sandbox.renderObsExecLogs();
+await settle();
+ok(els["el-body"].innerHTML.includes("加载失败"), "执行日志失败后落错误行（观测不吞异常）");
 fetchMode = "ok";
 
 /* ---------- F. 核心流程三步可达 ---------- */
-section("F. 核心流程三步可达（工作台 → 新建任务 → 提交 → 当前任务详情）");
+section("F. 核心流程三步可达（工作台 → 新建任务 → 提交 → 任务轨迹）");
 sandbox.renderHome();
 await settle();
 ok(els["hm-todo"] && els["hm-todo"].innerHTML.includes("去处理"), "工作台待处理清单有「去处理」直达审批");
-ok(view.innerHTML.includes("新建任务"), "工作台主按钮「新建任务」在位");
+ok(view.innerHTML.includes("创建任务"), "工作台主按钮「创建任务」在位");
 sandbox.renderTasksSend();
 await settle();
 sandbox.renderTasksSend();
@@ -244,22 +277,23 @@ await settle();
 ok(sandbox.WIZ.type === 203 && els["send-fields"].innerHTML.includes("titleList"), "选动作 203 → 类型化表单生成（数组字段在位）");
 ok(els["send-fields"].innerHTML.includes("数组——每行一个值"), "数组参数渲染为多行输入");
 const dec1 = sandbox.submitRouteDecision({ commandId: "c-123", state: "queued", replay: false });
-ok(dec1.kind === "task", "201+commandId → 直达任务详情决策", dec1);
+ok(dec1.kind === "task", "201+commandId → 直达任务轨迹决策", dec1);
 sandbox.CURRENT_CMD_ID = CMD_ID;
 sandbox.renderTaskCurrent();
 await settle();
 const curHtml = renderedAll();
-ok(view.innerHTML.includes("刷新核对"), "任务详情页含「刷新核对」按钮");
-ok(curHtml.includes("状态时间线") && curHtml.includes("E01"), "任务详情含 E01→E18 时间线");
-ok(curHtml.includes("结果回执") && curHtml.includes("通知投递"), "任务详情含结果区与投递区（两结论分离）");
+ok(view.innerHTML.includes("刷新核对"), "任务轨迹页含「刷新核对」按钮");
+ok(curHtml.includes("状态时间线") && curHtml.includes("E01"), "任务轨迹含 E01→E19 时间线");
+ok(curHtml.includes("结果回执") && curHtml.includes("通知投递"), "任务轨迹含结果区与投递区（两结论分离）");
 ok(curHtml.includes("未投递") && curHtml.includes("接收器"), "本任务 skipped 投递行显示明确原因（任务成功/通知失败不混色）");
 ok(curHtml.includes("复制为新任务"), "失败/需重做路径提供「复制为新任务」（重走预检/审批）");
-ok(curHtml.includes("全局事件流") && curHtml.includes("互为印证"), "任务详情含服务端事件流核对（logs/executions?commandId= 交叉印证）");
+ok(curHtml.includes("全局事件流") && curHtml.includes("互为印证"), "任务轨迹含服务端事件流核对（logs/executions?commandId= 交叉印证）");
 const dec2 = sandbox.submitRouteDecision({ state: "awaiting_approval", approvalId: "ap-1" });
 ok(dec2.kind === "approval", "202+approvalId → 审批流决策（L2 自动进审批）", dec2);
 sandbox.renderDevices();
 await settle();
 ok(renderedAll().includes("创建任务"), "设备页含「创建任务」入口（→ 发送页预选设备）");
+ok(renderedAll().includes("演示设备A"), "设备页含拓扑/选中卡设备名");
 
 /* ---------- G. 纯函数行为（行为变更回归点） ---------- */
 section("G. 纯函数行为");
@@ -355,7 +389,7 @@ ok(sandbox.cbNextOp(404) === "POST" && sandbox.cbNextOp(200) === null && sandbox
 }
 ok(sandbox.parseQuery("state=execution_unknown").state === "execution_unknown", "parseQuery：状态筛选写入 URL 参数");
 
-/* ---------- H. 视觉基线与脱敏 ---------- */
+/* ---------- H. 视觉基线 / 零外部资源 / 脱敏 ---------- */
 section("H. 视觉基线 / 零外部资源 / 脱敏");
 ok(html.includes("#f7f9fc") && html.includes("#2563eb") && html.includes("#1e3a5f"), "视觉 token：冰白底/钴蓝主色/深空蓝强调在位");
 ok(html.includes("border-radius:12px") && html.includes("--shadow"), "卡片圆角+阴影在位");

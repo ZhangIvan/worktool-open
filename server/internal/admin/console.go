@@ -424,8 +424,8 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		payload = string(raw)
 	}
 	ctx := r.Context()
-	// 管理面设备暂停门（②pause 语义的强制执行点）+ 目标归一（robotId/v1:robotId
-	// → deviceId：与兼容面 resolveTarget 同口径——派发泵按 deviceId 索引会话）。
+	// 管理面设备暂停门 + 目标归一（P0 修复：裸 robotId 必须→deviceId——派发泵
+	// v2ByDev 按 deviceId 索引，robotId 索引会 miss 导致指令永久 queued）。
 	resolvedTarget := req.Target
 	if dev, ok, err := s.resolveDeviceForTarget(ctx, req.Target); err != nil {
 		s.storeError(w, err)
@@ -504,6 +504,15 @@ func (s *Server) resolveDeviceForTarget(ctx context.Context, target string) (dev
 			return deviceRow{}, false, nil
 		}
 		id = rows[0][0]
+	} else if !strings.HasPrefix(target, "v1:") {
+		// 裸 robotId（P0 修复）：target 本身命中 devices.robot_id → 归一为 deviceId
+		rows, err := s.db.QueryDump(ctx, `SELECT device_id FROM devices WHERE robot_id = ?`, target)
+		if err != nil {
+			return deviceRow{}, false, err
+		}
+		if len(rows) == 1 {
+			id = rows[0][0]
+		}
 	} else if id != "" {
 		// 裸 robotId 归一（2026-11-04 会话 11 真机实证：管理面以 robotId 提交不经
 		// 归一 → 派发泵按 deviceId 索引找不到会话 → 指令永久 queued——与提交门/
