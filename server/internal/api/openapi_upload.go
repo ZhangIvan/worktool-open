@@ -15,6 +15,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -301,3 +302,83 @@ ON CONFLICT(robot_id) DO UPDATE SET open_callback=excluded.open_callback,
 		fmt.Sprintf("openCallback=%d replyAll=%s callbackUrl=%s", *req.OpenCallback, strings.TrimSpace(*req.ReplyAll), strings.TrimSpace(req.CallbackURL)), now)
 	writeOpenAPIData(w, http.StatusOK, openapiCodeSuccess, nil)
 }
+
+
+// HandleClientLogUpload POST /robot/clientLog/upload（510 契约端点，W-M6 W2）：
+// multipart form 字段 robotId/clientVersion/deviceInfo + 文件 part（名 file，
+// 字段名上游未显式——按等价取 file）。zip 落盘 fileDir/clientlogs/（UUID 磁盘名
+// 防穿越），元数据+审计入库。响应 {code:0,...}（端侧 LogUploadPort 只看 2xx）。
+func (s *Server) HandleClientLogUpload(w http.ResponseWriter, r *http.Request) {
+	if !methodGuard(w, r, "POST", http.MethodPost) {
+		return
+	}
+	robotID, ok := s.uploadGuard(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, openapiUploadMaxBytes+(1<<20))
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "请求须为 multipart/form-data")
+		return
+	}
+	var fileBuf bytes.Buffer
+	var filename string
+	form := map[string]string{}
+	for {
+		p, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "multipart 解析失败: "+perr.Error())
+			return
+		}
+		if p.FormName() == "file" {
+			// file 内容必须在本轮循环内立即读完——继续 NextPart() 会消费掉当前
+			// part（2026-11-04 E2E 实证「上传内容为空」根因）。filename 留审计。
+			filename = p.FileName()
+			if _, err := io.Copy(&fileBuf, io.LimitReader(p, openapiUploadMaxBytes+1)); err != nil {
+				writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "文件读取失败: "+err.Error())
+				return
+			}
+			continue
+		}
+		if f := p.FormName(); f == "robotId" || f == "clientVersion" || f == "deviceInfo" {
+			buf, _ := io.ReadAll(io.LimitReader(p, 256))
+			form[f] = string(buf)
+		}
+	}
+	_ = filename
+	if fileBuf.Len() == 0 {
+		writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "缺文件 part（名 file）或内容为空")
+		return
+	}
+	fileID := wire.NewUUID()
+	dir := filepath.Join(s.fileDir(), "clientlogs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, "存储目录不可用: "+err.Error())
+		return
+	}
+	dst := filepath.Join(dir, fileID+".zip")
+	size := int64(fileBuf.Len())
+	if err := os.WriteFile(dst, fileBuf.Bytes(), 0o644); err != nil {
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, err.Error())
+		return
+	}
+	if size > openapiUploadMaxBytes {
+		_ = os.Remove(dst)
+		writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "超过 50MiB 上限")
+		return
+	}
+	now := s.Now().UTC()
+	_ = s.DB.InsertAudit(ctxOf(r), nil, "clientlog_upload", robotID,
+		fmt.Sprintf("fileId=%s size=%d clientVersion=%s deviceInfo=%s", fileID, size, form["clientVersion"], form["deviceInfo"]), now)
+	writeOpenAPIData(w, http.StatusOK, openapiCodeSuccess, map[string]any{
+		"fileId": fileID, "size": size, "robotId": robotID,
+		"clientVersion": form["clientVersion"], "deviceInfo": form["deviceInfo"],
+	})
+}
+
+// ctxOf 便捷取请求 ctx。
+func ctxOf(r *http.Request) context.Context { return r.Context() }

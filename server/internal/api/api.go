@@ -135,6 +135,7 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 		panic(err)
 	}
 	mux.HandleFunc("/fileUpload/upload", s.HandleFileUpload)
+	mux.HandleFunc("/robot/clientLog/upload", s.HandleClientLogUpload) // 510 契约端点（W-M6 W2）
 	mux.HandleFunc("/robot/robotInfo/update", s.HandleRobotInfoUpdate)
 	mux.HandleFunc("GET /files/{fileId}", s.HandleFileGet)
 	mux.HandleFunc("/openapi/v1/robots/{robotId}/info", s.HandleOpenAPIRobotInfo)
