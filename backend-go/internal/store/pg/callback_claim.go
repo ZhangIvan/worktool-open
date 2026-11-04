@@ -190,7 +190,9 @@ func (s *CallbackStore) claimOne(ctx context.Context, c callbackCandidate) (cb.D
 		claimed = true
 		return nil
 	})
-	if errors.Is(e, errCallbackCandidateBusy) {
+	// Only a clean busy rollback permits trying the next candidate. Runner may
+	// join this sentinel with cleanup failures; those must remain fail-closed.
+	if e == errCallbackCandidateBusy {
 		return cb.Delivery{}, false, nil
 	}
 	if e != nil {
