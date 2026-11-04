@@ -98,52 +98,73 @@ func New(d Deps) *Server {
 	return s
 }
 
+// adminCSPHeader 为管理面响应统一 CSP（L-1）：default-src 'none' 兜底禁外联，
+// script/style 放行内联（单页内联形态），connect-src 'self' 放行管理台自身同源
+// fetch() 数据面（RC 复核 RELEASE_BLOCKER①：缺 connect-src 会经回落拦截全部
+// 同源数据请求，真实浏览器实证 FETCH_BLOCKED）。外联仍全禁（无 http(s) 源）。
+const adminCSPHeader = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'"
+
+// withCSP 为管理面统一响应中间件（L-1）：头在写响应前设置，覆盖 200/302/4xx/5xx
+// 全部响应。Register 经包内 amux 整体包出，/api/v1/admin/* 与 /admin/ 全覆盖。
+func withCSP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", adminCSPHeader)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Register 把管理端路由挂到 mux（Go 1.22 方法+路径模式）。
 // 集成方在 server 主装配处调用一次；未挂载时本包端点不可达（默认不暴露）。
 func (s *Server) Register(mux *http.ServeMux) {
+	// L-1：路由先挂包内 amux（pattern 与行为不变），再整体经 withCSP 包出——
+	// 管理面所有响应（含 404/405）统一带 CSP，后续新增路由自动继承。
+	amux := http.NewServeMux()
 	// —— v0.1 最小面（原四端点 + 审批/令牌生命周期，行为不变）——
-	mux.HandleFunc("POST /api/v1/admin/pairing-codes", s.handlePairingCodes)
-	mux.HandleFunc("GET /api/v1/admin/devices", s.handleDevices)
-	mux.HandleFunc("GET /api/v1/admin/commands", s.handleCommands)
-	mux.HandleFunc("GET /api/v1/admin/approvals", s.handleApprovals)
-	mux.HandleFunc("POST /api/v1/admin/approvals/{approvalId}/decision", s.handleApprovalDecision)
-	mux.HandleFunc("/api/v1/admin/robots/{robotId}/openapi-tokens", s.handleOpenAPITokens)
+	amux.HandleFunc("POST /api/v1/admin/pairing-codes", s.handlePairingCodes)
+	amux.HandleFunc("GET /api/v1/admin/devices", s.handleDevices)
+	amux.HandleFunc("GET /api/v1/admin/commands", s.handleCommands)
+	amux.HandleFunc("GET /api/v1/admin/approvals", s.handleApprovals)
+	amux.HandleFunc("POST /api/v1/admin/approvals/{approvalId}/decision", s.handleApprovalDecision)
+	amux.HandleFunc("/api/v1/admin/robots/{robotId}/openapi-tokens", s.handleOpenAPITokens)
 	// —— W-P0 完整管理后台数据面（console.go）——
-	mux.HandleFunc("GET /api/v1/admin/overview", s.handleOverview)
-	mux.HandleFunc("POST /api/v1/admin/devices/{deviceId}/{action}", s.handleDeviceAction)
-	mux.HandleFunc("POST /api/v1/admin/commands", s.handleCommandSubmit)
-	mux.HandleFunc("GET /api/v1/admin/commands/{commandId}", s.handleCommandDetail)
-	mux.HandleFunc("GET /api/v1/admin/queue", s.handleQueueList)
-	mux.HandleFunc("DELETE /api/v1/admin/queue", s.handleQueueClear)
-	mux.HandleFunc("DELETE /api/v1/admin/queue/{commandId}", s.handleQueueRemove)
-	mux.HandleFunc("POST /api/v1/admin/queue/{commandId}/priority", s.handleQueuePriority)
-	mux.HandleFunc("/api/v1/admin/callbacks", s.handleCallbacks)
-	mux.HandleFunc("GET /api/v1/admin/catalog", s.handleCatalog)
-	mux.HandleFunc("POST /api/v1/admin/callbacks/test", s.handleCallbackTest)
-	mux.HandleFunc("GET /api/v1/admin/callbacks/logs", s.handleCallbackLogs)
-	mux.HandleFunc("GET /api/v1/admin/logs/executions", s.handleExecutionLogs)
-	mux.HandleFunc("GET /api/v1/admin/logs/audit", s.handleAuditLogs)
-	mux.HandleFunc("GET /api/v1/admin/settings", s.handleSettings)
-	mux.HandleFunc("PUT /api/v1/admin/settings/guard", s.handleGuardSettings)
-	mux.HandleFunc("PUT /api/v1/admin/settings/encryption", s.handleEncryptionSettings)
-	mux.HandleFunc("PUT /api/v1/admin/settings/event-callbacks", s.handleEventCallbackSettings)
-	mux.HandleFunc("POST /api/v1/admin/breaker/reset", s.handleBreakerReset)
-	mux.HandleFunc("GET /api/v1/admin/risk/{type}", s.handleRiskQuery)
-	mux.HandleFunc("/api/v1/admin/whitelist", s.handleWhitelist)
-	mux.HandleFunc("GET /api/v1/admin/tokens", s.handleTokensList)
+	amux.HandleFunc("GET /api/v1/admin/overview", s.handleOverview)
+	amux.HandleFunc("POST /api/v1/admin/devices/{deviceId}/{action}", s.handleDeviceAction)
+	amux.HandleFunc("POST /api/v1/admin/commands", s.handleCommandSubmit)
+	amux.HandleFunc("GET /api/v1/admin/commands/{commandId}", s.handleCommandDetail)
+	amux.HandleFunc("GET /api/v1/admin/queue", s.handleQueueList)
+	amux.HandleFunc("DELETE /api/v1/admin/queue", s.handleQueueClear)
+	amux.HandleFunc("DELETE /api/v1/admin/queue/{commandId}", s.handleQueueRemove)
+	amux.HandleFunc("POST /api/v1/admin/queue/{commandId}/priority", s.handleQueuePriority)
+	amux.HandleFunc("/api/v1/admin/callbacks", s.handleCallbacks)
+	amux.HandleFunc("GET /api/v1/admin/catalog", s.handleCatalog)
+	amux.HandleFunc("POST /api/v1/admin/callbacks/test", s.handleCallbackTest)
+	amux.HandleFunc("GET /api/v1/admin/callbacks/logs", s.handleCallbackLogs)
+	amux.HandleFunc("GET /api/v1/admin/logs/executions", s.handleExecutionLogs)
+	amux.HandleFunc("GET /api/v1/admin/logs/audit", s.handleAuditLogs)
+	amux.HandleFunc("GET /api/v1/admin/settings", s.handleSettings)
+	amux.HandleFunc("PUT /api/v1/admin/settings/guard", s.handleGuardSettings)
+	amux.HandleFunc("PUT /api/v1/admin/settings/encryption", s.handleEncryptionSettings)
+	amux.HandleFunc("PUT /api/v1/admin/settings/event-callbacks", s.handleEventCallbackSettings)
+	amux.HandleFunc("POST /api/v1/admin/breaker/reset", s.handleBreakerReset)
+	amux.HandleFunc("GET /api/v1/admin/risk/{type}", s.handleRiskQuery)
+	amux.HandleFunc("/api/v1/admin/whitelist", s.handleWhitelist)
+	amux.HandleFunc("GET /api/v1/admin/tokens", s.handleTokensList)
 	// —— W-ops cron 定时任务管理面（cron_admin.go：列表/创建/预览/启停/删除）——
-	mux.HandleFunc("GET /api/v1/admin/cron-jobs", s.handleCronJobList)
-	mux.HandleFunc("POST /api/v1/admin/cron-jobs", s.handleCronJobCreate)
-	mux.HandleFunc("GET /api/v1/admin/cron-jobs/preview", s.handleCronJobPreview)
-	mux.HandleFunc("POST /api/v1/admin/cron-jobs/{jobId}/enabled", s.handleCronJobEnabled)
-	mux.HandleFunc("DELETE /api/v1/admin/cron-jobs/{jobId}", s.handleCronJobDelete)
+	amux.HandleFunc("GET /api/v1/admin/cron-jobs", s.handleCronJobList)
+	amux.HandleFunc("POST /api/v1/admin/cron-jobs", s.handleCronJobCreate)
+	amux.HandleFunc("GET /api/v1/admin/cron-jobs/preview", s.handleCronJobPreview)
+	amux.HandleFunc("POST /api/v1/admin/cron-jobs/{jobId}/enabled", s.handleCronJobEnabled)
+	amux.HandleFunc("DELETE /api/v1/admin/cron-jobs/{jobId}", s.handleCronJobDelete)
 	if s.uiDir != "" {
 		// GET /admin → /admin/（相对解析）；/admin/ 下静态文件（index.html 等）。
-		mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		amux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/admin/", http.StatusFound)
 		})
-		mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir(s.uiDir))))
+		amux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir(s.uiDir))))
 	}
+	mux.Handle("/api/v1/admin/", withCSP(amux))
+	mux.Handle("/admin", withCSP(amux))
+	mux.Handle("/admin/", withCSP(amux))
 }
 
 // handleOpenAPITokens 兼容面令牌生命周期路由（方法守卫内派发；W-M5 日常使用
@@ -182,6 +203,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// storeError 为 STORE 错误统一出口（L-2）：原始 err 只进服务端日志（保留排障
+// 细节），对外固定文案——表结构/路径/驱动等存储细节不出网。错误码仍为 STORE
+// （运维可分类），仅 message 固定。
+func (s *Server) storeError(w http.ResponseWriter, err error) {
+	s.log.Printf("admin: STORE 错误（原文仅入日志）: %v", err)
+	(&adminError{http.StatusInternalServerError, "STORE", "存储错误（详情见服务端日志）"}).write(w)
+}
+
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -207,7 +236,7 @@ func (s *Server) requireScope(w http.ResponseWriter, r *http.Request, scope, for
 	}
 	t, found, err := s.db.GetAPIToken(r.Context(), sha256Hex(raw))
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return nil
 	}
 	if !found || t.Status != "active" {
@@ -344,16 +373,16 @@ func (s *Server) handlePairingCodes(w http.ResponseWriter, r *http.Request) {
 	// H-1（安全审计 TOP5）：签发新码即把全部未使用旧码置 used（单活动码语义，
 	// 压缩爆破面；与 api.Server.CreatePairingCode 同一 store 方法，防语义漂移）。
 	if _, err := s.db.InvalidateUnusedPairingCodes(r.Context(), now); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if err := s.db.CreatePairingCode(r.Context(), sha256Hex(code), expires); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if err := s.db.InsertAudit(r.Context(), nil, "admin_pairing_code_issued", adminScopeRobotID,
 		fmt.Sprintf("配对码签发（仅存 hash，TTL %s，单次有效；未使用旧码已一并置 used，H-1 单活动码）", pairingCodeTTL), now); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, pairingCodeResponse{
@@ -391,7 +420,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 SELECT device_id, COALESCE(robot_id,''), device_name, status, token_version, epoch, paired_at, updated_at
 FROM devices ORDER BY paired_at`)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]deviceItem, 0, len(rows))
@@ -487,7 +516,7 @@ FROM commands` + where + ` ORDER BY created_at DESC, command_id LIMIT ? OFFSET ?
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryDump(r.Context(), query, args...)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]commandItem, 0, len(rows))
@@ -537,7 +566,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.db.ApprovalsByStatus(r.Context(), status)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]approvalItem, 0, len(list))
@@ -621,7 +650,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 	// 预检映射 404/409（决议原子性仍由 DecideApproval 的条件 UPDATE 保证）。
 	a, ok, err := s.db.GetApproval(r.Context(), approvalID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if !ok {
@@ -700,12 +729,12 @@ func (s *Server) handleOpenAPITokenIssue(w http.ResponseWriter, r *http.Request)
 	}
 	now := s.now().UTC()
 	if err := s.db.InsertAPIToken(r.Context(), sha256Hex(raw), robotID, tenant, now); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if err := s.db.InsertAudit(r.Context(), nil, "admin_openapi_token_issued", robotID,
 		fmt.Sprintf("兼容面令牌签发 tenant=%s（仅存 hash，原始值一次返回）", tenant), now); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	s.log.Printf("admin: 签发兼容面令牌 robot=%s tenant=%s（仅存 hash）", robotID, tenant)
@@ -723,7 +752,7 @@ func (s *Server) handleOpenAPITokenList(w http.ResponseWriter, r *http.Request) 
 SELECT substr(token_hash,1,12), tenant, status, created_ms, COALESCE(last_used_ms,0)
 FROM api_tokens WHERE robot_id = ? ORDER BY created_ms DESC`, robotID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(rows))
@@ -757,14 +786,14 @@ func (s *Server) handleOpenAPITokenRevoke(w http.ResponseWriter, r *http.Request
 	res, err := s.db.Exec(r.Context(),
 		`UPDATE api_tokens SET status='revoked' WHERE robot_id = ? AND status='active'`, robotID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	revoked, _ := res.RowsAffected()
 	now := s.now().UTC()
 	if err := s.db.InsertAudit(r.Context(), nil, "admin_openapi_token_revoked", robotID,
 		fmt.Sprintf("吊销 active 兼容面令牌 %d 枚", revoked), now); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"robotId": robotID, "revoked": revoked})

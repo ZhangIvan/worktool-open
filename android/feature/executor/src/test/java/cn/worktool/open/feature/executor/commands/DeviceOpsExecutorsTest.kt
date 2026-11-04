@@ -195,6 +195,32 @@ class DeviceOpsExecutorsTest {
     }
 
     @Test
+    fun `510回归R6-上传后pendingZip置空不留跨执行残留`() {
+        val logs = FakeLogStore(dayZips = mapOf("2026-11-02" to ByteArray(16)))
+        val upload = FakeLogUpload()
+        val exec = UploadLogFileExecutor(logs, upload)
+        val registry = ExecutorRegistry.of(exec)
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.UploadLogFile(logDate = "2026-11-02"),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        val f = UploadLogFileExecutor::class.java.getDeclaredField("pendingZip")
+        f.isAccessible = true
+        assertEquals("上传消费后 pendingZip 须置空（R6：包传递用后即弃）", null, f.get(exec))
+        // 第二次执行（该日无日志→收集失败）不得消费上一轮残留：仍为 null 且零增量上传
+        val report2 = CommandRunner(driver, gate).execute(
+            CommandIntent.UploadLogFile(logDate = "2026-10-01"),
+            registry,
+        )
+        assertEquals(ExecutionStatus.FAILED, report2.status)
+        assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report2.errorCode)
+        assertEquals("无跨执行残留（不重传上一轮 zip）", 1, upload.uploaded.size)
+        assertEquals(null, f.get(exec))
+    }
+
+    @Test
     fun `510干跑-零上传`() {
         val logs = FakeLogStore(dayZips = mapOf("2026-11-02" to ByteArray(8)))
         val upload = FakeLogUpload()

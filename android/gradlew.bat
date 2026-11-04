@@ -33,6 +33,12 @@ set APP_HOME=%DIRNAME%
 @rem Resolve any "." and ".." in APP_HOME to make it shorter.
 for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 
+@rem WorkTool: the Gradle build root is android/. cd here so the wrapper yields
+@rem the same project dir regardless of the caller's cwd (the RC gate invokes
+@rem "android\gradlew.bat" from the repo root); calls already inside android/
+@rem are no-ops.
+cd /d "%APP_HOME%" || goto fail
+
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 

@@ -42,6 +42,11 @@ const openapiUploadMaxBytes = 50 << 20
 // 当日（服务端 UTC）累计超 200MiB → 429。var（非 const）仅为回归测试注入小配额。
 var clientlogQuotaPerRobotPerDay int64 = 200 << 20
 
+// fileUploadQuotaPerRobotPerDay 单 robot 当日 /fileUpload/upload 磁盘配额（安全
+// 审计 M 系车道，形态与 clientlog ③同源）：当日（服务端 UTC）累计超 200MiB →
+// 429 + 审计。var（非 const）仅为回归测试注入小配额。
+var fileUploadQuotaPerRobotPerDay int64 = 200 << 20
+
 // openapiCodeFileSignatureInvalid 为文件取回签名校验失败的自分配码（W-ops ④）：
 // 服务端分配段 101001~101010 已用尽；101011~101018 与 201xxx 为上游业务语义段
 // （不复用不覆盖纪律），顺延取空位 101031。
@@ -208,6 +213,26 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 		name = fileID
 	}
 	now := s.Now().UTC()
+	// 当日磁盘配额（安全审计 M 系车道，复用 clientlog ③形态）：单 robot 当日
+	//（UTC）累计 ≤ 200MiB，超限 429 + 审计。已知边界登记：精确 size 判定需已读
+	// 流，故先流式落盘再判——超限即删文件（无元数据行：不计配额、不留字节）；
+	// 同 robot 极小概率并发双写越限（本面已有 60QPM 限流兜底，与 clientlog 同口径）。
+	used, qerr := s.openapiFileTodayBytesUsed(r.Context(), robotID, now)
+	if qerr != nil {
+		_ = os.Remove(dst)
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, "配额统计失败: "+qerr.Error())
+		return
+	}
+	if used+size > fileUploadQuotaPerRobotPerDay {
+		_ = os.Remove(dst)
+		_ = s.DB.InsertAudit(r.Context(), nil, auditKindOpenAPI+"_file_upload_quota_rejected", robotID,
+			fmt.Sprintf("fileUpload 当日磁盘配额已满（当日已存 %d 字节，配额 %d 字节，拒绝 size=%d）",
+				used, fileUploadQuotaPerRobotPerDay, size), now)
+		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited,
+			fmt.Sprintf("fileUpload 当日磁盘配额已满（robot=%s 当日已存 %d 字节，配额 %d 字节；次日 UTC 零点重置）",
+				robotID, used, fileUploadQuotaPerRobotPerDay))
+		return
+	}
 	if _, err := s.DB.Exec(r.Context(), `
 INSERT INTO openapi_files(file_id, robot_id, name, size, sha256, path, created_ms) VALUES (?,?,?,?,?,?,?)`,
 		fileID, robotID, name, size, sum, dst, now.UnixMilli()); err != nil {
@@ -403,6 +428,27 @@ func (s *Server) clientlogTodayBytesUsed(ctx context.Context, robotID string, no
 	for _, row := range rows {
 		size, _ := strconv.ParseInt(row[1], 10, 64)
 		if _, serr := os.Stat(filepath.Join(dir, row[0]+".zip")); serr == nil {
+			total += size
+		}
+	}
+	return total, nil
+}
+
+// openapiFileTodayBytesUsed 统计该 robot 当日（服务端 UTC）/fileUpload/upload
+// 现存磁盘大小和（口径与 clientlogTodayBytesUsed 同源）：当日 openapi_files
+// 元数据行逐条 os.Stat 对应文件，已缺失（运维清理）不计——元数据表提供 robot
+// 归属，path 为本服务落库的受控路径。
+func (s *Server) openapiFileTodayBytesUsed(ctx context.Context, robotID string, now time.Time) (int64, error) {
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).UnixMilli()
+	rows, err := s.DB.QueryDump(ctx,
+		`SELECT path, size FROM openapi_files WHERE robot_id = ? AND created_ms >= ?`, robotID, dayStart)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, row := range rows {
+		size, _ := strconv.ParseInt(row[1], 10, 64)
+		if _, serr := os.Stat(row[0]); serr == nil {
 			total += size
 		}
 	}

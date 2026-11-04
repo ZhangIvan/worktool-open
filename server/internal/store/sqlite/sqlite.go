@@ -53,7 +53,7 @@ type Device struct {
 type Session struct {
 	SessionID            string
 	DeviceID             string
-	ServerX25519Private  string // hex；服务端本轮临时私钥（仅内存镜像可弃，落库供解密派生）
+	ServerX25519Private  string // hex；服务端本轮临时私钥（仅 open/pending 落库供解密派生；closed 即清零，M-4）
 	ServerX25519Public   string // hex
 	DeviceX25519Public   string // hex；设备本轮临时公钥
 	State                string // pending | open | closed
@@ -738,11 +738,26 @@ UPDATE device_sessions SET state='open', last_epoch=?, last_received_seq=?, encr
 	return err
 }
 
-// CloseSession 标记会话关闭。
+// CloseSession 标记会话关闭，并同步清零服务端会话私钥列（M-4：会话关闭
+// ——含被顶替路径，gateway serveV2 defer 经本方法落库——后即不再需要解密派生，
+// 私钥明文残留属敏感数据滞留；公钥保留供审计面）。
 func (db *DB) CloseSession(ctx context.Context, sessionID string, at time.Time) error {
-	_, err := db.sql.ExecContext(ctx, `UPDATE device_sessions SET state='closed', closed_at=? WHERE session_id=?`,
+	_, err := db.sql.ExecContext(ctx,
+		`UPDATE device_sessions SET state='closed', closed_at=?, server_x25519_private='' WHERE session_id=?`,
 		at.UnixMilli(), sessionID)
 	return err
+}
+
+// ScrubClosedSessionKeys 启动一次性清零全部已 closed 会话残留的
+// server_x25519_private（M-4 兜底：历史版本关闭会话时列尚存私钥）。open/pending
+// 会话保留——运行解密派生需要。返回清理行数（幂等：无残留再扫 = 0）。
+func (db *DB) ScrubClosedSessionKeys(ctx context.Context) (int64, error) {
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE device_sessions SET server_x25519_private='' WHERE state='closed' AND server_x25519_private<>''`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ---- 指令 / 事件 / 幂等 / 墓碑 / outbox / 审计 / 入向去重 ----

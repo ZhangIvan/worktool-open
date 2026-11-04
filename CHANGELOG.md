@@ -5,6 +5,84 @@
 
 ## [Unreleased]
 
+### v0.1.0-rc1（2026-11-04，发布候选——六车道交付批 + 审计修复批收口）
+
+> 候选版内容汇总（未打 tag，发布门 docs/04 §5.1 未全绿）。端侧执行面如实口径：
+> 支持矩阵仅 501/502 真机翻格 ✅，其余指令 ⬜ NOT_RUN，详见本节末「NOT_RUN 与已知边界」。
+
+#### 新增
+
+- **审批身份（approver token scope，P0-3 结构性收口）**：决议面独立签发 approver
+  令牌，与管理令牌分持（启动时各打印一次、库中仅存 SHA-256 hash）；admin 令牌在
+  决议面 403 `APPROVER_SCOPE_REQUIRED`、approver 令牌在提交面 403
+  `ADMIN_SCOPE_REQUIRED`——两侧 scoped 身份关闭自由文本自审旁路；管理台双令牌
+  UI + 4 项 DoD 回归测试（ce128c3）。
+- **52 指令目录注册表 + status 能力履历**：`GET /api/v1/admin/catalog` 52 条
+  （编号面=openapi 注册表，中文场景名/风险级/必填字段/最小示例/分组）；每条目带
+  status 履历标记（registered→implemented→wired→verified）与 rawMsg 通道注记 +
+  withSchema 矩阵；7 项机检不变量（编号集合=registry、example 过 prevalidate、
+  risk=ClassifyRisk 等）锁漂移；顺带修正 6 处风险级展示漂移（223 L1→L0、
+  236/238/239/240/244 L0→L2）（006c046/ee6a9be/ce128c3）。
+- **cron 管理面**：定时任务 CRUD+preview+enable+delete；riskClass 伪装提交拒绝、
+  GuardError 显式映射；管理台 cron 页（ce128c3）。
+- **/readyz 活性探针**：store ping 之上增加 dispatch/callback/cron 三个后台循环
+  活性检测（3×周期无推进→503），活性（liveness）与就绪（readiness）分开报告
+  （ce128c3，`server/internal/api/api.go:226`）。
+- **回调闭环（rawMsg 契约 + 配额 + 签名取回）**：rawMsg 端到端透传契约（wire 解码
+  层曾丢字段——025712b；查询结果经 RAW_CONFIRM rawMsg 携数据本体、成功时省略
+  successList——5a04820；错误/缺省分离与双机器人隔离回归——f8c84d1）；clientlog
+  上传 200MiB/天配额（元数据表 + os.Stat 实证核验）；`/files` 取回可选 HMAC 签名
+  访问（`-callback-secret` 未配置时签名路径 fail-closed 403 不降级、响应 no-store，
+  7 分支回归）（ce128c3）。
+- **管理台 v3 重建**：五工作区 + 六步核心流程（常规路径不暴露 JSON/UUID）+ 每页
+  五态 + 浅色科技主题；120 例 UI 测试套件绿；回调列表加载失败显式重试而非假空态
+  （review 修复，70f5d38 前置 + ce128c3）。
+
+#### 修复
+
+- **E19 排队 TTL**：设备离线积压指令超 24h（默认）自动 queued→cancelled
+  （`queue_ttl_expired`），边入权威 CSV + state-policy；TTL 取消幂等并补发
+  exec_result 101018 回执（对齐 admin queue-remove 语义与 CSV 承诺）；提交响应携
+  deviceOnline、控制台离线横幅与队列年龄徽章（843be63 + 033b7a8-B4）。
+- **白名单规范字段提取（P0-1）**：白名单门此前只识别 4 个旧收件人字段——规范字段
+  titleList（203/204/205/221/226/227/229/238…）、selectList（206/225）、嵌套
+  friend.name/phone（213/220/234/236）对门不可见，默认拒绝下仍可入册；现对全部带
+  收件人指令检查白名单（不再只限 L1，203 误发防护主目标首次入保护），不可识别形态
+  fail-close；负例回归 `TestL1WhitelistCanonicalFields`。同批 **P0-2 守护策略启动
+  恢复**：持久化守护策略此前无启动调用点（重启后静默失效而查询 API 假成功），现
+  服务前置恢复+校验，失败拒绝启动（b1e3ef4）。
+- **设备身份归并**：配对按 Ed25519 身份公钥归并——同机重装/标识变更换 deviceId 时
+  复用既有设备行（robot 绑定与 epoch 水位保留），响应返回既有 deviceId；管理台新增
+  删除动作清理不同密钥时代遗留行；回归 `TestPairIdentityMergeByEd25519` /
+  `TestAdminDeviceDelete`（006c046）。
+- **安卓恢复链与 H1/H2**：
+  - H1：AtLeastOnceQueue 发送成功即置 DONE 并保留 32 条 DONE、不再全表重扫——
+    journal 重放不再排在全历史之后（W1 5.5min 派发延迟根因）（033b7a8）。
+  - H2：设备 watchdog 将心跳成功发送计为链路活性（max(lastServerActivity,
+    lastSendOk)）——服务端按规格不回心跳，此前仅认收帧导致健康会话每 45~60s 被
+    close(4400) 重连（TLS 握手+会话行+全量 journal 重放/分钟）（c2f0bb6）。
+  - 恢复链：设置持久化恢复链统一（boot/自愈/MainActivity 三入口合一）；修复
+    skip-expired OFF 路径以陈旧 lastLoadedGates 覆盖用户刚写值（review 发现，
+    reviewer 静态分析验证）（ce128c3）。
+
+#### NOT_RUN 与已知边界（如实登记）
+
+- **端侧执行面 NOT_RUN**：支持矩阵仅 501/502 真机翻格 ✅（502 3/3、501 3/4
+  succeeded，ec=0），其余指令行全部 ⬜ NOT_RUN——未经真机执行回执的能力不宣称
+  支持（docs/05 图例与规则）。
+- **目录/矩阵口径差异**：catalog 源注释标 501/502/513=verified
+  （`server/internal/admin/catalog.go:32`），矩阵侧 513 无行、真机证据未回填——
+  对外口径以矩阵为准，两处待对齐。
+- **511/515 分支**：详情族选择器 NOT_CALIBRATED 占位，JVM 绿仅为分支证据，待 D1
+  真机 dump 校准，不虚构真机成功（docs/05 头部 v1.6 加注）。
+- **501 已知边界**：openConversation 仅扫可视树，列表滚动位置致目标行不可见时
+  201001（原版有滚动+搜索双兜底——硬化项待办）；应用后台时 Activity 上下文失活→
+  服务上下文被 MIUI BAL 拦（201010），产品 SP-2 前台服务归位后消解。
+- **Ed25519 产品级回退**：装配与真机取证 deferred（见上文 W-M4 条目登记，rc1 不
+  宣称闭环）。
+- **已知 flaky**：`TestOpenAPIQueueGroup`（Windows 时钟粒度幂等键碰撞，先于本批
+  存在）（ce128c3 提交说明）。
+
 ### W-M4（发布工程，进行中）
 
 #### 新增

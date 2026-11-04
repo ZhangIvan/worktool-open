@@ -111,6 +111,7 @@
   .stat .k { color:var(--dim); font-size:12px; }
   .stat .v { font-size:24px; font-weight:700; font-family:var(--mono); margin-top:2px; color:var(--deep); }
   .stat .v small { font-size:12px; color:var(--dim); font-weight:400; }
+  .stat .d { font-size:11px; color:var(--dim); margin-top:4px; line-height:1.4; }
   .stat.ok .v { color:var(--ok); } .stat.err .v { color:var(--err); } .stat.acc .v { color:var(--acc-dk); }
   .stat.unk .v { color:var(--unk); }
   /* 任务时间线 */
@@ -735,7 +736,8 @@ function renderHome() {
     "<div class='stats'>" +
     "<div class='stat click' id='hm-dev-card' title='进入设备列表'><div class='k'>在线设备</div><div class='v' id='hm-dev'>—</div></div>" +
     "<div class='stat click acc' id='hm-tasks-card' title='查看今日任务'><div class='k'>今日任务</div><div class='v' id='hm-tasks'>—</div></div>" +
-    "<div class='stat click' id='hm-todo-card' title='进入审批'><div class='k'>待我处理</div><div class='v' id='hm-todo-n'>—</div></div>" +
+    "<div class='stat click' id='hm-todo-card' title='进入审批'><div class='k'>待我处理</div><div class='v' id='hm-todo-n'>—</div>" +
+    "<div class='d'>pending 在「任务 → 审批」全量列出（本卡只显计数）；决议需独立 approver 令牌，管理令牌不能决议</div></div>" +
     "<div class='stat click unk' id='hm-unk-card' title='核对结果未知任务'><div class='k'>结果未知</div><div class='v' id='hm-unk'>—</div></div>" +
     "</div>" +
     "<div class='grid-home'>" +
@@ -1419,7 +1421,7 @@ function submitWithApproval() {
 }
 
 /* ============ 任务工作区 · 当前任务详情（S09 唯一事实入口） ============
- * commandId + 状态时间线 E01→E18 + 结果回执（错误码/原因）+ 通知投递（独立结论）。
+ * commandId + 状态时间线 E01→E19 + 结果回执（错误码/原因）+ 通知投递（独立结论）。
  * 终态（含结果未知）自动停止轮询；结果未知主按钮为「刷新核对」，无盲重试。 */
 function renderTaskCurrent() {
   if (!CURRENT_CMD_ID) {
@@ -1528,7 +1530,7 @@ function renderTaskCurrentBody(j) {
     "<div class='row'><button class='mini' id='tc-copynew'>复制为新任务（重走预检/审批，新幂等键）</button>" +
     (c.state === "queued" ? "<a class='btnlink' href='#/tasks-queue'>去队列管理</a>" : "") + "</div></section>" +
     "<div class='grid2'>" +
-    "<section class='card'><h3>状态时间线（E01→E18） <span class='hint'>●蓝=过程边 ●绿=终态边 ●灰=对账登记边；事件缺失就不画已发生节点</span></h3>" +
+    "<section class='card'><h3>状态时间线（E01→E19） <span class='hint'>●蓝=过程边 ●绿=终态边 ●灰=对账登记边；事件缺失就不画已发生节点</span></h3>" +
     "<div class='tl'>" + ((j.events || []).map(function (e) {
       return "<div class='item " + (EDGE_TERM[e.edge] ? "term" : EDGE_UNK[e.edge] ? "unk" : "") + "'>" +
         "<div class='head'>" + edgePill(e.edge) + "<span>" + esc(stName(e.fromState)) + " → " + esc(stName(e.toState)) + "</span>" +
@@ -1661,7 +1663,7 @@ function renderQueue() {
     "<div class='row'><label>清空指定目标的待执行指令 <input id='q-clear-target' placeholder='target' size='20'></label>" +
     "<button id='q-clear' class='no mini'>清空该目标队列</button>" +
     "<span class='dim'>不提供全局「清空所有」——清空必须绑定明确目标并逐条落取消回执。</span></div>" +
-    "<p class='note'>「移到队首」= 队列序键抬至队首前（原序键留痕审计），不是任意拖拽排序；仅 queued 待执行指令可操作。设备离线时指令持续入队——上线后按序投递；超过 24h 未投递自动取消（E19）。</p></section>";
+    "<p class='note'>「移到队首」= 队列序键抬至队首前（原序键留痕审计），不是任意拖拽排序；仅 queued 待执行指令可操作。设备离线时指令持续入队——上线后按序投递；超过 24h 未投递自动取消（E19）。恢复接管后，暂存指令按恢复即丢弃、服务端对账收敛语义处理（v0.1 边界，登记 docs/16）。</p></section>";
   Q_STALE = false;
   function load() {
     setState($("queue-body"), "loading", 7);
@@ -1721,7 +1723,7 @@ function renderQueue() {
         // 空队列/加载失败/陈旧都能渲染（S11 验收：不吞异常停在「尚未加载」）
         if ($("queue-body").querySelector("button[data-rm]")) {
           Q_STALE = true;
-          setStale("q-stale", (e && e.timeout) ? "刷新超时" : "刷新失败——移到队首/取消/清空已禁用，刷新成功后恢复");
+          setStale("q-stale", (e && e.timeout) ? "刷新超时" : "刷新失败——移到队首/取消/清空点击将被拦截并提示，刷新成功后恢复");
         } else {
           setState($("queue-body"), (e && e.timeout) ? "timeout" : "error", 7, "", errName(e));
         }
@@ -1766,7 +1768,7 @@ function renderApprovals() {
     "<span class='dim' id='ap-cat-note'></span></div>" +
     "<table><thead><tr><th>审批号</th><th>申请人</th><th>目标</th><th>动作</th><th>风险</th><th>决议理由</th><th>登记时间</th><th>决议操作</th></tr></thead>" +
     "<tbody id='approvals-body'><tr><td colspan='8' class='empty'>加载中…</td></tr></tbody></table>" +
-    "<p class='note'>决议令牌记住在本浏览器（localStorage，仅本机便利性——不作为身份凭证）；拒绝时请在行内填写原因（≤512 字符）。</p></section>";
+    "<p class='note'>决议令牌记住在本浏览器（localStorage，仅本机便利性——不作为身份凭证；与管理令牌同口径：服务端仅存 SHA-256 hash）；拒绝时请在行内填写原因（≤512 字符）。</p></section>";
   $("approver-token").value = approverToken;
   $("approver").value = localStorage.getItem(APPROVER_KEY) || "";
   $("approver").addEventListener("change", function () { localStorage.setItem(APPROVER_KEY, $("approver").value.trim()); });

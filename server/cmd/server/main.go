@@ -67,6 +67,15 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	}
 	defer func() { _ = db.Close() }()
 
+	// M-4（安全审计）：启动一次性清零历史 closed 会话残留的会话私钥列
+	// （open/pending 保留——运行解密派生需要）；失败拒绝启动（与 guard 策略
+	// 恢复同 fail-fast 纪律，不留假成功）。
+	if n, err := db.ScrubClosedSessionKeys(ctx); err != nil {
+		return fmt.Errorf("boot: 清零 closed 会话残留私钥失败: %w", err)
+	} else if n > 0 {
+		logger.Printf("boot: 已清零 %d 条历史 closed 会话残留私钥（M-4）", n)
+	}
+
 	machine := statemachine.Default()
 	pipeline := scheduler.New(db, machine)
 	unknowns, err := pipeline.RecoverInflight(ctx)

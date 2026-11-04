@@ -80,7 +80,7 @@ func (s *Server) handleCronJobList(w http.ResponseWriter, r *http.Request) {
 	}
 	jobs, err := s.pipeline.CronJobs(r.Context())
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]adminCronJobRow, 0, len(jobs))
@@ -246,14 +246,14 @@ func (s *Server) handleCronJobEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	if _, ok, err := s.pipeline.GetCronJob(ctx, jobID); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	} else if !ok {
 		(&adminError{http.StatusNotFound, "CRON_JOB_NOT_FOUND", "定时任务 " + jobID + " 不存在"}).write(w)
 		return
 	}
 	if err := s.pipeline.SetCronJobEnabled(ctx, jobID, *req.Enabled, "admin"); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobId": jobID, "enabled": *req.Enabled})
@@ -271,7 +271,7 @@ func (s *Server) handleCronJobDelete(w http.ResponseWriter, r *http.Request) {
 			(&adminError{http.StatusNotFound, "CRON_JOB_NOT_FOUND", "定时任务 " + jobID + " 不存在"}).write(w)
 			return
 		}
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobId": jobID, "deleted": true})

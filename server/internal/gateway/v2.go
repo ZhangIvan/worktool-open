@@ -712,6 +712,32 @@ func (s *v2Session) flushBatch(ctx context.Context, h *Hub) (int, error) {
 		h.flushMu.Unlock()
 		return 0, nil
 	}
+	// 管理面暂停门（派发侧强制执行点，与 admin handleCommandSubmit 的
+	// 409 DEVICE_PAUSED 提交门配套）：devices.status='paused' 的设备本轮跳过
+	// 派发，指令留队、resume 后补发。审计 pause_skip_dispatch 每设备每轮至多
+	// 一条——跳过即返回 0 终止 flushQueued 排空循环（防逐指令/逐批刷屏）；
+	// 空队列批在上方提前返回，不落审计。设备行缺失（无暂停语义可判）不拦派发。
+	if dev, found, err := h.DB.GetDevice(ctx, s.DeviceID); err != nil {
+		h.flushMu.Unlock()
+		return 0, err
+	} else if found && dev.Status == "paused" {
+		// RC 复核阻塞项②：暂停审计按设备 1h 时间窗去重——派发泵 1s 周期 × 24h TTL
+		// 下原实现 ≈8.6 万行/天/设备刷屏淹没审计面（500 行近窗 8 分钟即满）。窗口内
+		// 静默跳过（状态查询即可见），窗口翻新一条留痕。
+		if last, qerr := h.DB.QueryDump(ctx,
+			`SELECT MAX(at) FROM audit_log WHERE kind='pause_skip_dispatch' AND target=?`, s.DeviceID); qerr == nil && len(last) == 1 && last[0][0] != "" {
+			if t, perr := strconv.ParseInt(last[0][0], 10, 64); perr == nil && h.Now().UTC().UnixMilli()-t < int64(time.Hour.Milliseconds()) {
+				h.flushMu.Unlock()
+				return 0, nil
+			}
+		}
+		if auditErr := h.DB.InsertAudit(ctx, nil, "pause_skip_dispatch", s.DeviceID,
+			fmt.Sprintf("设备已暂停，本轮跳过 %d 条 queued 指令派发（同设备 1h 内不重复留痕）", len(cmds)), h.Now().UTC()); auditErr != nil {
+			h.Log.Printf("gateway: pause_skip_dispatch 审计失败 deviceID=%s: %v", s.DeviceID, auditErr)
+		}
+		h.flushMu.Unlock()
+		return 0, nil
+	}
 	// 一事务批量分配本批 epoch（逐指令消费 base..base+len-1；H3）
 	base, err := h.DB.AllocateEpochs(ctx, s.DeviceID, len(cmds))
 	if err != nil {

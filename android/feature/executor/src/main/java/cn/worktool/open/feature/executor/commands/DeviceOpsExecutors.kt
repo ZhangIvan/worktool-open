@@ -197,6 +197,7 @@ class UploadLogFileExecutor(
     ) { _ ->
         val zip = pendingZip
             ?: return@PlanStep StepOutcome.Failure(ExecutorErrorCodes.NODE_NOT_FOUND, "日志包缺失（收集步未产出）")
+        pendingZip = null // R6：包传递用后即弃——上传步消费即置空，不留跨执行残留（防陈旧 zip 串入下一轮）
         val name = "log_${intent.logDate ?: java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())}.zip"
         if (!logUpload.uploadLogZip(name, zip)) {
             StepOutcome.Failure(ExecutorErrorCodes.ACTION_REJECTED, "处理日志上传时发生异常（上传失败）")
@@ -205,6 +206,6 @@ class UploadLogFileExecutor(
         }
     }
 
-    /** 收集步→上传步的包传递（单执行器实例；顺序执行下安全）。 */
+    /** 收集步→上传步的包传递（单执行器实例；顺序执行下安全）。R6：上传步消费即置空——字段仅存活于单次执行的步间传递。 */
     private var pendingZip: ByteArray? = null
 }

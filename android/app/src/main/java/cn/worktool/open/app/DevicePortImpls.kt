@@ -24,6 +24,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
@@ -40,6 +41,19 @@ import java.util.concurrent.TimeUnit
  *   走完整切换流程，语义保守正确）。
  */
 object DevicePortImpls {
+
+    /**
+     * S3（code review 遗留）：各端口 OkHttp 客户端口径单点——每类构造一次复用，
+     * 不再每次调用 new OkHttpClient（连接池/线程池随调用数膨胀）。callTimeout
+     * 各自保留原口径：510 日志上传 60s / 218 远端文件下载 120s / 307 配置重拉
+     * 15s / 243 相册下载 60s。JVM 单测锚点 = [DevicePortImplsPortCleanupTest]。
+     */
+    internal object PortHttpClients {
+        val logUpload: OkHttpClient by lazy { OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build() }
+        val remoteFiles: OkHttpClient by lazy { OkHttpClient.Builder().callTimeout(120, TimeUnit.SECONDS).build() }
+        val appConfig: OkHttpClient by lazy { OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build() }
+        val qrJoin: OkHttpClient by lazy { OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build() }
+    }
 
     /** 513：真机资源快照（内存/存储/机型；外部存储缺失=null）。 */
     class Resources(private val context: Context) : DeviceResourcePort {
@@ -146,9 +160,10 @@ object DevicePortImpls {
 
     /** 510：multipart 上传 {base}/robot/clientLog/upload（OkHttp；同步调用在执行线程）。 */
     class LogUpload(private val baseUrl: () -> String) : LogUploadPort {
+        /** S3：client 构造一次字段复用（原每次上传新建）；callTimeout 60s 保留。 */
+        private val client = PortHttpClients.logUpload
+
         override fun uploadLogZip(fileName: String, zip: ByteArray): Boolean = runCatching {
-            val client = okhttp3.OkHttpClient.Builder()
-                .callTimeout(60, TimeUnit.SECONDS).build()
             val body = okhttp3.MultipartBody.Builder()
                 .setType(okhttp3.MultipartBody.FORM)
                 .addFormDataPart("robotId", "self")
@@ -168,25 +183,24 @@ object DevicePortImpls {
 
     /** 218/224/243：远端文件拉取（下载 → 落盘应用私有目录按 objectName）。 */
     class RemoteFiles(private val context: Context) : RemoteFilePort {
+        /** S3：client 构造一次字段复用（原每次下载新建）；callTimeout 120s 保留。 */
+        private val client = PortHttpClients.remoteFiles
+
         override fun fetch(url: String, objectName: String): Boolean = runCatching {
-            val client = okhttp3.OkHttpClient.Builder()
-                .callTimeout(120, TimeUnit.SECONDS).build()
             val req = okhttp3.Request.Builder().url(url).build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@runCatching false
-                val target = File(context.filesDir, "downloads/$objectName")
-                target.parentFile?.mkdirs()
-                target.outputStream().use { out -> resp.body?.byteStream()?.copyTo(out) ?: return@runCatching false }
-                true
+                downloadTo(File(context.filesDir, "downloads/$objectName")) { resp.body?.byteStream() }
             }
         }.getOrDefault(false)
     }
 
     /** 307：服务端配置重拉（GET {base}/robot/robotInfo；失败=false 保持旧配置）。 */
     class AppConfig(private val baseUrl: () -> String) : AppConfigPort {
+        /** S3：client 构造一次字段复用（原每次重拉新建）；callTimeout 15s 保留。 */
+        private val client = PortHttpClients.appConfig
+
         override fun refreshRemoteConfig(): Boolean = runCatching {
-            val client = okhttp3.OkHttpClient.Builder()
-                .callTimeout(15, TimeUnit.SECONDS).build()
             val req = okhttp3.Request.Builder()
                 .url(baseUrl().trimEnd('/') + "/robot/robotInfo").get().build()
             client.newCall(req).execute().use { it.isSuccessful }
@@ -200,23 +214,25 @@ object DevicePortImpls {
 
     /** 243：相册下载真实；个微扫码=诚实失败（FR-56 未交付，见类注）。 */
     class QrJoin(private val context: Context) : QrCodeJoinPort {
+        /** S3：client 构造一次字段复用（原每次下载新建）；callTimeout 60s 保留。 */
+        private val client = PortHttpClients.qrJoin
+
         override fun downloadAndSaveToAlbum(fileUrl: String): Boolean = runCatching {
-            val client = okhttp3.OkHttpClient.Builder()
-                .callTimeout(60, TimeUnit.SECONDS).build()
             val resp = client.newCall(okhttp3.Request.Builder().url(fileUrl).build()).execute()
             resp.use {
                 if (!it.isSuccessful) return@runCatching false
-                val tmp = File(context.cacheDir, "qr_${System.currentTimeMillis()}.png")
-                tmp.outputStream().use { out -> it.body?.byteStream()?.copyTo(out) ?: return@runCatching false }
-                // 写系统相册（MediaStore 插入；失败=false 诚实上报）
-                val values = android.content.ContentValues().apply {
-                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, tmp.name)
-                    put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                withTempPng(context.cacheDir) { tmp ->
+                    tmp.outputStream().use { out -> it.body?.byteStream()?.copyTo(out) ?: return@withTempPng false }
+                    // 写系统相册（MediaStore 插入；失败=false 诚实上报）
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, tmp.name)
+                        put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    }
+                    val uri = context.contentResolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values,
+                    ) ?: return@withTempPng false
+                    context.contentResolver.openOutputStream(uri)?.use { out -> tmp.inputStream().copyTo(out) } != null
                 }
-                val uri = context.contentResolver.insert(
-                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values,
-                ) ?: return@runCatching false
-                context.contentResolver.openOutputStream(uri)?.use { out -> tmp.inputStream().copyTo(out) } != null
             }
         }.getOrDefault(false)
 
@@ -240,4 +256,36 @@ object DevicePortImpls {
     /** 日志文件名统一（FR-49 落盘器 Phase B 对齐 514 文件名正则）。 */
     fun logFileNameFor(date: Date = Date()): String =
         "worktool_(yyyy_MM_dd).log".let { SimpleDateFormat("worktool_(yyyy_MM_dd).log", Locale.US).format(date) }
+}
+
+/**
+ * R5（code review 遗留）：下载落盘原子语义——落盘阶段任何失败（空响应体/IO 中断/
+ * 写盘异常）删除半文件再返回 false，不留损坏产物（重传/复跑以「无残件」为前提）。
+ * [RemoteFiles.fetch] 落盘路径唯一入口；纯 JVM 可测（见 DevicePortImplsPortCleanupTest）。
+ */
+internal fun downloadTo(target: File, openBody: () -> java.io.InputStream?): Boolean {
+    target.parentFile?.mkdirs()
+    try {
+        target.outputStream().use { out ->
+            val src = openBody() ?: error("空响应体（无下载内容）")
+            src.copyTo(out)
+        }
+        return true
+    } catch (e: Exception) {
+        target.delete()
+        return false
+    }
+}
+
+/**
+ * R5（code review 遗留）：相册下载 tmp png 用后即删——[block] 成败（含异常/提前
+ * 返回）都经 finally 清理，缓存目录不留残件。[QrJoin.downloadAndSaveToAlbum] 唯一入口。
+ */
+internal inline fun <T> withTempPng(cacheDir: File, block: (File) -> T): T {
+    val tmp = File(cacheDir, "qr_${System.currentTimeMillis()}.png")
+    try {
+        return block(tmp)
+    } finally {
+        tmp.delete()
+    }
 }

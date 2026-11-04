@@ -243,9 +243,9 @@ func atoiDefault(s string) int {
 //
 // 语义边界（如实登记，不夸大）：
 //   - pause：devices.status='paused'。**强制执行范围 = 管理面指令提交门**
-//     （handleCommandSubmit 拒绝向 paused 设备提交，409 DEVICE_PAUSED）。网关
-//     连接层/兼容面路径未检查该状态——连接级强制待网关车道接线（dodDeferred，
-//     见 admin/README「边界与后续」）。
+//     （handleCommandSubmit 拒绝向 paused 设备提交，409 DEVICE_PAUSED）+ v2
+//     网关派发侧（gateway v2Session.flushBatch 跳过 paused 设备本轮冲刷并落
+//     pause_skip_dispatch 审计，2026-11-04 接线）。v1 兼容面派发路径仍未检查。
 //   - resume：status='active'。
 //   - unbind：robot_id 置空（v1 兼容面绑定解除）。注：2026-11-03 起同身份重配对
 //     （Ed25519 公钥不变）不再清空绑定（UpsertDevice 保留规则，会话 9 根因修复）；
@@ -266,7 +266,7 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dev, found, err := s.db.GetDevice(ctx, deviceID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	now := s.now().UTC()
@@ -286,7 +286,7 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.db.Exec(ctx, `UPDATE devices SET status=?, updated_at=? WHERE device_id=?`,
 			status, now.UnixMilli(), deviceID); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		kind := "admin_device_paused"
@@ -294,7 +294,7 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 			kind = "admin_device_resumed"
 		}
 		if err := s.db.InsertAudit(ctx, nil, kind, deviceID, "设备状态 → "+status, now); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"deviceId": deviceID, "status": status, "changed": true})
@@ -305,7 +305,7 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		deleted, err := s.db.DeleteDevice(ctx, deviceID)
 		if err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		_ = s.db.InsertAudit(ctx, nil, "device_delete", deviceID, "管理面删除设备（陈旧记录清理）", now)
@@ -321,12 +321,12 @@ func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.db.Exec(ctx, `UPDATE devices SET robot_id=NULL, updated_at=? WHERE device_id=?`,
 			now.UnixMilli(), deviceID); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		if err := s.db.InsertAudit(ctx, nil, "admin_device_unbound", deviceID,
 			"解除 robot 绑定（原 robotId="+dev.RobotID+"，v1 兼容面寻址与回调路由随之失效）", now); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"deviceId": deviceID, "robotId": "", "changed": true})
@@ -428,12 +428,12 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 	// → deviceId：与兼容面 resolveTarget 同口径——派发泵按 deviceId 索引会话）。
 	resolvedTarget := req.Target
 	if dev, ok, err := s.resolveDeviceForTarget(ctx, req.Target); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	} else if ok {
 		if dev.Status == "paused" {
 			(&adminError{http.StatusConflict, "DEVICE_PAUSED",
-				"设备 " + dev.DeviceID + " 已被管理面暂停（恢复后再提交；网关层强制待接线，见 admin/README）"}).write(w)
+				"设备 " + dev.DeviceID + " 已被管理面暂停（恢复后再提交；已排队指令在网关派发侧同步拦截）"}).write(w)
 			return
 		}
 		resolvedTarget = dev.DeviceID
@@ -583,7 +583,7 @@ SELECT command_id, target, command_type, payload, state, risk_class, dry_run, cr
 COALESCE(dispatched_at,0), COALESCE(ack_deadline,0), COALESCE(terminal_at,0), COALESCE(terminal_state,''), epoch, seq
 FROM commands WHERE command_id = ?`, commandID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if len(rows) != 1 {
@@ -644,7 +644,7 @@ FROM commands WHERE state = 'queued' AND dry_run = 0`
 	query += ` ORDER BY target, created_at`
 	rows, err := s.db.QueryDump(ctx, query, args...)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	position := map[string]int{}
@@ -672,7 +672,7 @@ func (s *Server) handleQueueRemove(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cmd, ok, err := s.db.GetCommand(ctx, commandID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if !ok {
@@ -709,7 +709,7 @@ func (s *Server) handleQueueClear(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	queued, err := s.pipeline.QueuedForTarget(ctx, target, 500)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	cleared := []string{}
@@ -741,7 +741,7 @@ func (s *Server) handleQueuePriority(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cmd, ok, err := s.db.GetCommand(ctx, commandID)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if !ok || cmd.State != "queued" {
@@ -750,7 +750,7 @@ func (s *Server) handleQueuePriority(w http.ResponseWriter, r *http.Request) {
 	}
 	queued, err := s.pipeline.QueuedForTarget(ctx, cmd.Target, 500)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	prev, origMS := 0, cmd.CreatedAt.UnixMilli()
@@ -769,7 +769,7 @@ func (s *Server) handleQueuePriority(w http.ResponseWriter, r *http.Request) {
 		head := queued[0].CreatedAt.UnixMilli()
 		if _, err := s.db.Exec(ctx,
 			`UPDATE commands SET created_at = ? WHERE command_id = ? AND state = 'queued'`, head-1, commandID); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		adjusted = true
@@ -846,7 +846,7 @@ func (s *Server) handleCallbacksList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rows, err := s.db.QueryDump(ctx, `SELECT robot_id, type, callback_url FROM openapi_callbacks ORDER BY robot_id, type`)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]adminCallbackRow, 0, len(rows))
@@ -911,7 +911,7 @@ func (s *Server) handleCallbacksBind(w http.ResponseWriter, r *http.Request, op 
 		existing, err := s.db.QueryDump(ctx,
 			`SELECT id FROM openapi_callbacks WHERE robot_id = ? AND type = ?`, req.RobotID, req.Type)
 		if err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		if len(existing) == 0 {
@@ -925,7 +925,7 @@ func (s *Server) handleCallbacksBind(w http.ResponseWriter, r *http.Request, op 
 INSERT INTO openapi_callbacks(robot_id, type, callback_url, created_ms, updated_ms) VALUES (?,?,?,?,?)
 ON CONFLICT(robot_id, type) DO UPDATE SET callback_url=excluded.callback_url, updated_ms=excluded.updated_ms`,
 		req.RobotID, req.Type, req.CallbackURL, now.UnixMilli(), now.UnixMilli()); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	_ = s.db.InsertAudit(ctx, nil, "admin_callback_"+op, req.RobotID,
@@ -952,7 +952,7 @@ func (s *Server) handleCallbacksDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	res, err := s.db.Exec(ctx, `DELETE FROM openapi_callbacks WHERE robot_id = ? AND type = ?`, robotID, typ)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	deleted, _ := res.RowsAffected()
@@ -1018,7 +1018,7 @@ func (s *Server) handleCallbackLogs(w http.ResponseWriter, r *http.Request) {
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryDump(ctx, query, args...)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(rows))
@@ -1102,7 +1102,7 @@ FROM command_events e LEFT JOIN commands c ON c.command_id = e.command_id`
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryDump(ctx, query, args...)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(rows))
@@ -1135,7 +1135,7 @@ func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryDump(ctx, query, args...)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(rows))
@@ -1240,7 +1240,7 @@ func (s *Server) handleGuardSettings(w http.ResponseWriter, r *http.Request) {
 	raw, _ := json.Marshal(cfg)
 	ctx := r.Context()
 	if err := s.settingPut(ctx, settingsKeyGuard, string(raw)); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	_ = s.db.InsertAudit(ctx, nil, "admin_settings_guard", "", string(raw), s.now().UTC())
@@ -1271,7 +1271,7 @@ func (s *Server) handleEncryptionSettings(w http.ResponseWriter, r *http.Request
 	}
 	ctx := r.Context()
 	if err := s.settingPut(ctx, settingsKeyEncryption, value); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	_ = s.db.InsertAudit(ctx, nil, "admin_settings_encryption", "",
@@ -1332,11 +1332,11 @@ func (s *Server) handleEventCallbackSettings(w http.ResponseWriter, r *http.Requ
 	}
 	raw, err := json.Marshal(adminEventCallbackSwitches{PushEventCallback: pushEvent, PushImage: pushImage})
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	if err := s.settingPut(ctx, settingsKeyEventCallbacks, string(raw)); err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	_ = s.db.InsertAudit(ctx, nil, "admin_settings_event_callbacks", "", string(raw), s.now().UTC())
@@ -1384,7 +1384,7 @@ func (s *Server) handleWhitelist(w http.ResponseWriter, r *http.Request) {
 		}
 		list, err := s.pipeline.WhitelistFor(ctx, target)
 		if err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"target": target, "recipients": list, "count": len(list)})
@@ -1409,7 +1409,7 @@ func (s *Server) handleWhitelist(w http.ResponseWriter, r *http.Request) {
 			req.AddedBy = "admin"
 		}
 		if err := s.pipeline.AddWhitelist(ctx, req.Target, req.Recipient, req.AddedBy); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		_ = s.db.InsertAudit(ctx, nil, "admin_whitelist_add", req.Target,
@@ -1423,7 +1423,7 @@ func (s *Server) handleWhitelist(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.pipeline.RemoveWhitelist(ctx, target, recipient); err != nil {
-			(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+			s.storeError(w, err)
 			return
 		}
 		_ = s.db.InsertAudit(ctx, nil, "admin_whitelist_remove", target, "recipient="+recipient, s.now().UTC())
@@ -1445,7 +1445,7 @@ func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
 SELECT substr(token_hash,1,8), robot_id, tenant, status, created_ms, COALESCE(last_used_ms,0)
 FROM api_tokens ORDER BY created_ms DESC LIMIT 500`)
 	if err != nil {
-		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
+		s.storeError(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(rows))
