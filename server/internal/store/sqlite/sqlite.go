@@ -27,6 +27,13 @@ import (
 // 令牌而静默铸出第二个 admin-scope 令牌（CR ADM-1）。W-M5 RBAC 落 scope 列后收编。
 const ReservedAdminScopeRobotID = "admin"
 
+// ReservedApproverScopeRobotID 为 api_tokens.robot_id 的第二保留值（approver
+// scope 编码，决议面独立身份令牌，P0-3 审批身份车道）。与 admin 同纪律：
+// 兼容面签发/鉴权两侧硬拒保留名（防为名叫 approver 的 robot 铸出业务令牌，
+// 或决议令牌经 v1:approver 寻址倒灌业务管线——同一枚令牌不得双面行走），
+// 常量单一来源两包共享防语义漂移。
+const ReservedApproverScopeRobotID = "approver"
+
 // Device 为设备注册行（v2 deviceId 主键；v1 兼容路径以 robot_id 桥接）。
 type Device struct {
 	DeviceID           string
@@ -1351,6 +1358,33 @@ FROM cron_jobs ORDER BY created_ms`)
 	}
 	defer rows.Close()
 	return collectCronJobs(rows)
+}
+
+// GetCronJob 取单条任务（管理面启停/删除前置校验）。
+func (db *DB) GetCronJob(ctx context.Context, jobID string) (CronJob, bool, error) {
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT job_id, name, tenant, actor, target, command_type, payload, cron_expr, risk_class, approval_id, enabled, last_fire_ms, next_fire_ms, last_command_id, created_ms
+FROM cron_jobs WHERE job_id = ?`, jobID)
+	if err != nil {
+		return CronJob{}, false, err
+	}
+	defer rows.Close()
+	out, err := collectCronJobs(rows)
+	if err != nil || len(out) != 1 {
+		return CronJob{}, false, err
+	}
+	return out[0], true, nil
+}
+
+// DeleteCronJob 删除任务行（管理面；历史触发的指令行保留——审计不可毁）。
+// 返回是否确有删除。
+func (db *DB) DeleteCronJob(ctx context.Context, jobID string) (bool, error) {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM cron_jobs WHERE job_id = ?`, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func collectCronJobs(rows *sql.Rows) ([]CronJob, error) {

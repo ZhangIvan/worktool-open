@@ -119,7 +119,9 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(K_GUIDE_SKIP_MIUI, false)
         set(value) = prefs.edit().putBoolean(K_GUIDE_SKIP_MIUI, value).apply()
 
-    private companion object {
+    // internal（安卓恢复链车道）：SharedPreferencesAppSettingsPersistence 与本类共用
+    // 同一 prefs 文件同一键（单一事实源，杜绝双份键字面量漂移）。
+    internal companion object {
         const val PREFS = "worktool_app_settings"
         const val K_SERVER = "server_address"
         const val K_LOG = "log_enabled"

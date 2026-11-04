@@ -97,6 +97,49 @@ func (s *Service) CreateCronJob(ctx context.Context, in CronJobInput) (sqlite.Cr
 // CronJobs 列出全部任务（运维/测试）。
 func (s *Service) CronJobs(ctx context.Context) ([]sqlite.CronJob, error) { return s.db.CronJobs(ctx) }
 
+// GetCronJob 取单条任务（管理面详情/启停前置校验）。
+func (s *Service) GetCronJob(ctx context.Context, jobID string) (sqlite.CronJob, bool, error) {
+	return s.db.GetCronJob(ctx, jobID)
+}
+
+// DeleteCronJob 删除任务（审计留痕；历史触发的指令行保留——审计不可毁）。
+func (s *Service) DeleteCronJob(ctx context.Context, jobID, by string) error {
+	deleted, err := s.db.DeleteCronJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return sqlite.ErrNotFound
+	}
+	return s.db.InsertAudit(ctx, nil, "cron_job_deleted", jobID, "by="+by, s.Now().UTC())
+}
+
+// PreviewCronNexts 解析表达式并预览 after 之后至多 n 次触发时刻（管理面创建前
+// 预览；解析失败原样返回 ParseCron 错误）。纯函数，不落库。
+func PreviewCronNexts(expr string, after time.Time, n int) ([]time.Time, error) {
+	if n < 1 {
+		n = 1
+	}
+	if n > 10 {
+		n = 10
+	}
+	parsed, err := ParseCron(expr)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]time.Time, 0, n)
+	t := after
+	for i := 0; i < n; i++ {
+		next, ok := parsed.Next(t)
+		if !ok {
+			break
+		}
+		out = append(out, next)
+		t = next
+	}
+	return out, nil
+}
+
 // SetCronJobEnabled 启停任务（审计留痕）。
 func (s *Service) SetCronJobEnabled(ctx context.Context, jobID string, enabled bool, by string) error {
 	if err := s.db.SetCronJobEnabled(ctx, jobID, enabled); err != nil {
@@ -198,10 +241,14 @@ func (s *Service) fireCronJob(ctx context.Context, job sqlite.CronJob, expr *Cro
 }
 
 // RunCronScheduler 周期扫描入口（main 挂 goroutine；间隔默认 15s，最小粒度=1 分钟）。
+// 活性登记（W-ops /readyz）：启动即写 cronPeriodMs/cronLastTickMs（首个周期前
+// readyz 不误报 not_started），此后每周期刷新 lastTick——探针超 3×周期判停摆。
 func (s *Service) RunCronScheduler(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
+	s.cronPeriodMs.Store(interval.Milliseconds())
+	s.MarkCronTick()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -209,6 +256,7 @@ func (s *Service) RunCronScheduler(ctx context.Context, interval time.Duration) 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
+			s.MarkCronTick()
 			if _, err := s.TickCron(ctx); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
@@ -218,6 +266,16 @@ func (s *Service) RunCronScheduler(ctx context.Context, interval time.Duration) 
 			}
 		}
 	}
+}
+
+// MarkCronTick 登记一次 cron 循环唤醒时刻（RunCronScheduler 启动时与每周期调用；
+// 原子写——/readyz 探针并发读）。
+func (s *Service) MarkCronTick() { s.cronLastTickMs.Store(time.Now().UnixMilli()) }
+
+// CronLoopLiveness 返回 cron 循环活性快照（lastTickMs, periodMs 毫秒；
+// periodMs=0 = 循环从未启动）。
+func (s *Service) CronLoopLiveness() (lastTickMs, periodMs int64) {
+	return s.cronLastTickMs.Load(), s.cronPeriodMs.Load()
 }
 
 // newID 生成业务行 ID（复用 wire UUID 生成器）。

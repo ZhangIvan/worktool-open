@@ -55,6 +55,8 @@ import java.util.Locale
 class SessionRuntime(
     context: Context,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val securityGatesStore: AppSettingsPersistence =
+        SharedPreferencesAppSettingsPersistence(context),
 ) {
 
     /** FR-52 暂停状态机（task-engine 所有者；主界面暂停/恢复按钮直接绑定）。 */
@@ -118,28 +120,104 @@ class SessionRuntime(
     private val logsDir: File get() = File(appContext.filesDir, "logs")
     private val logFile: File get() = LogStoreWriter.fileFor(logsDir, Date(clock()))
 
-    /** 由设置页写入（AppSettings.logEnabled 同步）。 */
+    /**
+     * 安卓恢复链车道：构造期属性初始化也会触发下方门 setter——装载完成前不落盘
+     * （声明序在四门字段之前，构造即先于其属性初始化执行）。
+     */
+    @Volatile
+    private var gatesPersistArmed = false
+
+    /** 最近一次从持久层装载的四门快照（TTL 关闭时落盘回填 expiredTtlHours 用，防丢用户设定）。 */
+    @Volatile
+    private var lastLoadedGates = SecurityGatesSnapshot(
+        dryRunEnabled = false,
+        skipExpiredEnabled = true,
+        expiredTtlHours = 2,
+        retryCount = 0,
+        logEnabled = false,
+    )
+
+    /** 由设置页写入（AppSettings.logEnabled 同步）；**写即落盘**（恢复链：变更时持久化）。 */
     @Volatile
     var logEnabled: Boolean = false
+        set(value) {
+            field = value
+            persistSecurityGates()
+        }
 
     /**
      * FR-54 端侧干跑门（主界面快捷操作「干跑开关」写入，AppSettings.dryRunEnabled
      * 同步；注入 DeviceSessionLoop.dryRunGate）——开 = 下发指令只产出预览零副作用。
+     * 写即落盘（恢复链：进程重建后干跑门不得静默失效回默认关）。
      */
     @Volatile
     var dryRunEnabled: Boolean = false
+        set(value) {
+            field = value
+            persistSecurityGates()
+        }
 
     /**
      * U4 过期跳过门（AppSettings.skipExpiredEnabled 同步；DeviceSessionLoop 注入
      * InboundCommandGate TTL）：null/≤0 = 不拦截；>0 = 指令接收时间距今超 TTL
-     * 直接回执 SKIPPED(过期)。
+     * 直接回执 SKIPPED(过期)。写即落盘（恢复链）。
      */
     @Volatile
     var expiredTtlMillis: Long? = null
+        set(value) {
+            field = value
+            persistSecurityGates()
+        }
 
-    /** 采纳项（docs/16 #12）：执行失败重试次数（AppSettings.retryCount 同步；0=首错即停）。 */
+    /** 采纳项（docs/16 #12）：执行失败重试次数（AppSettings.retryCount 同步；0=首错即停）。写即落盘（恢复链）。 */
     @Volatile
     var retryCount: Int = 0
+        set(value) {
+            field = value
+            persistSecurityGates()
+        }
+
+    init {
+        // 安卓恢复链：进程重建（boot 自启 BootCompletedReceiver / 前台服务自愈
+        // SessionForegroundService.selfHealSessionIfNeeded，均不经 MainActivity）时
+        // volatile 四门落回默认值——干跑门静默失效=预览变实跑、过期跳过失效=陈旧
+        // 指令照常执行。构造即从持久层恢复（MainActivity onCreate 经
+        // SessionRuntimeHolder.get 装配，同一加载面；MainActivity.onStart 的显式
+        // 同步仍保留，覆盖「Activity 重建但进程存活」路径）。装载失败 = 保持默认并
+        // 不阻断会话（runCatching：持久层异常不 kills 会话装配）。
+        val restored = runCatching { securityGatesStore.load() }.getOrNull()
+        if (restored != null) {
+            lastLoadedGates = restored
+            dryRunEnabled = restored.dryRunEnabled
+            expiredTtlMillis =
+                if (restored.skipExpiredEnabled) restored.expiredTtlHours * 3_600_000L else null
+            retryCount = restored.retryCount
+            logEnabled = restored.logEnabled
+        }
+        gatesPersistArmed = true
+    }
+
+    /**
+     * 四门当前值落盘（门 setter「变更时」+ [stop]「停止时」统一入口）。
+     * TTL 关闭（null）时 expiredTtlHours 回填最近装载值——只关开关不丢用户设定的小时数。
+     */
+    private fun persistSecurityGates() {
+        if (!gatesPersistArmed) return
+        val millis = expiredTtlMillis
+        val snapshot = SecurityGatesSnapshot(
+            dryRunEnabled = dryRunEnabled,
+            skipExpiredEnabled = (millis ?: 0L) > 0L,
+            // TTL 关闭（null）时保留 AppSettings 已存的小时数（用户设定不受覆盖）——
+            // 复核发现（verified medium）：回填 lastLoadedGates 陈旧值会覆盖设置页刚
+            // 写入的新小时数；改从持久层读回既存值（独立于内存 lastLoadedGates）。
+            expiredTtlHours = millis?.let { (it / 3_600_000L).toInt() }
+                ?: securityGatesStore.load().expiredTtlHours,
+            retryCount = retryCount,
+            logEnabled = logEnabled,
+        )
+        lastLoadedGates = snapshot
+        runCatching { securityGatesStore.save(snapshot) } // 落盘失败不影响运行时状态（尽力持久化）
+    }
 
     /** 当前会话心跳间隔（start 时取自凭据 heartbeatIntervalSeconds；主界面在线判定口径）。 */
     @Volatile
@@ -310,6 +388,7 @@ class SessionRuntime(
             appContext.getSharedPreferences("wt_runtime", android.content.Context.MODE_PRIVATE)
                 .edit().putString("prev_exit", "user_stop").apply()
         }
+        persistSecurityGates() // 安卓恢复链：停止时四门再落盘一次（幂等；防装载前变更未持久化的窗口）
         synchronized(lock) { loop = null }
         windowScheduler.stop() // U1：随会话停（无会话即无休眠语义）
         foreground?.stopRequested() // SP-2：无会话 → 无前台服务/常驻通知

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"cn.worktool.open/server/internal/statemachine"
@@ -55,6 +56,12 @@ type Service struct {
 	breaker *Breaker
 	// Now 为可注入时钟（TTL 扫描/幂等窗/墓碑保留期测试用）。
 	Now func() time.Time
+
+	// cron 循环活性（W-ops /readyz 探针）：cronPeriodMs 由 RunCronScheduler 启动
+	// 时登记（0=循环未启动），cronLastTickMs 每次唤醒刷新（UnixMilli）。原子读写
+	// ——探针与循环 goroutine 并发。
+	cronPeriodMs   atomic.Int64
+	cronLastTickMs atomic.Int64
 }
 
 // New 创建管线服务。

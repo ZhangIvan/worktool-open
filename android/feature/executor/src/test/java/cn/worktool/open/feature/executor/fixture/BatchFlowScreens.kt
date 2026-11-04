@@ -576,19 +576,111 @@ class ClockPageFixture(
     )
 }
 
-/** 日历会议页（511）：日期格 + 会议条目。 */
+/**
+ * 日历会议页（511）：日期格（测试侧拼装）+ 会议列表（分页懒加载容器，滚动经
+ * [appendNextMeetingPage] 追加下一页）。详情页导航闭包由测试 driver 装配侧注册
+ * （onClick 需 FakeUiDriver；详情屏用 [MeetingDetailFixture]）。
+ */
 class CalendarMeetingFixture(
+    /** 首屏会议条目（兼容旧单页形态）。 */
     meetings: List<String>,
     withList: Boolean = true,
+    /** 滚动分页数据（null=单页；首屏=第 1 页）。 */
+    pages: List<List<String>>? = null,
 ) {
-    val meetingNodes: Map<String, FakeExecutorNode> = meetings.associateWith {
-        fakeNode(text = it, resId = "com.tencent.wework:id/meeting_item_name", cls = TEXT_VIEW)
+    private val pageData: List<List<String>> = if (withList) {
+        pages ?: listOf(meetings)
+    } else {
+        emptyList()
     }
+
+    private var nextPage: Int = 1
+
+    /** 会议名 → 条目节点（可点击=详情导航生效锚点；511 逐会进详情）。 */
+    val meetingNodes: Map<String, FakeExecutorNode> = pageData.flatten().associateWith {
+        fakeNode(text = it, resId = "com.tencent.wework:id/meeting_item_name", cls = TEXT_VIEW, clickable = true)
+    }
+
+    /** 会议列表滚动容器（CALENDAR_MEETING_LIST_CONTAINER 选择器锚点）。 */
+    val listContainer: FakeExecutorNode = fakeNode(
+        cls = VIEW_GROUP,
+        resId = "com.tencent.wework:id/meeting_list_container",
+        scrollable = true,
+    ) {
+        pageData.firstOrNull()?.forEach { name -> add(meetingNodes.getValue(name)) }
+    }
+
+    /** 滚动追加下一页会议（页耗尽返回 false → 分页读取判「无新增」收敛）。 */
+    fun appendNextMeetingPage(): Boolean {
+        val next = pageData.getOrNull(nextPage) ?: return false
+        nextPage++
+        next.forEach { name -> listContainer.add(meetingNodes.getValue(name)) }
+        return true
+    }
+
+    /** 当前容器内全部会议名（断言用）。 */
+    fun meetingNames(): List<String?> = listContainer.children.map { it.textValue }
 
     val screen: FakeScreen = FakeScreen(
         name = "calendar-meeting",
         root = fakeNode(cls = VIEW_GROUP) {
-            if (withList) meetingNodes.values.forEach { add(it) }
+            add(listContainer)
+        },
+    )
+}
+
+/**
+ * 会议详情页（511）：预定/实际时间 + 组织人三字段（选择器 NOT_CALIBRATED 占位，
+ * resId 与 WeworkScreenRules.DEFAULTS 一一对应）。with*=false = 字段缺失（如实空串场景）。
+ */
+class MeetingDetailFixture(
+    scheduledTime: String,
+    actualTime: String,
+    organizer: String,
+    withScheduled: Boolean = true,
+    withActual: Boolean = true,
+    withOrganizer: Boolean = true,
+    screenName: String = "meeting-detail",
+) {
+    val scheduledNode: FakeExecutorNode? =
+        if (withScheduled) {
+            fakeNode(
+                text = scheduledTime,
+                resId = "com.tencent.wework:id/meeting_detail_scheduled_time",
+                cls = TEXT_VIEW,
+            )
+        } else {
+            null
+        }
+
+    val actualNode: FakeExecutorNode? =
+        if (withActual) {
+            fakeNode(
+                text = actualTime,
+                resId = "com.tencent.wework:id/meeting_detail_actual_time",
+                cls = TEXT_VIEW,
+            )
+        } else {
+            null
+        }
+
+    val organizerNode: FakeExecutorNode? =
+        if (withOrganizer) {
+            fakeNode(
+                text = organizer,
+                resId = "com.tencent.wework:id/meeting_detail_organizer",
+                cls = TEXT_VIEW,
+            )
+        } else {
+            null
+        }
+
+    val screen: FakeScreen = FakeScreen(
+        name = screenName,
+        root = fakeNode(cls = VIEW_GROUP) {
+            scheduledNode?.let { add(it) }
+            actualNode?.let { add(it) }
+            organizerNode?.let { add(it) }
         },
     )
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cn.worktool.open/server/internal/store/sqlite"
 )
 
 // TestRunRefusesNonLoopbackPlaintext（SR-09 反例·flag 路径）：
@@ -28,6 +30,37 @@ func TestRunRefusesNonLoopbackPlaintextFromEnv(t *testing.T) {
 	err := run(context.Background(), nil, []string{"WT_LISTEN=192.0.2.10:18080"}, io.Discard, io.Discard, nil)
 	if err == nil {
 		t.Fatal("run 应因 SR-09（env 声明非 loopback 明文）拒绝启动，实际返回 nil")
+	}
+}
+
+// TestRunIssueApproverToken（P0-3 审批身份车道）：-issue-approver-token 签发
+// 决议面令牌（打印 APPROVER_TOKEN= 后退出，不监听不起服），且库内仅存 hash。
+func TestRunIssueApproverToken(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wt.db")
+	stdout := &strings.Builder{}
+	if err := run(context.Background(), []string{"-issue-approver-token", "-db", dbPath}, nil, stdout, io.Discard, nil); err != nil {
+		t.Fatalf("签发决议令牌应干净退出，实际: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "APPROVER_TOKEN=") {
+		t.Fatalf("stdout 应含 APPROVER_TOKEN= 行，实际: %q", out)
+	}
+	rest, _, _ := strings.Cut(strings.SplitN(out, "APPROVER_TOKEN=", 2)[1], "\n")
+	raw := strings.TrimSpace(rest)
+	if len(raw) != 64 { // 256-bit hex
+		t.Fatalf("决议令牌应为 64 hex，got %d 字符", len(raw))
+	}
+	// 库内仅存 hash：api_tokens.robot_id='approver' 恰一行，原始值不落库。
+	// （run 已关闭 DB；此处重开只读校验。）
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryDump(context.Background(),
+		`SELECT robot_id, status FROM api_tokens WHERE robot_id='approver'`)
+	if err != nil || len(rows) != 1 || rows[0][0] != "approver" || rows[0][1] != "active" {
+		t.Fatalf("approver scope 令牌应恰一行 active：rows=%v err=%v", rows, err)
 	}
 }
 

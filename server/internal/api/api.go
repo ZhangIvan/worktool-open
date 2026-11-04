@@ -223,13 +223,75 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// handleReadyz 就绪探针：store 可 ping 即就绪（会话态随首条 WS 请求体现）。
+// handleReadyz 就绪探针（W-ops 增强）：在 store ping 之上增加三个后台循环的
+// 活性探针——派发泵（Hub）、回调 worker（Server.Outbox）、cron 循环（Pipeline）。
+// 判定口径：循环已启动（periodMs>0）且最近一次唤醒距今 ≤ 3×周期；超窗或从未
+// 启动 = not ready。状态区分：liveness（进程内循环是否活着）与 readiness
+// （DB + 活性全部通过，可接流量）。HTTP 200=ready / 503=not ready。
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
+	checks := map[string]any{}
+	dbErr := ""
 	if err := s.DB.Ping(ctx); err != nil {
-		writeErr(w, http.StatusServiceUnavailable, "NOT_READY", err.Error())
-		return
+		dbErr = err.Error()
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	checks["db"] = map[string]any{"ok": dbErr == "", "detail": dbErr}
+	ready := dbErr == ""
+	live := true
+	nowMs := time.Now().UnixMilli() // 活性以墙钟评估（循环登记亦用墙钟；不取注入时钟）
+	if s.Hub != nil {
+		lastTick, period := s.Hub.DispatchPumpLiveness()
+		st := loopProbe(nowMs, lastTick, period)
+		checks["dispatch_pump"] = st
+		live = live && st["ok"] == true
+	}
+	if s.Outbox != nil {
+		lastTick, period := s.Outbox.DeliverLiveness()
+		st := loopProbe(nowMs, lastTick, period)
+		checks["callback_worker"] = st
+		live = live && st["ok"] == true
+	}
+	if s.Pipeline != nil {
+		lastTick, period := s.Pipeline.CronLoopLiveness()
+		st := loopProbe(nowMs, lastTick, period)
+		checks["cron_loop"] = st
+		live = live && st["ok"] == true
+	}
+	ready = ready && live
+	liveness := "alive"
+	if !live {
+		liveness = "dead"
+	}
+	readiness := "ready"
+	if !ready {
+		readiness = "not_ready"
+	}
+	status := http.StatusOK
+	if !ready {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, map[string]any{
+		"status": readiness, "liveness": liveness, "readiness": readiness, "checks": checks,
+	})
+}
+
+// loopProbe 把单循环活性快照（lastTickMs, periodMs）折算为探针结论（nowMs 注入
+// ——纯函数可表测）：
+//   - periodMs=0（循环未启动）或 lastTickMs=0（已配置未唤醒）→ not_started；
+//   - 距最近唤醒 > 3×周期 → stalled；
+//   - 其余 → alive。
+func loopProbe(nowMs, lastTickMs, periodMs int64) map[string]any {
+	const stallFactor = 3
+	state := "alive"
+	ok := true
+	if periodMs <= 0 || lastTickMs <= 0 {
+		state, ok = "not_started", false
+	} else if age := nowMs - lastTickMs; age > stallFactor*periodMs {
+		state, ok = "stalled", false
+	}
+	return map[string]any{
+		"ok": ok, "state": state, "lastTickMs": lastTickMs, "periodMs": periodMs,
+		"maxAgeMs": stallFactor * periodMs,
+	}
 }

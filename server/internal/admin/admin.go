@@ -28,6 +28,13 @@ import (
 // 单一来源 = sqlite.ReservedAdminScopeRobotID，两包共享防语义漂移）。
 const adminScopeRobotID = sqlite.ReservedAdminScopeRobotID
 
+// approverScopeRobotID 为 api_tokens.robot_id 的第二保留值，编码 approver scope
+// （P0-3 审批身份车道：决议面独立身份令牌，IssueApproverToken 签发）。决议面
+// 只认 approver 令牌——admin 令牌决议=403 APPROVER_SCOPE_REQUIRED，结构性消灭
+// 「管理令牌自批」；反向 approver 令牌不得进提交管线（requireAdminSubmit）。
+// 保留名硬拒与 admin 同构：兼容面签发/寻址两侧拒 sqlite.ReservedApproverScopeRobotID。
+const approverScopeRobotID = sqlite.ReservedApproverScopeRobotID
+
 // pairingCodeTTL 配对码有效期（spec §5.1.1 冻结：10 分钟，不可配）。
 const pairingCodeTTL = 10 * time.Minute
 
@@ -124,6 +131,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/risk/{type}", s.handleRiskQuery)
 	mux.HandleFunc("/api/v1/admin/whitelist", s.handleWhitelist)
 	mux.HandleFunc("GET /api/v1/admin/tokens", s.handleTokensList)
+	// —— W-ops cron 定时任务管理面（cron_admin.go：列表/创建/预览/启停/删除）——
+	mux.HandleFunc("GET /api/v1/admin/cron-jobs", s.handleCronJobList)
+	mux.HandleFunc("POST /api/v1/admin/cron-jobs", s.handleCronJobCreate)
+	mux.HandleFunc("GET /api/v1/admin/cron-jobs/preview", s.handleCronJobPreview)
+	mux.HandleFunc("POST /api/v1/admin/cron-jobs/{jobId}/enabled", s.handleCronJobEnabled)
+	mux.HandleFunc("DELETE /api/v1/admin/cron-jobs/{jobId}", s.handleCronJobDelete)
 	if s.uiDir != "" {
 		// GET /admin → /admin/（相对解析）；/admin/ 下静态文件（index.html 等）。
 		mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
@@ -174,12 +187,18 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ---- 鉴权（Bearer admin token，api_tokens 表 + admin scope，仅存 hash） ----
+// ---- 鉴权（Bearer token，api_tokens 表 + scope=robot_id 保留值，仅存 hash） ----
 
-// requireAdmin 校验 Bearer 令牌：命中 api_tokens 且 status=active 且
-// robot_id=adminScopeRobotID（admin scope）。失败 401（统一 INVALID_TOKEN，
-// 不区分"不存在/已吊销/非 admin"以防探测面分类）。
-func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) *sqlite.APIToken {
+// requireScope 统一 Bearer scope 鉴权（requireAdmin/requireApprover/
+// requireAdminSubmit 单一来源，防三处语义漂移）：
+//   - 缺失 / 不存在 / 已吊销 → 401 INVALID_TOKEN（统一不分类，防探测面分类）；
+//   - 命中且 active 且 scope 匹配 → 放行（TouchAPIToken 留 last_used）；
+//   - 命中且 active 但为他面保留 scope（admin/approver）且 forbiddenCode 非空
+//     → 403 forbiddenCode（越权显式化，P0-3 scope 隔离：决议面拒 admin、
+//     提交面拒 approver）；业务 robot 令牌维持统一 401（CR ADM-1 口径不变）；
+//   - forbiddenCode 为空 = 旧语义（scope 不符并入 401）——既有管理端点不因
+//     本车道改行为，仅决议/提交两处严格化。
+func (s *Server) requireScope(w http.ResponseWriter, r *http.Request, scope, forbiddenCode, forbiddenMsg string) *sqlite.APIToken {
 	auth := r.Header.Get("Authorization")
 	raw, ok := strings.CutPrefix(auth, "Bearer ")
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -191,31 +210,89 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) *sqlite.AP
 		(&adminError{http.StatusInternalServerError, "STORE", err.Error()}).write(w)
 		return nil
 	}
-	if !found || t.Status != "active" || t.RobotID != adminScopeRobotID {
-		(&adminError{http.StatusUnauthorized, "INVALID_TOKEN", "token 无效、已吊销或非管理面令牌"}).write(w)
+	if !found || t.Status != "active" {
+		(&adminError{http.StatusUnauthorized, "INVALID_TOKEN", "token 无效或已吊销"}).write(w)
 		return nil
 	}
-	_ = s.db.TouchAPIToken(r.Context(), t.TokenHash, s.now().UTC())
-	return &t
+	if t.RobotID == scope {
+		_ = s.db.TouchAPIToken(r.Context(), t.TokenHash, s.now().UTC())
+		return &t
+	}
+	if forbiddenCode != "" && (t.RobotID == adminScopeRobotID || t.RobotID == approverScopeRobotID) {
+		(&adminError{http.StatusForbidden, forbiddenCode, forbiddenMsg}).write(w)
+		return nil
+	}
+	(&adminError{http.StatusUnauthorized, "INVALID_TOKEN", "token 无效、已吊销或非本面令牌"}).write(w)
+	return nil
+}
+
+// requireAdmin 校验 Bearer 令牌为 admin scope（既有端点旧语义：scope 不符并入
+// 401，防探测面分类）。
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) *sqlite.APIToken {
+	return s.requireScope(w, r, adminScopeRobotID, "", "")
+}
+
+// requireApprover 校验 Bearer 令牌为 approver scope（P0-3 决议面专用）：命中且
+// active 的 admin 令牌 → 403 APPROVER_SCOPE_REQUIRED——管理令牌结构性失去决议
+// 权（消灭自批）；决议只认 IssueApproverToken 签发的独立令牌。
+func (s *Server) requireApprover(w http.ResponseWriter, r *http.Request) *sqlite.APIToken {
+	return s.requireScope(w, r, approverScopeRobotID, "APPROVER_SCOPE_REQUIRED",
+		"决议须 approver scope 令牌（-issue-approver-token 签发）；管理面令牌不得决议（P0-3 结构性消灭自批）")
+}
+
+// requireAdminSubmit 指令提交面鉴权（P0-3 scope 隔离另一向）：approver 决议
+// 令牌 → 403 ADMIN_SCOPE_REQUIRED，决议身份不得操作指令管线；业务 robot 令牌
+// 仍 401。
+func (s *Server) requireAdminSubmit(w http.ResponseWriter, r *http.Request) *sqlite.APIToken {
+	return s.requireScope(w, r, adminScopeRobotID, "ADMIN_SCOPE_REQUIRED",
+		"指令提交须管理面令牌；approver 决议令牌不得进入提交管线（P0-3 scope 隔离）")
 }
 
 // IssueAdminToken 签发管理面令牌（随机 256-bit hex，仅存 SHA-256 hash，原始值
 // 一次返回）。v0.1 无 CLI 面：运维经一次 SQL 落 hash 或由集成方在装配处调用
 // （admin/README「首个管理令牌」）；W-M5 RBAC 车道接管完整生命周期。
 func (s *Server) IssueAdminToken(ctx context.Context) (string, error) {
+	return s.issueScopedToken(ctx, adminScopeRobotID, "admin_token_issued", "管理面令牌签发（仅存 hash）")
+}
+
+// IssueApproverToken 签发审批决议令牌（approver scope；P0-3：决议面独立身份，
+// 与管理令牌分持——决议人安全身份 = "approver-token:" + hash 前 16 hex，admin
+// 令牌在决议面 403 结构性消灭自批）。签发纪律与 IssueAdminToken 同源。
+func (s *Server) IssueApproverToken(ctx context.Context) (string, error) {
+	return s.issueScopedToken(ctx, approverScopeRobotID, "approver_token_issued", "审批决议令牌签发（approver scope，仅存 hash）")
+}
+
+// issueScopedToken 为 scope 令牌签发单一来源（随机 256-bit hex，仅存 SHA-256
+// hash，原始值一次返回；签发入审计 SR-12）。
+func (s *Server) issueScopedToken(ctx context.Context, scope, auditKind, auditMsg string) (string, error) {
 	raw, err := wire.RandomHex(32)
 	if err != nil {
 		return "", err
 	}
 	now := s.now().UTC()
-	if err := s.db.InsertAPIToken(ctx, sha256Hex(raw), adminScopeRobotID, "default", now); err != nil {
+	if err := s.db.InsertAPIToken(ctx, sha256Hex(raw), scope, "default", now); err != nil {
 		return "", err
 	}
-	if err := s.db.InsertAudit(ctx, nil, "admin_token_issued", adminScopeRobotID, "管理面令牌签发（仅存 hash）", now); err != nil {
+	if err := s.db.InsertAudit(ctx, nil, auditKind, scope, auditMsg, now); err != nil {
 		return "", err
 	}
-	s.log.Printf("admin: 签发管理面令牌（robot_id=%s，仅存 hash）", adminScopeRobotID)
+	s.log.Printf("admin: 签发 scope 令牌（robot_id=%s，仅存 hash）", scope)
 	return raw, nil
+}
+
+// scopedIdentity 以令牌 hash 前 16 hex 构造不可伪造的安全身份串（自由文本仅作
+// 展示后缀拼入，P0-3：身份 = 令牌，非请求体可声明字段）。hash 不足 16 位（手工
+// 落库的畸形行）取全长，不 panic。
+func scopedIdentity(prefix, tokenHash, display string) string {
+	h := tokenHash
+	if len(h) > 16 {
+		h = h[:16]
+	}
+	id := prefix + h
+	if display != "" {
+		id += " (" + display + ")"
+	}
+	return id
 }
 
 // ---- POST /api/v1/admin/pairing-codes ----
@@ -492,12 +569,19 @@ type decisionRequest struct {
 	Reason   string `json:"reason"`
 }
 
-// handleApprovalDecision 审批决议（L2 approver 面）。决议语义全部复用
-// scheduler.DecideApproval（guard.go）：approver 必填且 ≠ actor（FR-53 独立
-// approver，自批拒绝 403）、仅 pending 可决议（重复决议 409，本 handler 预检
-// 映射 + 服务端原子 UPDATE 兜底）、决议入审计（SR-12）。
+// handleApprovalDecision 审批决议（L2 approver 面，P0-3 审批身份车道）。鉴权 =
+// requireApprover（只认 approver scope 令牌；admin 令牌决议=403
+// APPROVER_SCOPE_REQUIRED，结构性消灭「管理令牌自批」）。决议人安全身份 =
+// "approver-token:" + 令牌 hash 前 16 hex，请求体自由文本 approver 降级为展示
+// 后缀拼入该串（身份来自令牌而非请求体可声明字段）；actor 侧对称改造见
+// handleCommandSubmit（"admin-token:" + hash 前 16），两侧前缀恒异 →
+// DecideApproval 的 approver≠actor 文本比较天然成立，FR-53 独立 approver 语义
+// 保持。决议语义全部复用 scheduler.DecideApproval（guard.go）：仅 pending 可
+// 决议（重复决议 409，本 handler 预检映射 + 服务端原子 UPDATE 兜底）、决议入
+// 审计（SR-12）。
 func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	tok := s.requireApprover(w, r)
+	if tok == nil {
 		return
 	}
 	approvalID := r.PathValue("approvalId")
@@ -514,8 +598,9 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 	}
 	req.Approver = strings.TrimSpace(req.Approver)
 	req.Reason = strings.TrimSpace(req.Reason)
-	if req.Approver == "" || len(req.Approver) > 64 {
-		(&adminError{http.StatusBadRequest, "INVALID_APPROVER", "approver 必填且 ≤64 字符"}).write(w)
+	// 自由文本 approver 可选（留空=仅以令牌身份留痕）；填写时仅作展示后缀，≤64 字符。
+	if len(req.Approver) > 64 {
+		(&adminError{http.StatusBadRequest, "INVALID_APPROVER", "approver 留空=仅以决议令牌身份留痕；填写时 ≤64 字符（展示后缀）"}).write(w)
 		return
 	}
 	if len(req.Reason) > 512 {
@@ -532,6 +617,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 		(&adminError{http.StatusBadRequest, "INVALID_DECISION", "decision 须为 approve|reject"}).write(w)
 		return
 	}
+	approver := scopedIdentity("approver-token:", tok.TokenHash, req.Approver)
 	// 预检映射 404/409（决议原子性仍由 DecideApproval 的条件 UPDATE 保证）。
 	a, ok, err := s.db.GetApproval(r.Context(), approvalID)
 	if err != nil {
@@ -547,7 +633,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 			fmt.Sprintf("审批 %s 状态=%s（仅 pending 可决议；重复决议拒绝）", approvalID, a.Status)}).write(w)
 		return
 	}
-	if err := s.pipeline.DecideApproval(r.Context(), approvalID, req.Approver, approve, req.Reason); err != nil {
+	if err := s.pipeline.DecideApproval(r.Context(), approvalID, approver, approve, req.Reason); err != nil {
 		var ge *scheduler.GuardError
 		if errors.As(err, &ge) {
 			// 自批拒绝（APPROVER_CONFLICT）等门冲突 → 403。
@@ -561,9 +647,9 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 	if approve {
 		status = "approved"
 	}
-	s.log.Printf("admin: 审批 %s 决议 %s（approver=%s actor=%s）", approvalID, status, req.Approver, a.Actor)
+	s.log.Printf("admin: 审批 %s 决议 %s（approver=%s actor=%s）", approvalID, status, approver, a.Actor)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"approvalId": approvalID, "status": status, "approver": req.Approver, "actor": a.Actor,
+		"approvalId": approvalID, "status": status, "approver": approver, "actor": a.Actor,
 	})
 }
 
@@ -589,9 +675,9 @@ func (s *Server) handleOpenAPITokenIssue(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	robotID := r.PathValue("robotId")
-	if robotID == "" || robotID == adminScopeRobotID {
+	if robotID == "" || robotID == adminScopeRobotID || robotID == approverScopeRobotID {
 		(&adminError{http.StatusForbidden, "ROBOT_FORBIDDEN",
-			"robotId 为空或管理面保留名 admin——不得签发兼容面令牌（CR ADM-1）"}).write(w)
+			"robotId 为空或保留名（admin=管理面 / approver=决议面）——不得签发兼容面令牌（CR ADM-1 / P0-3）"}).write(w)
 		return
 	}
 	tenant := "default"
@@ -663,9 +749,9 @@ func (s *Server) handleOpenAPITokenRevoke(w http.ResponseWriter, r *http.Request
 		return
 	}
 	robotID := r.PathValue("robotId")
-	if robotID == "" || robotID == adminScopeRobotID {
+	if robotID == "" || robotID == adminScopeRobotID || robotID == approverScopeRobotID {
 		(&adminError{http.StatusForbidden, "ROBOT_FORBIDDEN",
-			"robotId 为空或管理面保留名 admin——兼容面吊销不适用于管理面令牌"}).write(w)
+			"robotId 为空或保留名（admin=管理面 / approver=决议面）——兼容面吊销不适用于 scope 令牌"}).write(w)
 		return
 	}
 	res, err := s.db.Exec(r.Context(),

@@ -143,6 +143,10 @@ class MainActivity : Activity() {
         // 进程级唯一运行时（SessionRuntimeHolder）：会话生命周期归前台服务，
         // 主界面只是观测面/控制面（BP-5/SP-2 改造）。
         runtime = SessionRuntimeHolder.get(this)
+        // 安卓恢复链：四门（dryRun/skipExpired/retryCount/logEnabled）初始值已在上一行
+        // 触发的 SessionRuntime 构造时经 AppSettingsPersistence 恢复（boot 自启/服务自愈
+        // 同一加载面）；本 activity 再显式同步 logEnabled（覆盖「进程存活、Activity 重建」
+        // 路径，此时构造加载不重跑），其余三门 onStart 统一同步。
         runtime.logEnabled = settings.logEnabled
         runtime.onCredentialRevoked = {
             // 902 凭据撤销（服务端强制重配对）：停会话（连带停前台服务）→ 清凭据 → 引导流。

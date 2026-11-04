@@ -220,6 +220,12 @@ func (s *Server) IssueOpenAPIToken(ctx context.Context, robotID, tenant string) 
 	if robotID == sqlite.ReservedAdminScopeRobotID {
 		return "", fmt.Errorf("robot_id %q 为管理面保留名（admin scope），不得签发兼容面令牌", robotID)
 	}
+	// P0-3（审批身份车道）：approver 为决议面保留名——同 admin 纪律，兼容面
+	// 不得为名叫 approver 的 robot 铸出令牌（否则同一枚令牌既走业务管线又过
+	// admin 决议面 requireApprover，scope 隔离被击穿）。
+	if robotID == sqlite.ReservedApproverScopeRobotID {
+		return "", fmt.Errorf("robot_id %q 为决议面保留名（approver scope），不得签发兼容面令牌", robotID)
+	}
 	if tenant == "" {
 		tenant = "default"
 	}
@@ -251,6 +257,12 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request, robotID stri
 	if robotID == sqlite.ReservedAdminScopeRobotID {
 		return sqlite.APIToken{}, &apiError{http.StatusForbidden, "ROBOT_MISMATCH",
 			"robotId=admin 为管理面保留名：admin 令牌不得用于 /openapi/v1 兼容面寻址"}
+	}
+	// P0-3：approver 同构硬拒——决议令牌只能用于 admin 面决议端点，不得经
+	// v1:approver 寻址倒灌业务管线（scope 隔离另一向的兼容面出口封死）。
+	if robotID == sqlite.ReservedApproverScopeRobotID {
+		return sqlite.APIToken{}, &apiError{http.StatusForbidden, "ROBOT_MISMATCH",
+			"robotId=approver 为决议面保留名：approver 令牌不得用于 /openapi/v1 兼容面寻址"}
 	}
 	auth := r.Header.Get("Authorization")
 	raw, ok := strings.CutPrefix(auth, "Bearer ")

@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -56,6 +57,12 @@ type Hub struct {
 	// 显式 DispatchQueued 并发时防止同一指令被取走两次——双发帧 + 第二次
 	// MarkDispatched 409；T3.2 修复的既有竞态）。
 	flushMu sync.Mutex
+
+	// 调度泵活性（W-ops /readyz 探针）：pumpPeriodMs 由 RunDispatchPump 启动时
+	// 登记（0=泵未启动），pumpLastTickMs 每次唤醒刷新（UnixMilli）。原子读写
+	// ——探针与泵 goroutine 并发。
+	pumpPeriodMs   atomic.Int64
+	pumpLastTickMs atomic.Int64
 
 	// EventBypass 为 socketType=2 事件帧旁路（W-M6 接线，api.Server 装配时注入
 	// = HandleEventFrameItems：102~105 被动事件 + 511/512/513/515 查询推送 →
@@ -213,7 +220,11 @@ func (h *Hub) DispatchAllQueued(ctx context.Context) (int, error) {
 }
 
 // RunDispatchPump 周期调度（提交后最迟一个周期内下发；会话建立时即时冲刷）。
+// 活性登记（W-ops /readyz）：启动即写 pumpPeriodMs/pumpLastTickMs（首个周期前
+// readyz 不误报 not_started），此后每周期刷新 lastTick——探针超 3×周期判停摆。
 func (h *Hub) RunDispatchPump(ctx context.Context, interval time.Duration) error {
+	h.pumpPeriodMs.Store(interval.Milliseconds())
+	h.MarkDispatchPumpTick()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -221,11 +232,22 @@ func (h *Hub) RunDispatchPump(ctx context.Context, interval time.Duration) error
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
+			h.MarkDispatchPumpTick()
 			if _, err := h.DispatchAllQueued(ctx); err != nil {
 				h.Log.Printf("gateway: dispatch pump: %v", err)
 			}
 		}
 	}
+}
+
+// MarkDispatchPumpTick 登记一次调度泵唤醒时刻（启动时与每周期调用；原子写
+// ——/readyz 探针并发读）。
+func (h *Hub) MarkDispatchPumpTick() { h.pumpLastTickMs.Store(time.Now().UnixMilli()) }
+
+// DispatchPumpLiveness 返回调度泵活性快照（lastTickMs, periodMs 毫秒；
+// periodMs=0 = 泵从未启动）。
+func (h *Hub) DispatchPumpLiveness() (lastTickMs, periodMs int64) {
+	return h.pumpLastTickMs.Load(), h.pumpPeriodMs.Load()
 }
 
 // ---- v2 出站签名帧构造 ----

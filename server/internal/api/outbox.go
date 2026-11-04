@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"cn.worktool.open/server/internal/scheduler"
@@ -63,6 +64,12 @@ type OutboxWorker struct {
 	reply *scheduler.Service
 	// warnedNoReceiver：无接收器一次性告警（状态翻转重复告警抑制）。
 	warnedNoReceiver bool
+
+	// 投递 worker 活性（W-ops /readyz 探针）：periodMs 构造时登记（PollInterval
+	// 缺省 250ms），lastTickMs 在 Run 启动时与 DeliverDue 每轮入口刷新（UnixMilli）
+	// ——Run 周期与测试直调 DeliverDue 同路径。原子读写（探针并发）。
+	periodMs   atomic.Int64
+	lastTickMs atomic.Int64
 }
 
 // SetReplyPipeline 注入代回复指令管线（K5；不绕过 FR-53——复用同一管线实例，
@@ -110,8 +117,19 @@ func NewOutboxWorker(db *sqlite.DB, cfg OutboxConfig, logger interface{ Printf(s
 			},
 		}
 	}
-	return &OutboxWorker{db: db, cfg: cfg, client: client, now: time.Now, log: logger}, nil
+	w := &OutboxWorker{db: db, cfg: cfg, client: client, now: time.Now, log: logger}
+	w.periodMs.Store(cfg.PollInterval.Milliseconds()) // 活性探针周期（PollInterval 缺省已收敛 >0）
+	return w, nil
 }
+
+// DeliverLiveness 返回投递 worker 活性快照（lastTickMs, periodMs 毫秒；
+// periodMs=0 = worker 未构造完成）。
+func (w *OutboxWorker) DeliverLiveness() (lastTickMs, periodMs int64) {
+	return w.lastTickMs.Load(), w.periodMs.Load()
+}
+
+// markDeliverTick 登记一次投递轮唤醒（原子写——/readyz 探针并发读）。
+func (w *OutboxWorker) markDeliverTick() { w.lastTickMs.Store(time.Now().UnixMilli()) }
 
 func isLoopbackHostURL(u *url.URL) bool {
 	host := u.Hostname()
@@ -140,8 +158,10 @@ func VerifySign(secret string, tsMillis int64, body []byte, signatureHex string)
 var errCallbackSecretMissing = errors.New("api/outbox: 签名密钥未配置——拒绝投递（行保持 pending；经 -callback-secret 配置后恢复）")
 
 // Run 启动投递循环（周期 claim 待投递行 → POST → 状态机：delivered/retry/dead）。
+// 启动即登记活性（W-ops /readyz：首个周期前探针不误报 not_started）。
 func (w *OutboxWorker) Run(ctx context.Context) error {
 	w.log.Printf("api/outbox: worker 启动 poll=%v global_url=%q", w.cfg.PollInterval, w.cfg.CallbackURL)
+	w.markDeliverTick()
 	tk := time.NewTicker(w.cfg.PollInterval)
 	defer tk.Stop()
 	for {
@@ -161,6 +181,7 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 // apifox 兼容面 CRUD 登记处）> 部署级全局 CallbackURL；两者皆空 → 行保持
 // pending（禁外网缺省形态不变）。
 func (w *OutboxWorker) DeliverDue(ctx context.Context) error {
+	w.markDeliverTick() // 活性探针（/readyz）：每轮入口刷新（Run 周期与测试直调同路径）
 	if w.cfg.CallbackURL == "" {
 		has, err := w.hasRobotCallbacks(ctx)
 		if err != nil {

@@ -17,6 +17,7 @@ import cn.worktool.open.feature.executor.fake.FakeScreen
 import cn.worktool.open.feature.executor.fixture.GroupDetailFixture
 import cn.worktool.open.feature.executor.fixture.GroupSettingsFixture
 import cn.worktool.open.feature.executor.fixture.HomeFixture
+import cn.worktool.open.feature.executor.fixture.MeetingDetailFixture
 import cn.worktool.open.feature.executor.fixture.WorkbenchFixture
 import cn.worktool.open.feature.executor.intent.CommandIntent
 import cn.worktool.open.feature.executor.risk.RiskLevel
@@ -29,8 +30,8 @@ import org.junit.Test
 
 /**
  * 512/515/511 群信息·会议查询族执行器场景（docs/10 B3，L0）：
- * 512 成功/已退群失败（GROUP_EXITED）；515 成功/无备注空串；
- * 511 有会议推送/无会议不推送；512/515 同态对照断言。
+ * 512 成功/已退群失败（GROUP_EXITED）；515 成功/无备注空串/已退群分支仍成功；
+ * 511 分页滚动采集+逐会详情推送（详情缺失如实失败）/无会议不推送；512/515 同态对照断言。
  */
 class GroupInfoQueryExecutorsTest {
 
@@ -161,9 +162,71 @@ class GroupInfoQueryExecutorsTest {
         assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
     }
 
+    @Test
+    fun `515已退群分支-搜索到已退出群聊仍成功推送群名备注（对照512同态失败）`() {
+        // 同一 world：512 见 GROUP_EXITED 失败（上方负例），515 契约=已退群可搜索仍算成功
+        val driver = groupWorld(exitedMarker = true)
+        val registry = ExecutorRegistry.of(GetGroupNameInfoExecutor(structured, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetGroupNameInfo(groupName = "技术交流群-南京"),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        val (_, payload) = structured.results.single()
+        assertEquals("技术交流群", payload["groupName"]!!.toString().trim('"'))
+        assertEquals("技术交流群-南京", payload["groupRemark"]!!.toString().trim('"'))
+    }
+
+    @Test
+    fun `515已退群分支-退群且群名不可读如实失败零推送`() {
+        // 群设置页：群名标题节点在场但文本为空 + 退群标记 → 对照上游 201104「未找到群聊」
+        val listKey = "技术交流群"
+        val home = HomeFixture(conversations = listOf(listKey))
+        val chat = ChatFixture(title = listKey)
+        val settings = FakeScreen(
+            name = "group-settings-exited-blank",
+            root = fakeNode(cls = cn.worktool.open.feature.executor.fake.VIEW_GROUP) {
+                add(fakeNode(text = "", resId = "com.tencent.wework:id/group_settings_title", cls = TEXT_VIEW))
+                add(fakeNode(text = "无法在已退出的群聊中发送消息", cls = TEXT_VIEW))
+            },
+        )
+        val driver = FakeUiDriver(clock).apply {
+            show(home.screen)
+            onClick(home.screen, home.conversationNodes.getValue(listKey)) { push(chat.screen) }
+            onClick(chat.screen, chat.titleNode) { push(settings) }
+        }
+        val registry = ExecutorRegistry.of(GetGroupNameInfoExecutor(structured, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetGroupNameInfo(groupName = listKey),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.FAILED, report.status)
+        assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
+        assertTrue("失败留痕=退群分支口径", report.errorReason!!.contains("搜索到已退出群聊"))
+        assertEquals(0, structured.results.size)
+    }
+
     // ---- 511 ----
 
-    private fun meetingWorld(meetings: List<String>): FakeUiDriver {
+    /**
+     * 511 世界（安卓恢复链车道扩展）：会议列表页（分页懒加载容器）+ 每会详情页。
+     * [meetings]=首屏；[nextPages]=滚动追加页；[detailFor] 返回 null = 点击后详情
+     * 永不出现（NODE_NOT_FOUND 负例，不虚构读取成功）。
+     */
+    private fun meetingWorld(
+        meetings: List<String>,
+        nextPages: List<List<String>> = emptyList(),
+        detailFor: (String) -> MeetingDetailFixture? = {
+            MeetingDetailFixture(
+                scheduledTime = "2026-11-05 14:00",
+                actualTime = "未开始",
+                organizer = "组织者甲",
+                screenName = "detail-$it",
+            )
+        },
+    ): FakeUiDriver {
         val home = HomeFixture(conversations = listOf("工作群"))
         val workbench = WorkbenchFixture(withCalendar = true)
         home.screen.root.children.last().add(workbench.workbenchTab)
@@ -174,13 +237,23 @@ class GroupInfoQueryExecutorsTest {
                 add(fakeNode(text = "5日", cls = TEXT_VIEW, clickable = true))
             },
         )
-        val meetingPage = CalendarMeetingFixture(meetings = meetings)
+        val meetingPage = CalendarMeetingFixture(
+            meetings = meetings,
+            pages = (listOf(meetings) + nextPages).takeIf { nextPages.isNotEmpty() },
+        )
         val driver = FakeUiDriver(clock).apply {
             show(home.screen)
             onClick(home.screen, workbench.workbenchTab) { push(workbench.screen) }
             workbench.calendarEntry?.let { onClick(workbench.screen, it) { push(calendarScreen) } }
             calendarScreen.root.children.first { it.textValue == "5日" }.let { cell ->
                 onClick(calendarScreen, cell) { push(meetingPage.screen) }
+            }
+            onScroll(meetingPage.screen, meetingPage.listContainer) { meetingPage.appendNextMeetingPage() }
+            (listOf(meetings) + nextPages).flatten().forEach { name ->
+                meetingPage.meetingNodes[name]?.let { node ->
+                    val detail = detailFor(name)
+                    onClick(meetingPage.screen, node) { detail?.let { push(it.screen) } }
+                }
             }
         }
         return driver
@@ -200,6 +273,69 @@ class GroupInfoQueryExecutorsTest {
         val (_, payload) = structured.results.single()
         assertTrue(payload["meetingInfoList"].toString().contains("产品评审"))
         assertEquals("2026-11-05", payload["date"]!!.toString().trim('"'))
+        val firstMeeting = payload["meetingInfoList"]!!.toString()
+        assertTrue("详情字段已读（不再推空串冒充）", firstMeeting.contains("2026-11-05 14:00"))
+        assertTrue(firstMeeting.contains("组织者甲"))
+    }
+
+    @Test
+    fun `511成功-会议列表滚动分页采集后再逐会读详情`() {
+        val driver = meetingWorld(
+            meetings = listOf("10:00 技术周会"),
+            nextPages = listOf(listOf("14:00 产品评审")),
+        )
+        val registry = ExecutorRegistry.of(GetMeetingInfoExecutor(structured, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetMeetingInfo(date = "2026-11-05"),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        val (_, payload) = structured.results.single()
+        val list = payload["meetingInfoList"].toString()
+        assertTrue("首页会议已采集", list.contains("技术周会"))
+        assertTrue("滚动第 2 页会议已采集", list.contains("产品评审"))
+    }
+
+    @Test
+    fun `511详情-未开始会议实际时间缺失如实空串仍成功`() {
+        val driver = meetingWorld(
+            meetings = listOf("14:00 产品评审"),
+            detailFor = {
+                MeetingDetailFixture(
+                    scheduledTime = "2026-11-05 14:00",
+                    actualTime = "",
+                    organizer = "组织者甲",
+                    withActual = false,
+                )
+            },
+        )
+        val registry = ExecutorRegistry.of(GetMeetingInfoExecutor(structured, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetMeetingInfo(date = "2026-11-05"),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        val (_, payload) = structured.results.single()
+        assertTrue(payload["meetingInfoList"].toString().contains("\"actualMeetingTime\":\"\""))
+    }
+
+    @Test
+    fun `511负例-会议详情页未出现如实失败零推送`() {
+        val driver = meetingWorld(
+            meetings = listOf("14:00 产品评审"),
+            detailFor = { null }, // 点击后详情页永不出现（NOT_CALIBRATED 占位/界面不匹配形态）
+        )
+        val registry = ExecutorRegistry.of(GetMeetingInfoExecutor(structured, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetMeetingInfo(date = "2026-11-05"),
+            registry,
+        )
+
+        assertEquals(ExecutionStatus.FAILED, report.status)
+        assertEquals(ExecutorErrorCodes.NODE_NOT_FOUND, report.errorCode)
+        assertEquals("不虚构详情读取成功：失败路径零推送", 0, structured.results.size)
     }
 
     @Test

@@ -109,3 +109,15 @@ func validateRequired(commandType int, item map[string]json.RawMessage) error {
 	}
 	return nil
 }
+
+// ValidateRequired 为 validateRequired 的导出包装（载荷字符串形态）：解析 JSON
+// 对象后走兼容面提交同一张必填表。admin 注册表一致性校验消费（catalog
+// example/最小载荷经同一必填表机检——单一事实源，不旁路不复刻）。payload 须
+// 为 JSON 对象，解析失败返回错误；表外类型 = 透传不校验（与提交路径同语义）。
+func ValidateRequired(commandType int, payload string) error {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &item); err != nil {
+		return fmt.Errorf("载荷须为 JSON 对象: %w", err)
+	}
+	return validateRequired(commandType, item)
+}

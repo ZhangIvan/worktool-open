@@ -54,6 +54,10 @@ type Config struct {
 	// IssueAdminToken 启动即签发一枚管理面令牌并打印后退出（一次性运维入口；
 	// 仅存 hash，W-M5 RBAC 车道接管完整生命周期前的最小装配路径）。
 	IssueAdminToken bool
+	// IssueApproverToken 启动即签发一枚审批决议令牌（approver scope）并打印后
+	// 退出（P0-3 审批身份车道：决议面独立身份，与管理令牌分持——admin 令牌在
+	// 决议面 403 结构性消灭自批）。
+	IssueApproverToken bool
 	// EnableV1Compat 挂载 v1 兼容 WS 面 /webserver/wework/{robotId}（H-2，安全
 	// 审计 TOP5：robotId 即身份的弱鉴权是上游已知事实，该面**默认不挂载**，
 	// 仅迁移期部署经 flag -enable-v1-compat / env WT_ENABLE_V1_COMPAT 显式开启）。
@@ -109,6 +113,7 @@ func Load(argv []string, environ []string) (Config, error) {
 	fs.BoolVar(&cfg.AllowNonLoopbackCallback, "allow-nonloopback-callback", cfg.AllowNonLoopbackCallback, "显式放行非 loopback 回调接收器（默认 false；外网回调部署侧须 TLS）")
 	fs.StringVar(&cfg.AdminUIDir, "admin-ui", cfg.AdminUIDir, "管理台单页 UI 目录（默认空=仅 API；指向仓库 admin/ 即伺服 /admin/）")
 	fs.BoolVar(&cfg.IssueAdminToken, "issue-admin-token", false, "签发一枚管理面令牌（打印原始值后退出；仅存 SHA-256 hash）")
+	fs.BoolVar(&cfg.IssueApproverToken, "issue-approver-token", false, "签发一枚审批决议令牌（approver scope，打印原始值后退出；仅存 SHA-256 hash）")
 	fs.BoolVar(&cfg.EnableV1Compat, "enable-v1-compat", cfg.EnableV1Compat, "挂载 v1 兼容 WS 面 /webserver/wework/{robotId}（默认 false；弱鉴权面仅迁移期显式开启，H-2）")
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, fmt.Errorf("config: 解析命令行参数失败: %w", err)

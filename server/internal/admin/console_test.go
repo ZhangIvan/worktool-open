@@ -165,9 +165,9 @@ func TestAdminCommandSubmitApprovalFlow(t *testing.T) {
 	if approvalID == "" {
 		t.Fatalf("应携带 approvalId：%v", b)
 	}
-	// 决议（独立 approver）后携审批号提交 → 201 queued。
-	if st, _ := f.call(t, http.MethodPost, "/api/v1/admin/approvals/"+approvalID+"/decision",
-		`{"approver":"bob","decision":"approve","reason":"复核通过"}`, true); st != http.StatusOK {
+	// 决议（P0-3：只认 approver 令牌）后携审批号提交 → 201 queued。
+	if st, _ := f.callTok(t, http.MethodPost, "/api/v1/admin/approvals/"+approvalID+"/decision",
+		`{"approver":"member-b","decision":"approve","reason":"复核通过"}`, f.approverToken); st != http.StatusOK {
 		t.Fatalf("决议应 200，got %d", st)
 	}
 	st, b = f.call(t, http.MethodPost, "/api/v1/admin/commands",
@@ -550,14 +550,17 @@ func TestSettingsEndpoints(t *testing.T) {
 		t.Fatalf("令牌列表 status=%d", st)
 	}
 	toks, _ := b["tokens"].([]any)
-	if len(toks) != 2 { // fixture 签发 1 枚 + 本枚
-		t.Fatalf("令牌应 2 枚，got %v", toks)
+	if len(toks) != 3 { // fixture 签发（管理+决议，P0-3）+ 本枚
+		t.Fatalf("令牌应 3 枚，got %v", toks)
 	}
-	foundAdmin := false
+	foundAdmin, foundApprover := false, false
 	for _, tk := range toks {
 		m := tk.(map[string]any)
 		if m["scope"] == "admin（管理面）" {
 			foundAdmin = true
+		}
+		if m["scope"] == "approver（决议面，P0-3）" {
+			foundApprover = true
 		}
 		if len(m["hashPrefix8"].(string)) != 8 {
 			t.Fatalf("hash 前缀应 8 位：%v", m)
@@ -565,6 +568,9 @@ func TestSettingsEndpoints(t *testing.T) {
 	}
 	if !foundAdmin {
 		t.Fatalf("令牌列表应标注 admin scope：%v", toks)
+	}
+	if !foundApprover {
+		t.Fatalf("令牌列表应标注 approver scope（P0-3）：%v", toks)
 	}
 	// 响应不得含任何令牌原始值（仅 hash 投影）。
 	rawJSON, _ := json.Marshal(b)

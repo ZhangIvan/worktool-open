@@ -200,6 +200,31 @@ object WeworkSelectorIds {
     /** 日历会议条目名称文本（511）。 */
     const val MEETING_LIST_ITEM = "wework.calendar.meeting_item"
 
+    /**
+     * 日历会议列表滚动容器（511 分页读取）。
+     * **NOT_CALIBRATED（2026-11-04）**：resourceId 为占位，未经 D1 真机 dump 校准。
+     */
+    const val CALENDAR_MEETING_LIST_CONTAINER = "wework.calendar.meeting_list_container"
+
+    /**
+     * 会议详情「预定时间」值文本（511 详情页锚点：详情未渲染完不读字段）。
+     * **NOT_CALIBRATED（2026-11-04）**：resourceId 为占位，未经 D1 真机 dump 校准；
+     * 真机上锚点找不到 = 如实失败（NODE_NOT_FOUND），不虚构详情读取成功。
+     */
+    const val MEETING_DETAIL_SCHEDULED_TIME = "wework.calendar.meeting_detail_scheduled_time"
+
+    /**
+     * 会议详情「实际时间」值文本（511；未开始的会议页面可无此字段 → 如实空串）。
+     * **NOT_CALIBRATED（2026-11-04）**：同上，待真机校准。
+     */
+    const val MEETING_DETAIL_ACTUAL_TIME = "wework.calendar.meeting_detail_actual_time"
+
+    /**
+     * 会议详情「组织人」值文本（511）。
+     * **NOT_CALIBRATED（2026-11-04）**：同上，待真机校准。
+     */
+    const val MEETING_DETAIL_ORGANIZER = "wework.calendar.meeting_detail_organizer"
+
     /** 消息页左上抽屉（企业列表）入口（223/506）。 */
     const val DRAWER_ENTRY = "wework.home.drawer_entry"
 
@@ -554,6 +579,23 @@ class WeworkScreenRules(private val config: RuleConfig? = null) {
             WeworkSelectorIds.CALENDAR_ENTRY to sel(text = "日历", className = TEXT_VIEW),
             WeworkSelectorIds.MEETING_LIST_ITEM to sel(
                 resourceId = "com.tencent.wework:id/meeting_item_name",
+                className = TEXT_VIEW,
+            ),
+            // 511 会议详情族（占位默认；真机校准后由外置规则配置覆盖，R1 同口径）
+            WeworkSelectorIds.CALENDAR_MEETING_LIST_CONTAINER to sel(
+                resourceId = "com.tencent.wework:id/meeting_list_container",
+                className = VIEW_GROUP_PLACEHOLDER,
+            ),
+            WeworkSelectorIds.MEETING_DETAIL_SCHEDULED_TIME to sel(
+                resourceId = "com.tencent.wework:id/meeting_detail_scheduled_time",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.MEETING_DETAIL_ACTUAL_TIME to sel(
+                resourceId = "com.tencent.wework:id/meeting_detail_actual_time",
+                className = TEXT_VIEW,
+            ),
+            WeworkSelectorIds.MEETING_DETAIL_ORGANIZER to sel(
+                resourceId = "com.tencent.wework:id/meeting_detail_organizer",
                 className = TEXT_VIEW,
             ),
             WeworkSelectorIds.DRAWER_ENTRY to sel(

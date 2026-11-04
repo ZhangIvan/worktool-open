@@ -119,12 +119,23 @@ func (s *Server) ApplyPersistedSettings(ctx context.Context) error {
 // 引导）——52 条 REST 可提交指令的中文场景名/风险级/必填参数/示例载荷，供管理台
 // 发送页分组选择与历史/队列/日志页枚举化渲染。单一事实源：openapi 注册表（编号）×
 // scheduler plannedActionNames（中文名）× ClassifyRisk（风险级）× compat 必填表。
+//
+// 能力矩阵（契约注册表车道，2026-11-04）：每条目恒带 status（能力履历标记）与
+// rawMsg（回执 rawMsg 字段语义注记）；?withSchema=1 另附 schema.required =
+// 必填路径 → 参数类型（string/array/object），管理台发送页据此生成类型化输入项
+// （缺省不带 schema 键，响应形态向后兼容）。
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
+	commands := buildCommandCatalog()
+	if r.URL.Query().Get("withSchema") == "1" {
+		for i, c := range adminCommandCatalog {
+			commands[i]["schema"] = commandParamSchema(c.Example, c.Required)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"commands": buildCommandCatalog(),
+		"commands": commands,
 		"statusLegend": map[string]string{
 			"queued": "已入队（待会话投递）", "dispatched": "已下发（待回执）",
 			"succeeded": "成功", "failed": "失败", "expired": "超期",
@@ -138,13 +149,14 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// buildCommandCatalog 由常量表合成（编号×中文名×风险×必填×示例）。
+// buildCommandCatalog 由常量表合成（编号×中文名×风险×必填×示例×履历×rawMsg 注记）。
 func buildCommandCatalog() []map[string]any {
 	out := make([]map[string]any, 0, len(adminCommandCatalog))
 	for _, c := range adminCommandCatalog {
 		out = append(out, map[string]any{
 			"type": c.Type, "name": c.Name, "risk": c.Risk,
 			"required": c.Required, "example": c.Example, "group": c.Group,
+			"status": c.Status, "rawMsg": rawMsgNote(c.Type),
 		})
 	}
 	return out
@@ -353,9 +365,15 @@ type adminSubmitRequest struct {
 }
 
 // handleCommandSubmit 管理面指令提交：与兼容面同一条统一管线（scheduler.Submit
-// ——幂等/熔断/审批/白名单/限速/风险冻结全链生效），非旁路。
+// ——幂等/熔断/审批/白名单/限速/风险冻结全链生效），非旁路。鉴权 =
+// requireAdminSubmit（P0-3：approver 决议令牌 403 ADMIN_SCOPE_REQUIRED，决议
+// 身份不得进提交管线）。申请人安全身份 = "admin-token:" + 令牌 hash 前 16 hex
+// （请求体自由文本 actor 降级为展示后缀拼入）——与决议侧 "approver-token:" 前
+// 16 恒异前缀，DecideApproval 的 approver≠actor 文本比较天然成立，管线自由文
+// 本旁路（声明他人名义申请/决议）随之关闭。
 func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	sub := s.requireAdminSubmit(w, r)
+	if sub == nil {
 		return
 	}
 	var req adminSubmitRequest
@@ -367,9 +385,7 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Target = strings.TrimSpace(req.Target)
 	req.Actor = strings.TrimSpace(req.Actor)
-	if req.Actor == "" {
-		req.Actor = "admin"
-	}
+	actor := scopedIdentity("admin-token:", sub.TokenHash, req.Actor)
 	if req.Target == "" {
 		(&adminError{http.StatusBadRequest, "INVALID_TARGET", "target 必填（deviceId 或 v1:robotId）"}).write(w)
 		return
@@ -433,7 +449,7 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		idemKey = "admin-" + wire.NewUUID()
 	}
 	res, err := s.pipeline.Submit(ctx, scheduler.SubmitRequest{
-		Tenant: "default", Actor: req.Actor, Operation: "admin.submit", Key: idemKey,
+		Tenant: "default", Actor: actor, Operation: "admin.submit", Key: idemKey,
 		Target: resolvedTarget, CommandType: req.CommandType, Payload: payload,
 		DryRun: req.DryRun, ApprovalID: strings.TrimSpace(req.ApprovalID),
 	})
@@ -443,7 +459,7 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC()
 	_ = s.db.InsertAudit(ctx, nil, "admin_command_submitted", res.CommandID,
-		fmt.Sprintf("target=%s type=%d dryRun=%v actor=%s state=%s idemKey=%s", req.Target, req.CommandType, req.DryRun, req.Actor, res.State, idemKey), now)
+		fmt.Sprintf("target=%s type=%d dryRun=%v actor=%s state=%s idemKey=%s", req.Target, req.CommandType, req.DryRun, actor, res.State, idemKey), now)
 	status := http.StatusCreated
 	state := res.State
 	body := map[string]any{"commandId": res.CommandID, "state": state, "replay": res.Replay, "dryRun": req.DryRun, "idempotencyKey": idemKey}
@@ -1435,8 +1451,11 @@ FROM api_tokens ORDER BY created_ms DESC LIMIT 500`)
 	items := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		scope := "robot:" + row[1]
-		if row[1] == adminScopeRobotID {
+		switch row[1] {
+		case adminScopeRobotID:
 			scope = "admin（管理面）"
+		case approverScopeRobotID:
+			scope = "approver（决议面，P0-3）"
 		}
 		item := map[string]any{
 			"hashPrefix8": row[0], "robotId": row[1], "scope": scope, "tenant": row[2],

@@ -17,6 +17,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +37,28 @@ import (
 
 // openapiUploadMaxBytes 单文件上限 50MiB（b2 §1 契约：大小上限建议 ≤50M）。
 const openapiUploadMaxBytes = 50 << 20
+
+// clientlogQuotaPerRobotPerDay 单 robot 当日 clientlog 磁盘配额（W-ops 审计项③）：
+// 当日（服务端 UTC）累计超 200MiB → 429。var（非 const）仅为回归测试注入小配额。
+var clientlogQuotaPerRobotPerDay int64 = 200 << 20
+
+// openapiCodeFileSignatureInvalid 为文件取回签名校验失败的自分配码（W-ops ④）：
+// 服务端分配段 101001~101010 已用尽；101011~101018 与 201xxx 为上游业务语义段
+// （不复用不覆盖纪律），顺延取空位 101031。
+const openapiCodeFileSignatureInvalid = 101031
+
+// clientlogUploadSchema 为 clientlog 上传元数据表（W-ops ③）：目录内磁盘名为
+// UUID（防穿越命名），无法按 robot 归属——按本面「大对象走文件系统、元数据入库」
+// 既有纪律补 robot 维度元数据行；配额口径 = 当日该 robot 元数据行对应文件的
+// **现存**大小和（os.Stat 缺失文件不计，运维清理即释放配额）。
+const clientlogUploadSchema = `
+CREATE TABLE IF NOT EXISTS clientlog_uploads (
+  file_id    TEXT PRIMARY KEY,
+  robot_id   TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  created_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clientlog_robot_day ON clientlog_uploads(robot_id, created_ms);`
 
 // openapiFileSchema 为上传文件元数据表（本包自治 schema，经 store 公共原语建表）。
 const openapiFileSchema = `
@@ -62,7 +86,7 @@ CREATE TABLE IF NOT EXISTS openapi_robot_settings (
 // ensureOpenAPIUploadSchema 幂等建表（NewServeMux 装配时与 openapiCallbackSchema
 // 同点调用）。
 func (s *Server) ensureOpenAPIUploadSchema(ctx context.Context) error {
-	for _, ddl := range []string{openapiFileSchema, openapiRobotSettingsSchema} {
+	for _, ddl := range []string{openapiFileSchema, openapiRobotSettingsSchema, clientlogUploadSchema} {
 		if _, err := s.DB.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("api/openapi: 建上传/设置表失败: %w", err)
 		}
@@ -205,15 +229,75 @@ INSERT INTO openapi_files(file_id, robot_id, name, size, sha256, path, created_m
 	})
 }
 
+// signFileAccess 计算文件取回签名（W-ops ④）：hex(HMAC-SHA256(secret,
+// "files."+fileId+"."+expMillis))。exp 为毫秒时间戳（全仓 UnixMilli 口径）；
+// 密钥复用 OutboxConfig.CallbackSecret（单一密钥源）。
+func signFileAccess(secret, fileID string, expMillis int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "files.%s.%d", fileID, expMillis)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// callbackSecret 返回回调签名密钥（复用 CallbackSecret；worker 未装配 → 空）。
+func (s *Server) callbackSecret() string {
+	if s.Outbox == nil {
+		return ""
+	}
+	return s.Outbox.cfg.CallbackSecret
+}
+
+// verifyFileAccessSigned 校验 ?exp=&sig= 签名取回参数（W-ops ④ 防御纵深渐进）：
+// 两参数须同场（缺一 400）；exp 早于当前时刻 403（过期）；密钥未配置（worker
+// 未装配或 CallbackSecret 空）时 fail-closed 403（不降级为无鉴权取回）；sig 用
+// 恒时比较。返回 false 时已写响应。
+func (s *Server) verifyFileAccessSigned(w http.ResponseWriter, r *http.Request, fileID string) bool {
+	q := r.URL.Query()
+	expStr, sig := q.Get("exp"), q.Get("sig")
+	if expStr == "" || sig == "" {
+		writeOpenAPIErr(w, http.StatusBadRequest, openapiCodeInvalidBody, "签名取回须同时携带 exp（毫秒时间戳）与 sig")
+		return false
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || exp <= 0 {
+		writeOpenAPIErr(w, http.StatusBadRequest, openapiCodeInvalidBody, "exp 须为正整数毫秒时间戳")
+		return false
+	}
+	if s.Now().UTC().UnixMilli() > exp {
+		writeOpenAPIErr(w, http.StatusForbidden, openapiCodeFileSignatureInvalid, "签名已过期（exp 早于当前时刻）")
+		return false
+	}
+	secret := s.callbackSecret()
+	if secret == "" {
+		writeOpenAPIErr(w, http.StatusForbidden, openapiCodeFileSignatureInvalid,
+			"签名密钥未配置（-callback-secret）——签名取回不可用（fail-closed）")
+		return false
+	}
+	if !hmac.Equal([]byte(sig), []byte(signFileAccess(secret, fileID, exp))) {
+		writeOpenAPIErr(w, http.StatusForbidden, openapiCodeFileSignatureInvalid, "签名校验失败")
+		return false
+	}
+	return true
+}
+
 // HandleFileGet GET /files/{fileId}：上传文件取回（218 fileUrl 闭环的取数面）。
 // 鉴权口径（登记）：**能力 URL**——fileId 为 128-bit 随机 UUID（不可枚举），不带
 // Bearer；设备端（WS 会话主体，无 HTTP Bearer 凭据）据此直接拉取文件。若部署侧
 // 需收紧，置于反代层加内网/签名约束（05 矩阵登记此取舍）。
+//
+// W-ops ④ 防御纵深渐进：?exp=&sig= 签名参数**在场**时强制校验（exp=毫秒时间戳，
+// sig=signFileAccess，密钥复用 CallbackSecret）；无签名参数保持现状（能力 URL
+// 不变，兼容 218 fileUrl 直引用），但响应头由 private,max-age=3600 改 no-store
+// （能力 URL 不应被中间缓存驻留——渐进收紧第一步，强制全量签名待部署侧就绪）。
 func (s *Server) HandleFileGet(w http.ResponseWriter, r *http.Request) {
 	if !methodGuard(w, r, "GET, HEAD", http.MethodGet, http.MethodHead) {
 		return
 	}
 	fileID := r.PathValue("fileId")
+	if r.URL.Query().Get("exp") != "" || r.URL.Query().Get("sig") != "" {
+		if !s.verifyFileAccessSigned(w, r, fileID) {
+			return
+		}
+	}
 	rows, err := s.DB.QueryDump(r.Context(),
 		`SELECT name, path FROM openapi_files WHERE file_id = ?`, fileID)
 	if err != nil {
@@ -237,7 +321,7 @@ func (s *Server) HandleFileGet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+strings.ReplaceAll(strings.ReplaceAll(name, `"`, ``), "\n", "")+`"`)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, name, time.Time{}, f)
 }
 
@@ -304,6 +388,27 @@ ON CONFLICT(robot_id) DO UPDATE SET open_callback=excluded.open_callback,
 }
 
 
+// clientlogTodayBytesUsed 统计该 robot 当日（服务端 UTC）clientlog 的现存磁盘
+// 大小和（W-ops ③ 配额口径）：当日元数据行逐条 os.Stat 对应文件，已缺失（运维
+// 清理）不计——即「clientlogs 目录现有文件大小和」；元数据表提供 robot 归属。
+func (s *Server) clientlogTodayBytesUsed(ctx context.Context, robotID string, now time.Time) (int64, error) {
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).UnixMilli()
+	rows, err := s.DB.QueryDump(ctx,
+		`SELECT file_id, size FROM clientlog_uploads WHERE robot_id = ? AND created_ms >= ?`, robotID, dayStart)
+	if err != nil {
+		return 0, err
+	}
+	dir := filepath.Join(s.fileDir(), "clientlogs")
+	var total int64
+	for _, row := range rows {
+		size, _ := strconv.ParseInt(row[1], 10, 64)
+		if _, serr := os.Stat(filepath.Join(dir, row[0]+".zip")); serr == nil {
+			total += size
+		}
+	}
+	return total, nil
+}
+
 // HandleClientLogUpload POST /robot/clientLog/upload（510 契约端点，W-M6 W2）：
 // multipart form 字段 robotId/clientVersion/deviceInfo + 文件 part（名 file，
 // 字段名上游未显式——按等价取 file）。zip 落盘 fileDir/clientlogs/（UUID 磁盘名
@@ -362,6 +467,21 @@ func (s *Server) HandleClientLogUpload(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(form["robotId"]) != "" && robotID == "" {
 		robotID = strings.TrimSpace(form["robotId"])
 	}
+	// 磁盘配额（W-ops ③）：单 robot 当日（UTC）累计 ≤ 200MiB，超限 429。预检在
+	// 落盘前（不写超限字节）。已知边界登记：预检与元数据落库非同事务，同 robot
+	// 极小概率并发双写越过配额（本面已有 60QPM/IP 限流；精确强一致需落盘记账
+	// 事务化，此处按读-判-写口径实现）。
+	used, qerr := s.clientlogTodayBytesUsed(ctxOf(r), robotID, s.Now().UTC())
+	if qerr != nil {
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, "配额统计失败: "+qerr.Error())
+		return
+	}
+	if used+int64(fileBuf.Len()) > clientlogQuotaPerRobotPerDay {
+		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited,
+			fmt.Sprintf("clientlog 当日磁盘配额已满（robot=%s 当日已存 %d 字节，配额 %d 字节；次日 UTC 零点重置）",
+				robotID, used, clientlogQuotaPerRobotPerDay))
+		return
+	}
 	fileID := wire.NewUUID()
 	dir := filepath.Join(s.fileDir(), "clientlogs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -380,6 +500,15 @@ func (s *Server) HandleClientLogUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.Now().UTC()
+	// 元数据落库（W-ops ③）：配额归属与 robot 维度对账依据；失败即清理落盘文件
+	// （不留无元数据的孤儿字节——孤儿不计配额但占磁盘）。
+	if _, err := s.DB.Exec(ctxOf(r), `
+INSERT INTO clientlog_uploads(file_id, robot_id, size, created_ms) VALUES (?,?,?,?)`,
+		fileID, robotID, size, now.UnixMilli()); err != nil {
+		_ = os.Remove(dst)
+		writeOpenAPIErr(w, http.StatusInternalServerError, 101001, "clientlog 元数据落库失败: "+err.Error())
+		return
+	}
 	_ = s.DB.InsertAudit(ctxOf(r), nil, "clientlog_upload", robotID,
 		fmt.Sprintf("fileId=%s size=%d clientVersion=%s deviceInfo=%s", fileID, size, form["clientVersion"], form["deviceInfo"]), now)
 	writeOpenAPIData(w, http.StatusOK, openapiCodeSuccess, map[string]any{

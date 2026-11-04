@@ -95,6 +95,17 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 		fmt.Fprintln(stdout, "(仅此一次显示；库中仅存 SHA-256 hash。浏览器打开 /admin/ 粘贴令牌登录)")
 		return nil
 	}
+	// P0-3（审批身份车道）：决议面独立令牌——与管理令牌分持，admin 令牌在决议
+	// 面 403 APPROVER_SCOPE_REQUIRED，结构性消灭「管理令牌自批」。
+	if cfg.IssueApproverToken {
+		raw, err := adminSrv.IssueApproverToken(ctx)
+		if err != nil {
+			return fmt.Errorf("issue approver token: %w", err)
+		}
+		fmt.Fprintf(stdout, "APPROVER_TOKEN=%s\n", raw)
+		fmt.Fprintln(stdout, "(仅此一次显示；库中仅存 SHA-256 hash。管理台「L2 审批」页粘贴决议令牌使用；仅限决议，不得用于提交)")
+		return nil
+	}
 
 	// 回调 outbox（默认禁外网；URL 非 loopback 且未放行 → 启动即拒绝）
 	worker, err := api.NewOutboxWorker(db, api.OutboxConfig{

@@ -26,12 +26,13 @@ import (
 
 // fixture 为管理面装配：真 SQLite + scheduler 管线 + 在线探测桩 + httptest 服务。
 type fixture struct {
-	srv    *httptest.Server
-	db     *sqlite.DB
-	s      *Server
-	token  string // 管理面令牌（IssueAdminToken 签发，仅存 hash）
-	now    *time.Time
-	online map[string]bool // deviceID → 探测桩结果
+	srv           *httptest.Server
+	db            *sqlite.DB
+	s             *Server
+	token         string // 管理面令牌（IssueAdminToken 签发，仅存 hash）
+	approverToken string // 决议面令牌（IssueApproverToken 签发，P0-3，仅存 hash）
+	now           *time.Time
+	online        map[string]bool // deviceID → 探测桩结果
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -62,6 +63,11 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// P0-3：决议面令牌与登录令牌分持（决议端点只认 approver scope）。
+	f.approverToken, err = s.IssueApproverToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 
@@ -71,8 +77,19 @@ func (l testLogger) Printf(format string, args ...any) {
 	l.t.Logf(format, args...)
 }
 
-// call 发起一次管理面请求；auth=false 时不带 Authorization 头。
+// call 发起一次管理面请求（管理面令牌）；auth=false 时不带 Authorization 头。
 func (f *fixture) call(t *testing.T, method, path string, body string, auth bool) (int, map[string]any) {
+	t.Helper()
+	tok := ""
+	if auth {
+		tok = f.token
+	}
+	return f.callTok(t, method, path, body, tok)
+}
+
+// callTok 发起一次携带指定令牌的管理面请求（P0-3：决议请求须带 approverToken；
+// tok 为空 = 不带 Authorization 头）。
+func (f *fixture) callTok(t *testing.T, method, path string, body, tok string) (int, map[string]any) {
 	t.Helper()
 	var rd *bytes.Reader
 	if body == "" {
@@ -84,8 +101,8 @@ func (f *fixture) call(t *testing.T, method, path string, body string, auth bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	if auth {
-		req.Header.Set("Authorization", "Bearer "+f.token)
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -242,11 +259,16 @@ func TestCommandAuditStreamDryRunFlag(t *testing.T) {
 
 // ---- 端点 4：POST /api/v1/admin/approvals/{id}/decision ----
 
+// TestApprovalDecisionFlow 审批决议（P0-3 审批身份车道后口径）：决议只认
+// approver 令牌——admin 令牌决议=403 APPROVER_SCOPE_REQUIRED（结构性消灭自批，
+// 原自批反例升级为 scope 反例；管线级 approver==actor 文本自批拒绝仍由
+// scheduler/guard_test.go 锁定）。决议人留痕身份 = "approver-token:" + hash 前
+// 16 hex，自由文本 approver 仅作展示后缀。
 func TestApprovalDecisionFlow(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	const (
-		actor  = "alice"
+		actor  = "member-a"
 		target = "device-appr-01"
 	)
 	ap, err := f.s.pipeline.RequestApproval(ctx, scheduler.ApprovalRequestInput{
@@ -257,39 +279,44 @@ func TestApprovalDecisionFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 审批列表（UI 数据面）。
+	// 审批列表（UI 数据面，管理令牌仍可读）。
 	if st, b := f.call(t, http.MethodGet, "/api/v1/admin/approvals", "", true); st != http.StatusOK {
 		t.Fatalf("审批列表 status=%d body=%v", st, b)
 	} else if n, _ := b["count"].(float64); int(n) != 1 {
 		t.Fatalf("pending 审批应 1 条，got %v", b)
 	}
-	// 自批拒绝（DoD 反例）：approver == actor → 403 APPROVER_CONFLICT。
+	// DoD 反例①（P0-3）：admin 令牌决议 → 403 APPROVER_SCOPE_REQUIRED（管理令牌
+	// 结构性失去决议权，自批消灭）。
 	path := "/api/v1/admin/approvals/" + ap.ApprovalID + "/decision"
-	st, b := f.call(t, http.MethodPost, path, `{"approver":"alice","decision":"approve","reason":"自批"}`, true)
-	if st != http.StatusForbidden || b["error"] != "APPROVER_CONFLICT" {
-		t.Fatalf("自批应 403 APPROVER_CONFLICT，got %d %v", st, b)
+	st, b := f.call(t, http.MethodPost, path, `{"approver":"member-a","decision":"approve","reason":"自批"}`, true)
+	if st != http.StatusForbidden || b["error"] != "APPROVER_SCOPE_REQUIRED" {
+		t.Fatalf("admin 令牌决议应 403 APPROVER_SCOPE_REQUIRED，got %d %v", st, b)
 	}
-	// 决议值非法 / 未知字段 / 空 approver → 400。
-	if st, _ := f.call(t, http.MethodPost, path, `{"approver":"bob","decision":"maybe"}`, true); st != http.StatusBadRequest {
+	// DoD 反例②：无令牌 → 401 INVALID_TOKEN。
+	if st, b := f.callTok(t, http.MethodPost, path, `{"decision":"approve"}`, ""); st != http.StatusUnauthorized || b["error"] != "INVALID_TOKEN" {
+		t.Fatalf("无 approver 令牌应 401 INVALID_TOKEN，got %d %v", st, b)
+	}
+	// 决议值非法 / 未知字段 → 400（approver 令牌鉴权通过后）。
+	if st, _ := f.callTok(t, http.MethodPost, path, `{"approver":"member-b","decision":"maybe"}`, f.approverToken); st != http.StatusBadRequest {
 		t.Fatalf("非法 decision 应 400，got %d", st)
 	}
-	if st, _ := f.call(t, http.MethodPost, path, `{"approver":"bob","decision":"approve","extra":1}`, true); st != http.StatusBadRequest {
+	if st, _ := f.callTok(t, http.MethodPost, path, `{"approver":"member-b","decision":"approve","extra":1}`, f.approverToken); st != http.StatusBadRequest {
 		t.Fatalf("未知字段应 400，got %d", st)
 	}
-	if st, _ := f.call(t, http.MethodPost, path, `{"decision":"approve"}`, true); st != http.StatusBadRequest {
-		t.Fatalf("缺 approver 应 400，got %d", st)
-	}
-	// 正例：独立 approver 通过。
-	st, b = f.call(t, http.MethodPost, path, `{"approver":"bob","decision":"approve","reason":"复核通过"}`, true)
+	// 正例：approver 令牌决议（自由文本仅展示后缀）→ 200 approved。
+	st, b = f.callTok(t, http.MethodPost, path, `{"approver":"member-b","decision":"approve","reason":"复核通过"}`, f.approverToken)
 	if st != http.StatusOK || b["status"] != "approved" {
-		t.Fatalf("独立 approver 决议应 200 approved，got %d %v", st, b)
+		t.Fatalf("approver 令牌决议应 200 approved，got %d %v", st, b)
+	}
+	if apv, _ := b["approver"].(string); !strings.HasPrefix(apv, "approver-token:") {
+		t.Fatalf("决议留痕身份须为 approver-token: 前缀（令牌派生），got %q", apv)
 	}
 	// 重复决议 → 409（仅 pending 可决议）。
-	if st, _ := f.call(t, http.MethodPost, path, `{"approver":"carol","decision":"reject"}`, true); st != http.StatusConflict {
+	if st, _ := f.callTok(t, http.MethodPost, path, `{"decision":"reject"}`, f.approverToken); st != http.StatusConflict {
 		t.Fatalf("重复决议应 409，got %d", st)
 	}
 	// 不存在 → 404。
-	if st, _ := f.call(t, http.MethodPost, "/api/v1/admin/approvals/no-such-id/decision", `{"approver":"bob","decision":"approve"}`, true); st != http.StatusNotFound {
+	if st, _ := f.callTok(t, http.MethodPost, "/api/v1/admin/approvals/no-such-id/decision", `{"decision":"approve"}`, f.approverToken); st != http.StatusNotFound {
 		t.Fatalf("不存在审批应 404，got %d", st)
 	}
 	// 端到端价值证明：管理面通过的审批能解锁 L2 提交入队（参数指纹一致）。
@@ -300,31 +327,32 @@ func TestApprovalDecisionFlow(t *testing.T) {
 	if err != nil || res.State != "queued" {
 		t.Fatalf("已批审批携载提交应入队：state=%v err=%v", res.State, err)
 	}
-	// 决议入审计（SR-12）。
-	rows, err := f.db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='approval_decided' AND subject=?`, ap.ApprovalID)
+	// 决议入审计（SR-12），审计明文含令牌派生身份（approver-token:）。
+	rows, err := f.db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='approval_decided' AND subject=? AND detail LIKE '%approver-token:%'`, ap.ApprovalID)
 	if err != nil || rows[0][0] != "1" {
-		t.Fatalf("决议须留审计痕：rows=%v err=%v", rows, err)
+		t.Fatalf("决议须留审计痕（含 approver-token 身份）：rows=%v err=%v", rows, err)
 	}
 }
 
+// TestApprovalRejectDecision：拒绝决议走 approver 令牌；被拒审批不能解锁提交。
 func TestApprovalRejectDecision(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	ap, err := f.s.pipeline.RequestApproval(ctx, scheduler.ApprovalRequestInput{
-		Tenant: "default", Actor: "dave", Target: "device-appr-02",
+		Tenant: "default", Actor: "member-c", Target: "device-appr-02",
 		CommandType: 234, Payload: `{"type":234}`, Reason: "L2",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, b := f.call(t, http.MethodPost, "/api/v1/admin/approvals/"+ap.ApprovalID+"/decision",
-		`{"approver":"erin","decision":"reject","reason":"风险不通过"}`, true)
+	st, b := f.callTok(t, http.MethodPost, "/api/v1/admin/approvals/"+ap.ApprovalID+"/decision",
+		`{"decision":"reject","reason":"风险不通过"}`, f.approverToken)
 	if st != http.StatusOK || b["status"] != "rejected" {
 		t.Fatalf("拒绝决议应 200 rejected，got %d %v", st, b)
 	}
 	// 被拒审批不能再解锁 L2 提交（verifyApproval：须 approved）。
 	if _, err := f.s.pipeline.Submit(ctx, scheduler.SubmitRequest{
-		Tenant: "default", Actor: "dave", Target: "device-appr-02",
+		Tenant: "default", Actor: "member-c", Target: "device-appr-02",
 		CommandType: 234, Payload: `{"type":234}`, ApprovalID: ap.ApprovalID,
 	}); err == nil {
 		t.Fatal("被拒审批携载提交必须被管线拒绝")
@@ -440,6 +468,8 @@ func TestUIServing(t *testing.T) {
 		// W-P0 完整管理后台视图与 API 面对齐（概览/队列/回调/日志/设置）。
 		"admin/overview", "admin/queue", "admin/callbacks", "admin/whitelist",
 		"logs/executions", "logs/audit", "settings/guard", "settings/encryption",
+		// P0-3 审批身份车道：审批页决议专用 approver 令牌输入（独立 localStorage 键）。
+		"approver-token", "wt_approver_token", "issue-approver-token",
 	} {
 		if !strings.Contains(page, marker) {
 			t.Fatalf("index.html 应含 %q（UI 与 API 面对齐）", marker)
