@@ -95,6 +95,7 @@ android {
         // 产品级回退提供者 = T2.6（W-M4，钉版本纯 Kotlin Ed25519，过 AUD-07 后生效）。
         getByName("labDebug") {
             assets.srcDir(layout.buildDirectory.dir("generated/labAssets"))
+            res.srcDir(layout.buildDirectory.dir("generated/labRes"))
         }
     }
 }
@@ -133,6 +134,41 @@ val wtGenerateLabEd25519Asset = tasks.register("wtGenerateLabEd25519Asset") {
 
 tasks.matching { it.name == "mergeLabDebugAssets" }.configureEach {
     dependsOn(wtGenerateLabEd25519Asset)
+}
+
+// lab 网络安全配置构建期注入（2026-11-04 公开仓脱敏）：lab CA 信任域主机不再
+// 硬编码于入库 XML——经 gradle property worktoolLabHost / 环境变量
+// WORKTOOL_LAB_HOST 注入（真实部署传内网地址；缺省=RFC5737 合成段 192.0.2.10，
+// 合成段构建仅用于 CI 形状校验）。源集 res 指向 generated/labRes（同名静态
+// XML 已从 labDebug/res/xml 移除，避免资源合并冲突）。
+val labHost: String = providers.gradleProperty("worktoolLabHost")
+    .orElse(providers.environmentVariable("WORKTOOL_LAB_HOST"))
+    .orElse("192.0.2.10")
+    .get()
+
+val wtGenerateLabNetworkConfig = tasks.register("wtGenerateLabNetworkConfig") {
+    outputs.upToDateWhen { false }
+    doLast {
+        val dir = layout.buildDirectory.dir("generated/labRes/xml").get().asFile
+        dir.mkdirs()
+        File(dir, "network_security_config.xml").writeText(
+            """
+            |<?xml version="1.0" encoding="utf-8"?>
+            |<network-security-config>
+            |    <domain-config cleartextTrafficPermitted="false">
+            |        <domain includeSubdomains="false">$labHost</domain>
+            |        <trust-anchors>
+            |            <certificates src="@raw/ca_lab" />
+            |        </trust-anchors>
+            |    </domain-config>
+            |</network-security-config>
+            """.trimMargin(),
+        )
+    }
+}
+
+tasks.matching { it.name.startsWith("mergeLabDebugResources") }.configureEach {
+    dependsOn(wtGenerateLabNetworkConfig)
 }
 
 dependencies {

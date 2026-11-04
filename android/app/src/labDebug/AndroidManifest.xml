@@ -4,8 +4,8 @@
   - INTERNET 权限已上移产品 main 源集（CR UI-01 修复，2026-11-03：产品变体
     PairingActivity/SessionRuntime 均需联网，main 曾「零权限」导致产品配对必败）；
     本叠加层经 manifest 合并自动继承，不再重复声明；
-  - networkSecurityConfig：仅对 lab 主机（192.0.2.10）信任 lab CA（res/raw/ca_lab.crt，
-    公钥材料；对应私钥仅存 local-private/，G13 不入库）——lab 独有，产品变体零改动；
+  - networkSecurityConfig：仅对 lab 主机（构建期经 worktoolLabHost 注入，默认合成段）信任 lab CA
+    （res/raw/ca_lab.crt，公钥材料；对应私钥仅存 local-private/，G13 不入库）——lab 独有，产品变体零改动；
   - LabPairingActivity：配对最小面（host + 6 位配对码 → PairingClient → V2Session hello）。
     exported=true 仅为 RIG/adb 显式启动通道（lab 装配验证），无 intent-filter。
 -->

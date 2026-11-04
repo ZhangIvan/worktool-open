@@ -4,6 +4,7 @@
 package gateway_test
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"testing"
@@ -21,7 +22,8 @@ func TestEventBypassQueryPush(t *testing.T) {
 	c, _ := openV2Session(t, a, m, 2, 0, 0, 1)
 
 	outboxQueryRows := func() int {
-		rows, err := a.db.QueryDump(t.Context(), `SELECT COUNT(*) FROM outbox WHERE kind='query_result'`)
+		// go 1.23 兼容：t.Context() 需 1.24+（第三方审计实锤——本机 1.25 编过而 CI vet 断）
+		rows, err := a.db.QueryDump(context.Background(), `SELECT COUNT(*) FROM outbox WHERE kind='query_result'`)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("outbox count: %v rows=%d", err, len(rows))
 		}
