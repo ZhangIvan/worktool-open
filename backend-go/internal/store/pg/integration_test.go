@@ -297,6 +297,7 @@ func TestPGIntegrationValidMaterializationAndGC(t *testing.T) {
 	}
 	expectRejected(t, f, nil, `UPDATE admission_reservations SET state='held',released_at=NULL,release_reason=NULL WHERE reservation_id='R'`)
 	expectRejected(t, f, nil, `DELETE FROM admission_reservations WHERE reservation_id='R'`)
+	retentionAuditIntegrationCases(t)
 }
 
 const insertDelivery = `INSERT INTO callback_outbox(tenant,delivery_id,event_id,destination_id,app,command,device,app_epoch,device_epoch,body_bytes,payload_digest,policy_version,key_version,expires_at,reservation_id,reservation_kind,reservation_state,subscription_id,subscription_version,event_ordinal)
