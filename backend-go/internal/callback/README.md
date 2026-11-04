@@ -23,6 +23,9 @@ daemon is installed at startup.
 Complete settles an issued attempt without treating later app revocation as
 proof the receiver did not already process it. Quota is internal capacity,
 never monetary billing. Delivery completion does not release retention quota.
+After an unknown completion commit, the optional [completion observer](completion_observation.md)
+may confirm that exact previously durable settlement once, without any business
+DML or renewed send permission. Other uncertainty still fails closed.
 
 ## Destination identity phase A
 
@@ -48,11 +51,11 @@ Targeted pure/race tests cover projection, transport request policy, copied
 configuration, deadline mapping and existing sender/completion logic. They do
 not execute PostgreSQL SQL or prove network behavior.
 
-Phase A passed all 43 real PostgreSQL groups, including migration 0009 children,
-in [run 41769449828](https://github.com/ZhangIvan/worktool-open/actions/runs/41769449828).
-That is execution evidence for immutable destination identity, not the later
-worker lifecycle and selection SQL in this working slice. The new CB03 worker
-children remain **NOT_RUN**. The earlier baseline run remains available at
+The baseline at `d51358806623fd4179a87a802f1d09c6a8cc810f` passed all 43
+real PostgreSQL groups, including migration 0009 and CB03 worker/selection
+children, in [run 41780269941](https://github.com/ZhangIvan/worktool-open/actions/runs/41780269941).
+That is not execution evidence for the new CB02/CB05 completion-observation
+children, which remain **NOT_RUN** locally. The earlier baseline run remains available at
 [run 41767151007](https://github.com/ZhangIvan/worktool-open/actions/runs/41767151007).
 The five baseline callback groups are:
 - CB01: admission/WS/result/ACK/outbox/receiver HMAC/public result query, duplicate

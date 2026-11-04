@@ -79,9 +79,22 @@ func callbackKeyRef(s string) bool {
 
 var errCallbackCandidateBusy = errors.New("CALLBACK_CANDIDATE_BUSY")
 
+// Preserve the existing bounded unavailable text while retaining the cleanup
+// veto for errors.Is; raw database causes never cross the adapter boundary.
+type callbackCleanupUnavailable struct{}
+
+func (callbackCleanupUnavailable) Error() string { return "CALLBACK_STORE_UNAVAILABLE" }
+func (callbackCleanupUnavailable) Unwrap() error { return cb.ErrCleanupUnconfirmed }
+
 func callbackStoreError(e error) error {
 	if e == nil {
 		return nil
+	}
+	if errors.Is(e, ErrCleanupUnconfirmed) {
+		if errors.Is(e, ErrCommitOutcomeUnknown) || errors.Is(e, ErrCallbackCompletionUnknown) {
+			return errors.Join(cb.ErrCleanupUnconfirmed, cb.ErrCommitUnknown)
+		}
+		return callbackCleanupUnavailable{}
 	}
 	if errors.Is(e, ErrCommitOutcomeUnknown) || errors.Is(e, ErrCallbackCompletionUnknown) {
 		return cb.ErrCommitUnknown
@@ -95,9 +108,16 @@ func callbackStoreError(e error) error {
 	return errors.New("CALLBACK_STORE_UNAVAILABLE")
 }
 func (s *CallbackStore) Complete(ctx context.Context, c cb.Completion) error {
+	return callbackStoreError(s.completer.Complete(ctx, callbackCompletionIntent(c)))
+}
+
+func (s *CallbackStore) ObserveCompletion(ctx context.Context, c cb.Completion) error {
+	return callbackStoreError(s.completer.ObserveCompletion(ctx, callbackCompletionIntent(c)))
+}
+
+func callbackCompletionIntent(c cb.Completion) CallbackCompletion {
 	h := c.Handle
-	e := s.completer.Complete(ctx, CallbackCompletion{Handle: CallbackCompletionHandle{Tenant: h.Tenant, DeliveryID: h.DeliveryID, Owner: h.Owner, Recovery: h.Recovery, Fence: h.Fence, Attempt: h.Attempt, MaxAttempts: h.MaxAttempts}, Outcome: c.Outcome, State: c.State, Code: c.Code, Status: c.Status, NextAt: c.NextAt})
-	return callbackStoreError(e)
+	return CallbackCompletion{Handle: CallbackCompletionHandle{Tenant: h.Tenant, DeliveryID: h.DeliveryID, Owner: h.Owner, Recovery: h.Recovery, Fence: h.Fence, Attempt: h.Attempt, MaxAttempts: h.MaxAttempts}, Outcome: c.Outcome, State: c.State, Code: c.Code, Status: c.Status, NextAt: c.NextAt}
 }
 
 // Scope locks serialize policy changes and quota scheduling across processes.

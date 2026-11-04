@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CallbackCompleter implements only completion, not sender.Store. It does not
+// CallbackCompleter implements completion and its observation, not sender.Store. It does not
 // claim, prepare, materialize, sign, resolve, send, spawn or register a worker.
 // Runtime/gate are trusted startup inputs, never derived from request JSON.
 type CallbackCompleter struct {
@@ -38,6 +38,7 @@ const callbackReadDelivery = `SELECT o.destination_id,o.state,o.fence,o.attempt_
 const callbackReadAttempt = `SELECT attempt_no,owner_instance,recovery_epoch,started_at,send_prepared_at,finished_at,outcome,status_code,error_code FROM callback_attempts WHERE tenant=$1 AND delivery_id=$2 AND fence=$3 FOR UPDATE`
 const callbackReadSlots = `SELECT scope_kind,scope_id,slot_no,owner_instance,delivery_id,delivery_fence,recovery_epoch,slot_fence,lease_until FROM scope_slots WHERE tenant=$1 AND delivery_id=$2 ORDER BY CASE scope_kind WHEN 'tenant' THEN 0 ELSE 1 END,scope_id COLLATE "C",slot_no LIMIT 3 FOR UPDATE`
 const callbackOldSlotExists = `SELECT EXISTS(SELECT 1 FROM scope_slots WHERE tenant=$1 AND delivery_id=$2 AND owner_instance=$3 AND recovery_epoch=$4 AND delivery_fence=$5)`
+const callbackReadCompletionAudit = `SELECT actor,action,target,outcome,created FROM audit WHERE tenant=$1 AND id=$2 FOR SHARE`
 const callbackFinalTime = `SELECT clock_timestamp()`
 const callbackUpdateAttempt = `UPDATE callback_attempts SET finished_at=$6,outcome=$7,status_code=$8,error_code=$9 WHERE tenant=$1 AND delivery_id=$2 AND fence=$3 AND owner_instance=$4 AND recovery_epoch=$5 AND attempt_no=$10 AND outcome='in_progress' AND finished_at IS NULL`
 const callbackUpdateDelivery = `UPDATE callback_outbox SET state=$6,available_at=CASE WHEN $6='ready' THEN $7::timestamptz ELSE available_at END,delivered_at=CASE WHEN $6='delivered' THEN $8::timestamptz ELSE NULL END,lease_owner=NULL,lease_recovery_epoch=NULL,lease_until=NULL,last_error_code=$9 WHERE tenant=$1 AND delivery_id=$2 AND fence=$3 AND lease_owner=$4 AND lease_recovery_epoch=$5 AND attempt_count=$10 AND max_attempts=$11 AND state='leased'`
@@ -99,6 +100,12 @@ func callbackClassify(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, ErrCleanupUnconfirmed) {
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			return errors.Join(ErrCleanupUnconfirmed, ErrCallbackCompletionUnknown)
+		}
+		return errors.Join(ErrCleanupUnconfirmed, ErrCallbackCompletionUnavailable)
+	}
 	if errors.Is(err, ErrCommitOutcomeUnknown) {
 		return ErrCallbackCompletionUnknown
 	}
@@ -114,6 +121,19 @@ func callbackClassify(err error) error {
 // finished duplicates are read-only; stale/conflicting calls cannot change rows.
 // DB writes and an audit commit together. No ledger charge is released here.
 func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) error {
+	return s.complete(ctx, c, false)
+}
+
+// ObserveCompletion confirms only an exact previously committed settlement.
+// It shares locked validation with Complete but cannot reach any business DML.
+// FOR UPDATE/SHARE requires an ordinary transaction, not PostgreSQL READ ONLY.
+// Runner commit/rollback/discard uncertainty is not confirmation. This creates
+// no send permission and cannot settle an unfinished attempt or successor.
+func (s *CallbackCompleter) ObserveCompletion(ctx context.Context, c CallbackCompletion) error {
+	return s.complete(ctx, c, true)
+}
+
+func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, observeOnly bool) error {
 	requirePrepared, err := validateCallbackCompletion(c)
 	if err != nil || ctx == nil {
 		return ErrCallbackCompletionInvalid
@@ -180,6 +200,9 @@ func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) 
 		if requirePrepared && a.prepared == nil {
 			return ErrCallbackCompletionIntegrity
 		}
+		if observeOnly && a.finished == nil {
+			return ErrCallbackCompletionStale // no settlement evidence; never retry DML
+		}
 		var slots []callbackSlotRow
 		var oldSlot bool
 		if a.finished != nil {
@@ -204,6 +227,16 @@ func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) 
 			rows.Close()
 			if e != nil {
 				return e
+			}
+		}
+		if observeOnly {
+			var actor, action, target, outcome string
+			var created int64
+			if e := tx.QueryRow(ctx, callbackReadCompletionAudit, h.Tenant, callbackAuditID(h)).Scan(&actor, &action, &target, &outcome, &created); e != nil {
+				return e
+			}
+			if actor != h.Owner || action != "callback.completed" || target != h.DeliveryID || outcome != c.State+":"+c.Code || created != a.finished.UnixMilli() {
+				return ErrCallbackCompletionIntegrity
 			}
 		}
 		// Both the generation gate and PostgreSQL clock are refreshed after every
@@ -315,5 +348,15 @@ func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) 
 		}
 		return nil
 	})
+	if observeOnly && err == nil {
+		// Cleanup may have waited after the proof query and released DB locks.
+		// Do not clear uncertainty if local generation authority closed meanwhile.
+		if e := s.gate(ctx); e != nil {
+			return ErrCallbackCompletionStale
+		}
+		if ctx.Err() != nil {
+			return ErrCallbackCompletionUnavailable
+		}
+	}
 	return callbackClassify(err)
 }

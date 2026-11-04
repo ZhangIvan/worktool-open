@@ -216,6 +216,7 @@ func callbackPrepared(d cb.Delivery) cb.Prepared {
 }
 func TestPGCallbackCB02(t *testing.T) {
 	gatewayGate(t)
+	callbackObservationIntegrationCases(t)
 	t.Run("same_delivery_single_claim_and_prepare", func(t *testing.T) {
 		f := newGWWithStoreConstructor(t, callbackSyntheticStore)
 		store, _ := callbackSetup(t, f)
@@ -367,6 +368,7 @@ func TestPGCallbackCB04(t *testing.T) {
 
 func TestPGCallbackCB05(t *testing.T) {
 	gatewayGate(t)
+	callbackObservationCommitIntegrationCases(t)
 	f := newGWWithStoreConstructor(t, callbackSyntheticStore)
 	store, policy := callbackSetup(t, f)
 	callbackCompletedCommand(t, f)

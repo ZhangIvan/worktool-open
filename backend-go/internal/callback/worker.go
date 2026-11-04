@@ -29,7 +29,8 @@ type RecoveryStore interface {
 // WorkerConfig is trusted composition, not request/CLI configuration. The zero
 // value is disabled. There is one goroutine, no queue, and no parallel attempts.
 // Timeouts bound cooperative work, not arbitrary adapters ignoring cancellation.
-// RunTimeout excludes Sender's independent 1s settlement and store cleanup.
+// RunTimeout excludes Sender's independent 1s settlement, optional 1s
+// completion observation, and each store operation's bounded cleanup.
 type WorkerConfig struct {
 	Enabled                                                    bool
 	PollInterval, RecoveryTimeout, RunTimeout, ShutdownTimeout time.Duration

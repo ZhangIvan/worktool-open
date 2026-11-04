@@ -74,7 +74,11 @@ type callbackTestDB struct {
 	failSQL                                                             string
 	zeroSQL                                                             string
 	queryHook                                                           func(string)
-	commitErr                                                           error
+	commitErr, rollbackErr, discardErr                                  error
+	commitAfterApply                                                    bool
+	auditID, auditTenant                                                string
+	audit                                                               []any
+	rollbackHook                                                        func()
 	commits, rollbacks, discards, releases, acquires, audits, gateCalls int
 	denyGateAt                                                          int
 	quota                                                               int
@@ -93,32 +97,41 @@ func (p callbackTestPool) Acquire(context.Context) (Connection, error) {
 	return &callbackTestConn{&callbackTestTx{db: p.db}}, nil
 }
 func (c *callbackTestConn) BeginTx(_ context.Context, o pgx.TxOptions) (pgx.Tx, error) {
-	if o.IsoLevel != pgx.ReadCommitted {
+	if o.IsoLevel != pgx.ReadCommitted || o.AccessMode == pgx.ReadOnly {
 		panic("wrong isolation")
 	}
 	return c.tx, nil
 }
-func (c *callbackTestConn) Release()                      { c.tx.db.releases++ }
-func (c *callbackTestConn) Discard(context.Context) error { c.tx.db.discards++; return nil }
+func (c *callbackTestConn) Release() { c.tx.db.releases++ }
+func (c *callbackTestConn) Discard(context.Context) error {
+	c.tx.db.discards++
+	return c.tx.db.discardErr
+}
 func (tx *callbackTestTx) Commit(ctx context.Context) error {
 	tx.db.commits++
 	if ctx.Err() != nil {
 		panic("cancelled fake commit")
 	}
-	if tx.db.commitErr != nil {
+	if tx.db.commitErr != nil && !tx.db.commitAfterApply {
 		return tx.db.commitErr
 	}
 	for _, f := range tx.pending {
 		f()
 	}
 	tx.committed = true
-	return nil
+	return tx.db.commitErr
 }
 func (tx *callbackTestTx) Rollback(ctx context.Context) error {
 	tx.db.rollbacks++
 	tx.pending = nil
 	if ctx.Err() != nil {
 		panic("unbounded/cancelled fake cleanup")
+	}
+	if tx.db.rollbackHook != nil {
+		tx.db.rollbackHook()
+	}
+	if tx.db.rollbackErr != nil {
+		return tx.db.rollbackErr
 	}
 	if tx.committed {
 		return pgx.ErrTxClosed
@@ -156,6 +169,11 @@ func (tx *callbackTestTx) QueryRow(_ context.Context, sql string, args ...any) p
 			exists = exists || (s.delivery == args[1].(string) && s.owner == args[2].(string) && s.recovery == args[3].(string) && s.fence == args[4].(int64))
 		}
 		v = []any{exists}
+	case callbackReadCompletionAudit:
+		if tx.db.auditID != args[1].(string) || tx.db.auditTenant != args[0].(string) || tx.db.audit == nil {
+			return callbackTestRow{err: pgx.ErrNoRows}
+		}
+		v = tx.db.audit
 	case callbackFinalTime:
 		v = []any{tx.db.now}
 	default:
@@ -238,7 +256,11 @@ func (tx *callbackTestTx) Exec(_ context.Context, sql string, args ...any) (pgco
 			}
 		})
 	case callbackInsertAudit:
-		tx.pending = append(tx.pending, func() { tx.db.audits++ })
+		tx.pending = append(tx.pending, func() {
+			tx.db.audits++
+			tx.db.auditID, tx.db.auditTenant = args[0].(string), args[1].(string)
+			tx.db.audit = []any{args[2], "callback.completed", args[3], args[4], args[5]}
+		})
 	default:
 		panic("unexpected callback DML")
 	}

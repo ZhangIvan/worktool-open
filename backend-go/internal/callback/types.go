@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	ErrCommitUnknown   = errors.New("COMMIT_OUTCOME_UNKNOWN")
-	ErrStale           = errors.New("STALE_LEASE")
-	ErrDenied          = errors.New("AUTHORITY_DENIED")
-	ErrTransportPolicy = errors.New("TRANSPORT_POLICY_DENIED")
+	ErrCleanupUnconfirmed = errors.New("CLEANUP_UNCONFIRMED")
+	ErrCommitUnknown      = errors.New("COMMIT_OUTCOME_UNKNOWN")
+	ErrStale              = errors.New("STALE_LEASE")
+	ErrDenied             = errors.New("AUTHORITY_DENIED")
+	ErrTransportPolicy    = errors.New("TRANSPORT_POLICY_DENIED")
 )
 
 type Handle struct {
@@ -69,6 +70,15 @@ type Store interface {
 	Claim(context.Context) (Delivery, bool, error)
 	Prepare(context.Context, Prepared) (Permit, error)
 	Complete(context.Context, Completion) error
+}
+
+// CompletionObserver is optional and observes only an exact, already durable
+// completion. Nil confirms the attempt, delivery, released slots and audit under
+// current generation authority. It must not Complete, Prepare, send, or mutate
+// business rows. Any missing/conflicting evidence or read/cleanup uncertainty
+// returns an error. Sender calls it at most once, only after ErrCommitUnknown.
+type CompletionObserver interface {
+	ObserveCompletion(context.Context, Completion) error
 }
 
 type Clock interface {

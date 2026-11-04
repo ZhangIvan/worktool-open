@@ -102,8 +102,8 @@ func (s *Sender) localCheck(ctx context.Context, d Delivery, deadline time.Time)
 	return false, s.finish(d, false, "retryable_failure", "LOCAL_GATE_UNAVAILABLE", 0)
 }
 
-// RunOne never retries an adapter call or claims another delivery. Caller may
-// invoke it for later store claims, subject to store's durable attempt budget.
+// RunOne never retries a mutation or transport call or claims another delivery.
+// Caller may invoke it for later claims, subject to the durable attempt budget.
 func (s *Sender) RunOne(ctx context.Context) Result {
 	if ctx == nil || ctx.Err() != nil {
 		return Result{Code: "CONTEXT_CLOSED"}
@@ -242,6 +242,22 @@ func (s *Sender) finish(d Delivery, sent bool, outcome, code string, status int)
 	cleanup, cancel := s.d.Clock.Deadline(context.Background(), now.Add(time.Second))
 	defer cancel()
 	err := s.d.Store.Complete(cleanup, c)
+	cancel()
+	if errors.Is(err, ErrCommitUnknown) && !errors.Is(err, ErrCleanupUnconfirmed) {
+		if observer, ok := s.d.Store.(CompletionObserver); ok {
+			// Preserve the exact intent. Observation is neither a Complete retry
+			// nor a new send permission, even after the send context is cancelled.
+			until := s.d.Clock.Now().Add(time.Second)
+			observe, stop := s.d.Clock.Deadline(context.Background(), until)
+			defer stop()
+			observed := observer.ObserveCompletion(observe, c)
+			confirmed := observed == nil && s.live(observe, until)
+			stop()
+			if confirmed {
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return Result{Claimed: true, TransportInvoked: sent, Reconcile: true, Code: "SETTLEMENT_UNCONFIRMED"}
 	}

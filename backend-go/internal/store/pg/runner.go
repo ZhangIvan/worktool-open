@@ -53,6 +53,10 @@ func (t Timeouts) Validate() error {
 	return nil
 }
 
+// ErrCleanupUnconfirmed means rollback or connection discard did not complete
+// cleanly. Durable business evidence cannot clear this connection uncertainty.
+var ErrCleanupUnconfirmed = errors.New("transaction cleanup unconfirmed")
+
 var ErrCommitOutcomeUnknown = errors.New("transaction commit outcome unknown; reconcile durable idempotency key before retry")
 
 // OutcomeError preserves driver cause for classification without claiming rollback
@@ -107,7 +111,10 @@ func (r *Runner) Run(ctx context.Context, opts pgx.TxOptions, fn func(context.Co
 		discardCtx, cancel := context.WithTimeout(context.Background(), r.timeouts.Cleanup)
 		discardErr := conn.Discard(discardCtx)
 		cancel()
-		return errors.Join(fmt.Errorf("begin: %w", err), discardErr)
+		if discardErr != nil {
+			return errors.Join(fmt.Errorf("begin: %w", err), ErrCleanupUnconfirmed, discardErr)
+		}
+		return fmt.Errorf("begin: %w", err)
 	}
 	commitUnknown := false
 	defer func() {
@@ -120,9 +127,11 @@ func (r *Runner) Run(ctx context.Context, opts pgx.TxOptions, fn func(context.Co
 			discardErr := conn.Discard(discardCtx)
 			discardCancel()
 			if rollbackFailed {
-				err = errors.Join(err, fmt.Errorf("rollback cleanup: %w", rollbackErr))
+				err = errors.Join(err, ErrCleanupUnconfirmed, fmt.Errorf("rollback cleanup: %w", rollbackErr))
 			}
-			err = errors.Join(err, discardErr)
+			if discardErr != nil {
+				err = errors.Join(err, ErrCleanupUnconfirmed, discardErr)
+			}
 		}
 	}()
 	if err = txCtx.Err(); err != nil {

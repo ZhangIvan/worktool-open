@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	cb "github.com/ZhangIvan/worktool-open/backend-go/internal/callback"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -35,7 +36,7 @@ func (f *fakeTx) Rollback(ctx context.Context) error {
 
 type fakeConn struct {
 	tx                         *fakeTx
-	beginErr                   error
+	beginErr, discardErr       error
 	releases, discards, begins int
 }
 
@@ -55,7 +56,7 @@ func (f *fakeConn) Discard(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		panic("unbounded discard")
 	}
-	return nil
+	return f.discardErr
 }
 
 type fakePool struct {
@@ -208,5 +209,33 @@ func TestClosedTransactionCleanupIsHarmless(t *testing.T) {
 	tx.rollbackErr = pgx.ErrTxClosed
 	if err := r.Run(context.Background(), pgx.TxOptions{}, func(context.Context, pgx.Tx) error { return nil }); err != nil || c.discards != 0 {
 		t.Fatalf("successful commit cleanup: %v", err)
+	}
+}
+
+func TestCleanupUncertaintyCannotBeHiddenByCommitUnknown(t *testing.T) {
+	for _, mode := range []string{"rollback", "discard", "begin_discard"} {
+		t.Run(mode, func(t *testing.T) {
+			r, _, c, tx := fixture(t)
+			tx.commitErr = errors.New("commit acknowledgement lost")
+			if mode == "rollback" {
+				tx.rollbackErr = errors.New("rollback failed")
+			} else {
+				c.discardErr = errors.New("discard failed")
+			}
+			if mode == "begin_discard" {
+				c.beginErr = errors.New("begin failed")
+			}
+			err := r.Run(context.Background(), pgx.TxOptions{}, func(context.Context, pgx.Tx) error { return nil })
+			if !errors.Is(err, ErrCleanupUnconfirmed) || c.discards != 1 || c.releases != 1 {
+				t.Fatal("cleanup uncertainty lost")
+			}
+			if mode != "begin_discard" && !errors.Is(err, ErrCommitOutcomeUnknown) {
+				t.Fatal("commit evidence lost")
+			}
+			classified := callbackStoreError(callbackClassify(err))
+			if !errors.Is(classified, cb.ErrCleanupUnconfirmed) || errors.Is(classified, cb.ErrCommitUnknown) != (mode != "begin_discard") || !errors.Is(callbackStoreError(err), cb.ErrCleanupUnconfirmed) {
+				t.Fatal("cleanup veto or commit uncertainty lost")
+			}
+		})
 	}
 }
