@@ -17,3 +17,4 @@ E15,execution_unknown,failed,manual_resolve,"运维人工裁决（仅当持久�
 E16,running,cancelled,user_takeover_stop,"用户接管（FR-52）在设备安全断点停止（设备空闲边界）","写审计+墓碑；端侧停在新指令入口"
 E17,dispatched,execution_unknown,ack_ttl_expired,"300s ACK TTL 到期且无持久传输证据（transport_ack 未持久留痕，区别于 E06 的服务端重启/会话丢失触发）；只登记对账，禁止以超时定性成败（docs/02 §5.1 三原则①，AUD-03 C-10）","登记 UNKNOWN 对账任务（周期扫描+重连触发）；冻结同类 L1/L2 风险级新指令（FR-53 联动）——同 E06"
 E18,acked,execution_unknown,ack_ttl_expired,"300s ACK TTL 后仍无持久传输证据（设备 journal 无 exec_start 启动记录；transport_ack 已有但≠执行证据，区别于 E07 的服务端重启触发）；只登记对账，禁止以超时定性成败（AUD-03 C-10）","同 E17"
+E19,queued,cancelled,queue_ttl_expired,"入队后超过排队 TTL（默认 24h，可配）仍无设备会话投递（设备离线积压）；仅对 queued 态——已下发后归 E17/E18 对账路径；不推定执行成败（从未下发）","写审计+墓碑（仅元数据）；回执含取消原因（可重新提交新指令）；2026-11-04 所有者反馈『指令永远卡等分配』修复"

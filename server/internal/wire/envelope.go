@@ -288,6 +288,9 @@ type ExecResult struct {
 	SuccessList []string `json:"successList"`
 	FailList    []string `json:"failList"`
 	MetaJSON    string   `json:"metaJson"`
+	// RawMsg 查询类指令结果数据本体（apifox api-44952776 rawMsg=回执数据：
+	// 501/502 等名单 JSON——2026-11-04 契约修正，端侧 DeviceSessionLoop 填充）。
+	RawMsg string `json:"rawMsg,omitempty"`
 }
 
 // IsExecResult 报告载荷项是否为执行结果（type ∈ 201~509 且携带 errorCode）。

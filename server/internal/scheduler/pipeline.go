@@ -533,6 +533,11 @@ func outboxEffect(db *sqlite.DB, cmd *sqlite.Command, r *wire.ExecResult, edge s
 			"dryRun":      cmd.DryRun,
 			"at":          now.UnixMilli(),
 		}
+		// apifox api-44952776 rawMsg=回执数据本体（查询类名单 JSON）——端侧携即透传
+		// （2026-11-04 契约修正；此前该字段在 wire 解码层被丢弃）。
+		if r.RawMsg != "" {
+			payload["rawMsg"] = r.RawMsg
+		}
 		return db.EnqueueOutbox(context.Background(), tx, "exec_result", cmd.CommandID, payload, now)
 	}
 }

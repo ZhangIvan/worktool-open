@@ -212,6 +212,18 @@ var edgeDrivers = map[string]struct {
 		}
 		return id
 	}},
+	"E19": {"queued", func(f *fixture, t *testing.T) string {
+		id := f.seed(t, "queued")
+		f.advance(25 * time.Hour)
+		cancelled, err := f.svc.ScanQueuedTTL(context.Background(), 24*time.Hour)
+		if err != nil {
+			t.Fatalf("E19 扫描: %v", err)
+		}
+		if len(cancelled) == 0 {
+			t.Fatal("E19 应取消超期指令")
+		}
+		return id
+	}},
 	"E18": {"acked", func(f *fixture, t *testing.T) string {
 		id := f.seed(t, "acked")
 		f.advance(301 * time.Second)

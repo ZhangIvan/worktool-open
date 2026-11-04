@@ -457,8 +457,13 @@ func (w *OutboxWorker) compatExecResultBody(ctx context.Context, it sqlite.Outbo
 	if at, ok := payload["at"]; ok {
 		payload["runTime"] = at // 终态时间（毫秒）
 	}
-	if raw := w.commandPayload(ctx, it.CommandID); raw != "" {
-		payload["rawMsg"] = raw // 指令原文（含 titleList/receivedContent 等）
+	// rawMsg 优先级（2026-11-04 契约修正）：端侧帧已携 rawMsg（查询类结果数据
+	// 名单 JSON——apifox api-44952776 rawMsg=回执数据本体）→ 保留端侧值；缺失才
+	// 回落指令原文（含 titleList/receivedContent 等）。
+	if _, hasDeviceRaw := payload["rawMsg"]; !hasDeviceRaw {
+		if raw := w.commandPayload(ctx, it.CommandID); raw != "" {
+			payload["rawMsg"] = raw
+		}
 	}
 	// groupName/qrCode：payload 携带才透传（successList/failList/errorCode/
 	// errorReason/timeCost 原名原值——文档字段名一致，无需别名）。
