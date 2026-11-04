@@ -271,8 +271,11 @@ class ReconnectingWsClientTest {
         client.stop()
     }
 
+    // H2（2026-11-04 性能审计）：心跳发送成功=链路活性证据（TCP 写成功=内核级
+    // 存活；死链由写失败路径与服务端读 deadline 关闭双路径检测）。服务端对心跳
+    // 无回包（spec 语义）不再触发看门狗——消灭每分钟重连循环。
     @Test
-    fun `v2 形态-45s 不活跃关闭重连`() {
+    fun `v2 形态-心跳持续成功则看门狗不断连（发送即活性）`() {
         val transport = FakeTransport()
         val scheduler = ManualScheduler()
         val events = mutableListOf<String>()
@@ -286,26 +289,42 @@ class ReconnectingWsClientTest {
             inactivityTimeoutMillis = 45_000,
             backoff = BackoffPolicy(initialMillis = 5_000, maxMillis = 120_000),
             scheduler = scheduler,
-            clock = { scheduler.nowVirtual }, // 虚拟时钟推进
-            onEvent = { events.add(it.javaClass.simpleName + ":" + it.toString().substringAfter("(").take(24)) },
+            clock = { scheduler.nowVirtual },
+            onEvent = { events.add(it.javaClass.simpleName) },
         )
         client.start()
         assertEquals("""{"type":"hello"}""", transport.sent.first())
-
-        // 40s 处有服务端消息 → 活跃刷新，不关闭
         scheduler.advance(40_000)
-        transport.serverMessage("pong")
-        scheduler.advance(20_000) // 距上次消息 20s < 45s
-        assertTrue("20s 活跃窗口内不得断连", transport.open)
+        transport.serverMessage("pong") // 服务端消息同样刷新活性
+        scheduler.advance(120_000) // 4 分钟无服务端帧——心跳一直成功，不得断连
+        assertTrue("心跳成功=链路活性，不得断连", transport.open)
         assertTrue(events.none { it.startsWith("InactivityTimeout") })
+        client.stop()
+    }
 
-        // 持续无消息 → 45s 不活跃触发关闭并按退避重连
-        scheduler.advance(50_000)
-        assertTrue("必须发生不活跃断连", events.any { it.startsWith("InactivityTimeout") })
+    @Test
+    fun `v2 形态-无心跳帧时看门狗仍按不活跃关闭（覆盖看门狗本体）`() {
+        val transport = FakeTransport()
+        val scheduler = ManualScheduler()
+        val events = mutableListOf<String>()
+        val client = ReconnectingWsClient(
+            transportFactory = FakeTransport.Factory(transport),
+            urlProvider = { "wss://example.com/api/v2/device-sessions/1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d" },
+            greeting = { """{"type":"hello"}""" },
+            onServerMessage = { },
+            heartbeatFrame = null, // 无心跳帧 → lastSendOk 不刷新 → 看门狗按旧语义触发
+            heartbeatIntervalMillis = 15_000,
+            inactivityTimeoutMillis = 45_000,
+            backoff = BackoffPolicy(initialMillis = 5_000, maxMillis = 120_000),
+            scheduler = scheduler,
+            clock = { scheduler.nowVirtual },
+            onEvent = { events.add(it.javaClass.simpleName) },
+        )
+        client.start()
+        // 15s 链式检查 + idle>45 严格大于 → 触发发生在 60s 拍
+        scheduler.advance(65_000)
+        assertTrue("无任何活性证据时必须不活跃断连", events.any { it.startsWith("InactivityTimeout") })
         assertTrue("必须调度重连", events.any { it.startsWith("ReconnectScheduled") })
-        // 重连后新连接重发 hello 首帧
-        val hellos = transport.sent.count { it == """{"type":"hello"}""" }
-        assertTrue("重连后应再次发送 hello（实际 $hellos 次）", hellos >= 2)
         client.stop()
     }
 

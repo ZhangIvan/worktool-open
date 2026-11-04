@@ -45,6 +45,15 @@ class ReconnectingWsClient(
     private var stopped = true
     private var transport: WsTransport? = null
     private var lastServerActivity = 0L
+
+    /**
+     * 最近一次「发送成功」时刻（H2/性能审计 2026-11-04）：TCP 写成功=内核级链路
+     * 活性证据（半开连接最终会写失败/读失败暴露）。不活跃看门狗以此与
+     * [lastServerActivity] 取 max——服务端对心跳无回包（spec：心跳无应答语义）
+     * 不再误杀健康会话，消灭每分钟重连循环；死链仍由「写失败→handleDown」与
+     * 「服务端读 deadline 关闭→读失败」双路径检测。
+     */
+    private var lastSendOk = 0L
     private var heartbeatHandle: Cancellable? = null
     private var timeoutHandle: Cancellable? = null
 
@@ -100,6 +109,7 @@ class ReconnectingWsClient(
             backoff.reset()
             reconnectAttemptCount = 0
             lastServerActivity = clock()
+            lastSendOk = clock() // greeting 发送成功亦为活性证据（无心跳帧客户端的看门狗基准）
         }
         greeting?.invoke()?.let { transport?.send(it) }
         onConnected()
@@ -136,6 +146,7 @@ class ReconnectingWsClient(
                 val now = clock()
                 val ok = transport?.send(frame.invoke()) ?: false
                 if (ok) {
+                    synchronized(lock) { lastSendOk = clock() }
                     onEvent?.invoke(Event.HeartbeatSent(now))
                     scheduleHeartbeat() // 链式下一拍
                 } else {
@@ -152,7 +163,7 @@ class ReconnectingWsClient(
         synchronized(lock) {
             if (state != State.OPEN) return
             timeoutHandle = scheduler.schedule(heartbeatIntervalMillis) {
-                val idle = clock() - lastServerActivity
+                val idle = clock() - maxOf(lastServerActivity, lastSendOk)
                 if (idle > timeout) {
                     onEvent?.invoke(Event.InactivityTimeout(idle))
                     transport?.close(4400, "inactivity-${timeout}ms")
