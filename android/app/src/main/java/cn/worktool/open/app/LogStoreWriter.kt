@@ -23,7 +23,10 @@ object LogStoreWriter {
     private const val MAX_FILE_BYTES = 8L * 1024 * 1024 // 单日护栏（尾部截断登记为截断场景）
 
     private fun fileNameFor(date: Date): String =
-        SimpleDateFormat("worktool_(yyyy_MM_dd).log", Locale.US).format(date)
+        // 2026-11-04 code review B1：原 "worktool_(yyyy_MM_dd).log" 传给 SimpleDateFormat
+        // 时 o/l/g 为非法模式字符（构造即抛 IllegalArgumentException，被 runCatching
+        // 吞掉 → 日志从未落盘）。改为日期段格式化 + 手工拼接常量部分。
+        "worktool_(" + SimpleDateFormat("yyyy_MM_dd", Locale.US).format(date) + ").log"
 
     fun fileFor(dir: File, date: Date = Date()): File = File(dir, fileNameFor(date))
 

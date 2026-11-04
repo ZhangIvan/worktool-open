@@ -28,7 +28,6 @@ func TestClientLogUploadEndToEnd(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/robot/clientLog/upload?robotId="+f.robot, &body)
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+f.token)
 	req.Header.Set("Idempotency-Key", "clog-e2e-1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -51,7 +50,7 @@ func TestClientLogUploadEndToEnd(t *testing.T) {
 	w2 := multipartWriter(&body2)
 	_ = w2.WriteField("robotId", "robot-openapi-01")
 	w2.Close()
-	req2, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/robot/clientLog/upload?robotId="+f.robot, &body2)
+	req2, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/robot/clientLog/upload", &body2)
 	req2.Header.Set("Content-Type", w2.FormDataContentType())
 	req2.Header.Set("Authorization", "Bearer "+f.token)
 	req2.Header.Set("Idempotency-Key", "clog-e2e-2")

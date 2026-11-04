@@ -312,8 +312,13 @@ func (s *Server) HandleClientLogUpload(w http.ResponseWriter, r *http.Request) {
 	if !methodGuard(w, r, "POST", http.MethodPost) {
 		return
 	}
-	robotID, ok := s.uploadGuard(w, r)
-	if !ok {
+	// 放宽前置（2026-11-04 会话 11 真机实证）：设备端 LogUploadPort 无 openapi
+	// robot token（设备凭据=deviceToken，面不同），也无 Idempotency-Key——改用
+	// IP 限流（60QPM 同池）+ form robotId（query 优先）。内网 TLS 部署下
+	// 遥测面可接受；公网暴露属部署侧违规（SR-01/09）。
+	robotID := strings.TrimSpace(r.URL.Query().Get("robotId"))
+	if !s.openapiLimiter.allow(r.RemoteAddr, s.Now().UTC()) {
+		writeOpenAPIErr(w, http.StatusTooManyRequests, openapiCodeRateLimited, "请求超出限流（60QPM/IP）")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, openapiUploadMaxBytes+(1<<20))
@@ -353,6 +358,9 @@ func (s *Server) HandleClientLogUpload(w http.ResponseWriter, r *http.Request) {
 	if fileBuf.Len() == 0 {
 		writeOpenAPIErr(w, http.StatusBadRequest, openapiUpstreamIllegalData, "缺文件 part（名 file）或内容为空")
 		return
+	}
+	if strings.TrimSpace(form["robotId"]) != "" && robotID == "" {
+		robotID = strings.TrimSpace(form["robotId"])
 	}
 	fileID := wire.NewUUID()
 	dir := filepath.Join(s.fileDir(), "clientlogs")

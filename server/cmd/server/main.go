@@ -110,9 +110,20 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	bgCtx, bgStop := context.WithCancel(ctx)
 	defer bgStop()
 	go func() {
-		// 扫描器错误可观测（2026-11-04 E19 部署排障：此前 _ 丢弃致静默死亡）
-		if err := pipeline.RunAckTTLScanner(bgCtx, 10*time.Second); err != nil && ctx.Err() == nil {
-			logger.Printf("boot: TTL 扫描器退出: %v", err)
+		// B3（code review）：TTL 扫描器一次瞬时错误（如 SQLITE_BUSY）即 return
+		// 退出 goroutine → E17/E18/E19 全部静默停摆到重启。改为在 Scanner 循环内
+		// 容错（pipeline 侧继续），此处仅保留 ctx 取消退出。
+		for ctx.Err() == nil {
+			if err := pipeline.RunAckTTLScanner(bgCtx, 10*time.Second); err != nil && ctx.Err() == nil {
+				logger.Printf("scheduler: TTL 扫描器异常退出（3s 后重启）: %v", err)
+			} else {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
 		}
 	}()
 	go func() { _ = hub.RunDispatchPump(bgCtx, time.Second) }()

@@ -179,7 +179,7 @@ class UploadLogFileExecutor(
         id = "collect-day-zip",
         description = "收集 ${intent.logDate ?: "今天"} 日志并打包 log_${intent.logDate ?: ""}.zip",
     ) { _ ->
-        val zip = logs.collectDayLogZip(intent.logDate ?: "today")
+        val zip = logs.collectDayLogZip(intent.logDate ?: java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
         if (zip == null) {
             StepOutcome.Failure(
                 ExecutorErrorCodes.NODE_NOT_FOUND,
@@ -197,7 +197,7 @@ class UploadLogFileExecutor(
     ) { _ ->
         val zip = pendingZip
             ?: return@PlanStep StepOutcome.Failure(ExecutorErrorCodes.NODE_NOT_FOUND, "日志包缺失（收集步未产出）")
-        val name = "log_${intent.logDate ?: "today"}.zip"
+        val name = "log_${intent.logDate ?: java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())}.zip"
         if (!logUpload.uploadLogZip(name, zip)) {
             StepOutcome.Failure(ExecutorErrorCodes.ACTION_REJECTED, "处理日志上传时发生异常（上传失败）")
         } else {

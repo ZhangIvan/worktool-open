@@ -422,6 +422,10 @@ func (s *Server) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		resolvedTarget = dev.DeviceID
 	}
+	// B5 复核（2026-11-04）：裸 robotId **不需要** v1: 前缀兜底——派发泵
+	// DispatchQueued 对无前缀 target 直查 h.v1[robotId]（v1 连接按 robotId
+	// 登记）即可路由；改写存储 target 反而破坏 queued-only 用例语义。真正
+	// 缺口是 robot_id 绑定丢失（会话 9 已修），配对设备提交正常归一。
 	// 幂等键（CR ADM-4）：与兼容面同一条统一管线在幂等维度对齐——调用方键优先
 	// （重试复用 → 重放保护），留空则服务端生成（响应回显，供调用方续用）。
 	idemKey := strings.TrimSpace(req.IdempotencyKey)
