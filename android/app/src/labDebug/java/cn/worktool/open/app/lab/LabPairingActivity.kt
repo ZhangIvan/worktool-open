@@ -180,6 +180,9 @@ class LabPairingActivity : Activity() {
         )
         // W-M6：全量批（62 执行器）+ RuntimePortHub 端口装配——lab 与产品
         // （SessionRuntime）同构，真机验证即产品验证。校准规则注入 501/502。
+        // 登记边界（审计 2026-11-04）：hub 的 201/202 走 task PauseManager（队列/
+        // 暂停语义面），而 lab 回路执行门=NeverPausedPauseManager（W-M4 观测语义）——
+        // 201 暂停在 lab 不拦截后续指令执行（产品 SessionRuntime 两处同源无此分叉）。
         val portHub = RuntimePortHub(
             pauseManager = cn.worktool.open.core.task.PauseManager(System::currentTimeMillis),
             clock = System::currentTimeMillis,

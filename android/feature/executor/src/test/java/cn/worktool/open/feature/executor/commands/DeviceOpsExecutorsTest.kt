@@ -91,6 +91,14 @@ class DeviceOpsExecutorsTest {
         assertEquals(ExecutionStatus.SUCCEEDED, report.status)
         val (_, payload) = structured.results.single()
         assertTrue(payload["fileBase64"].toString().contains("H4sIA"))
+        // B3-514 收口回归：metaJson=JSON 对象（logFilePath/startLine/endLine 键），
+        // 非旧 k=v 逗号串。
+        val meta = payload["metaJson"]
+        assertTrue("metaJson 须为 JSON 对象: $meta", meta is kotlinx.serialization.json.JsonObject)
+        assertTrue(
+            "metaJson 透传 fixture 键（compression）",
+            (meta as kotlinx.serialization.json.JsonObject).containsKey("compression"),
+        )
         assertTrue("互斥已释放", !guard.held)
     }
 

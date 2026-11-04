@@ -221,6 +221,42 @@ class EfficiencyExecutorsTest {
     }
 
     @Test
+    fun `223滚动兜底-目标企业不在首屏则滚动搜索命中`() {
+        // B3-223 收口回归：企业列表滚动查找（首屏未命中 → 容器翻页重查）。
+        val home = HomeFixture(conversations = listOf("工作群"))
+        val drawer = CorpDrawerFixture(corps = listOf("A公司"), currentCorp = "A公司")
+        val hiddenCorp = cn.worktool.open.feature.executor.fake.fakeNode(
+            text = "B公司",
+            resId = "com.tencent.wework:id/corp_list_item_name",
+            cls = "android.widget.TextView",
+            clickable = true,
+        )
+        // 抽屉容器可滚动；目标企业节点经 onScroll 入树（懒加载语义）
+        val scrollableList = cn.worktool.open.feature.executor.fake.fakeNode(
+            cls = "android.view.ViewGroup", scrollable = true,
+        ) { drawer.corpNodes.values.forEach { add(it) } }
+        drawer.drawerScreen.root.add(scrollableList)
+        home.screen.root.add(drawer.drawerEntry!!)
+        home.screen.root.add(drawer.homeCorpNode)
+        val driver = FakeUiDriver(clock).apply {
+            show(home.screen)
+            onClick(home.screen, drawer.drawerEntry!!) { push(drawer.drawerScreen) }
+            onClick(drawer.drawerScreen, hiddenCorp) {
+                drawer.homeCorpNode.textValue = "B公司"
+                pop()
+            }
+            onScroll(drawer.drawerScreen, scrollableList) { scrollableList.add(hiddenCorp) }
+        }
+        val corp = FakeCurrentCorp("A公司")
+        val registry = ExecutorRegistry.of(SwitchCorpExecutor(corp, timeouts = timeouts))
+        val report = CommandRunner(driver, gate).execute(CommandIntent.SwitchCorp("B公司"), registry)
+
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        assertTrue("须经滚动兜底命中", driver.actionLog.any { it.startsWith("scroll(") })
+        assertEquals("B公司", drawer.homeCorpNode.textValue)
+    }
+
+    @Test
     fun `223暂停拦截-L1零副作用`() {
         val (driver, _, _) = corpWorld()
         val corp = FakeCurrentCorp("A公司")
