@@ -1690,9 +1690,9 @@ function markSteps() {
     var el = $(id);
     if (!el) return;
     var isDone = (i === 0 && !!WIZ.deviceId) || ((i === 1 || i === 2) && !!WIZ.type) || (i === 3 && dryDone);
-    if (isDone) el.className = "done";
-    else if (!activeSet) { el.className = "active"; activeSet = true; }
-    else el.className = "";
+    if (isDone) el.className = "step done";
+    else if (!activeSet) { el.className = "step active"; activeSet = true; }
+    else el.className = "step";
   });
 }
 function loadDevicesForSend() {
@@ -2142,7 +2142,6 @@ function loadTaskCurrent() {
   if (first) $("tc-body").innerHTML = "<div class='empty'>加载中…</div>";
   api("GET", "/api/v1/admin/commands/" + encodeURIComponent(id)).then(function (j) {
     clearStale("tc-stale");
-    $("tc-updated") && ($("tc-updated").textContent = "");
     renderTaskCurrentBody(j);
     var c = j.command || {};
     if (TERMINAL_STATES[c.state] || c.terminalState) {
@@ -2406,11 +2405,11 @@ function renderCommands() {
       var concl = stateConclusion(c, j.results);
       card.innerHTML =
         "<h3>选中任务 <span class='hint'>" + esc(shortIdPlain(cmdSelId)) + "</span></h3>" +
-        "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'><b style='font-size:16px'>" + (CAT.byType[c.type] ? esc(CAT.byType[c.type].name) : "type " + esc(String(c.type))) + "</b>" + stPill(c.state) + "</div>" +
+        "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'><b style='font-size:16px'>" + (CAT.byType[c.type] ? esc(CAT.byType[c.type].name) : (c.type ? "type " + esc(String(c.type)) : "未获取任务详情")) + "</b>" + (c.state ? stPill(c.state) : "") + "</div>" +
         "<div class='vsteps' style='margin-top:10px'>" + vsteps(heroStepsMini(c)) + "</div>" +
         "<div class='warnbox'>" + ico("warn") + " " + esc(concl.detail) + "</div>" +
-        "<div class='kvrow'><span class='k'>设备</span><span class='v mono'>" + esc(c.target) + "</span></div>" +
-        "<div class='kvrow'><span class='k'>目标</span><span class='v mono'>" + esc(c.target) + "</span></div>" +
+        "<div class='kvrow'><span class='k'>设备</span><span class='v mono'>" + esc(c.target || "—") + "</span></div>" +
+        "<div class='kvrow'><span class='k'>目标</span><span class='v mono'>" + esc(c.target || "—") + "</span></div>" +
         "<div class='kvrow'><span class='k'>最近事件</span><span class='v mono'>" + ((j.events || [])[0] ? fmtMs(j.events[0].atMs) : "—") + "</span></div>" +
         "<div class='row' style='margin-top:12px'>" +
         "<button class='primary mini' id='cmd-side-open'>核对任务结果</button>" +
@@ -2582,8 +2581,8 @@ function renderQueue() {
       var inQueue = c.state === "queued";
       card.innerHTML =
         "<h3>选中指令 <span class='hint'>" + esc(shortIdPlain(id)) + "</span></h3>" +
-        "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'><b style='font-size:16px'>" + esc(shortIdPlain(id)) + "</b>" + stPill(c.state || "queued") + "</div>" +
-        "<div class='dim' style='margin:2px 0 10px'>" + typeCell(c.type) + " · " + esc(c.target) + "</div>" +
+        "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'><b style='font-size:16px'>" + esc(shortIdPlain(id)) + "</b>" + (c.state ? stPill(c.state) : stPill("queued")) + "</div>" +
+        "<div class='dim' style='margin:2px 0 10px'>" + (c.type ? typeCell(c.type) + " · " : "") + esc(c.target || "—") + "</div>" +
         vsteps([
           { t: "已入队", d: "已进入待派发队列", st: "done" },
           { t: "已投递", d: inQueue ? "尚未投递（等待设备可达）" : "已投递至设备通道", st: inQueue ? "" : "done" },

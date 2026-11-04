@@ -147,8 +147,8 @@ const helperIds = new Set();
 for (const mm of src.matchAll(/btn(?:Primary|Ghost)\("([A-Za-z0-9_-]+)"/g)) helperIds.add(mm[1]);
 const missing = [...refIds].filter(id => !html.includes('id="' + id + '"') && !html.includes("id='" + id + "'") && !helperIds.has(id));
 ok(missing.length === 0, `所有 $("…") 引用的 id 均存在（共 ${refIds.size} 个引用 + ${helperIds.size} 个助手按钮 id，含动态模板）`, missing);
-const helperMissing = [...helperIds].filter(id => !html.includes('id="' + id + '"') && !html.includes("id='" + id + "'"));
-ok(helperMissing.length === 0, "助手按钮（btnPrimary/btnGhost）声明的 id 与 $("…") 引用成对", helperMissing);
+const helperDead = [...helperIds].filter(id => !refIds.has(id));
+ok(helperDead.length === 0, `助手按钮（btnPrimary/btnGhost）声明的 id 均有 $("…") 引用（无死按钮）`, helperDead);
 
 /* ---------- C. 五工作区导航 + 旧路由重定向 ---------- */
 section("C. 五工作区导航与路由");
