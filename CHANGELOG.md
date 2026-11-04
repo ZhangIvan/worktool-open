@@ -47,9 +47,19 @@
 
 #### NOT_RUN 与已知边界（如实登记）
 
-- **设备链路修复（linkfix 车道）= NOT_RUN**：本条目登记时点（2026-11-04，
-  zcode/main @ e539dd8）全分支/提交/文档均未检索到 linkfix 车道交付物，按 NOT_RUN
-  如实登记、不虚构闭环；该车道产出后滚动补记。
+- **设备链路修复（linkfix 车道）= 已交付并真机验收**（初稿误登 NOT_RUN，2026-11-05
+  滚动补记更正）：客户端三处根因修复——①EndpointPolicy 裸 IP 例外进程内易失（新进程
+  本地拒拨零痕迹）；②服务端重启凭据失忆 401 后重建无自愈（补 Ed25519 重协商自愈）；
+  ③重建路径异常全吞无日志。epoch=0 拒旧三处修复——入站门禁缺 epoch 改「不拒旧仅去重」、
+  socketType=3 回执帧单向消费防乒乓、出站 RAW_CONFIRM 回填会话 epoch（5ac3781）。
+  验收（独立复核员实测）：真机 online=true（tokenVersion=2）、只读 502 ×2
+  queued→succeeded（errorCode=0）、服务端重启后 401→重协商自愈实测走通；
+  JVM/Go 门禁全绿（InboundGateEpochTest 5、RebuildRenegotiateTest 5、
+  DeviceSessionLoopGateTest 15、Go 12 包 ok）。
+- **PairingClient.renegotiate 形状不匹配（adjacent，无生产调用方）**：客户端发平铺
+  `{deviceId,ts,nonce,ed25519Signature}`，服务端要求嵌套 `renegotiate{ts,nonce,signature}`；
+  生产自愈走 V2Session 内联（服务端形状，真机实证 tokenVersion=2）——独立 API 修正为本
+  条目同步提交，生产代码零调用不受影响。
 - **511 会议详情族选择器仍 NOT_CALIBRATED**：日历会议列表滚动容器、详情预定时间/
   实际时间/组织人值文本共 4 项占位（`WeworkScreenRules.kt` 逐项标注），真机未命中
   如实 NODE_NOT_FOUND；515「搜索到已退出群聊」分支 JVM 绿仅为分支证据——均待 D1

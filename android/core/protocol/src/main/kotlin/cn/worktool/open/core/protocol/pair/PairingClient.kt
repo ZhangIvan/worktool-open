@@ -96,11 +96,19 @@ class PairingClient(
     }
 
     private fun postRenegotiate(deviceId: String, ts: Long, nonce: String, signature: ByteArray): PairResponse {
+        // 形状对齐服务端冻结契约（v2.go createSessionRequest.renegotiateProof，
+        // spec §5.5.1）：嵌套 renegotiate{ts,nonce,signature}——原平铺
+        // ed25519Signature 形状无生产调用方且服务端必拒（2026-11-05 修正）。
         val body = buildJsonObject {
             put("deviceId", deviceId)
-            put("ts", ts)
-            put("nonce", nonce)
-            put("ed25519Signature", cn.worktool.open.core.protocol.crypto.Hex.encode(signature))
+            put(
+                "renegotiate",
+                buildJsonObject {
+                    put("ts", ts)
+                    put("nonce", nonce)
+                    put("signature", cn.worktool.open.core.protocol.crypto.Hex.encode(signature))
+                },
+            )
         }
         val element = execute(
             "$baseUrl/api/v2/device-sessions",

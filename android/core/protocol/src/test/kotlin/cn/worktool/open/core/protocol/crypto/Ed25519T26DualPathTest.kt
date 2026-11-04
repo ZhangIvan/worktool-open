@@ -207,10 +207,11 @@ class Ed25519T26DualPathTest {
         val recorded = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/api/v2/device-sessions", recorded.path)
         val body = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
+        val proof = body["renegotiate"]!!.jsonObject
         val signed = "${body["deviceId"]!!.jsonPrimitive.content}|" +
-            "${body["ts"]!!.jsonPrimitive.content}|" +
-            "${body["nonce"]!!.jsonPrimitive.content}"
-        val sig = Hex.decode(body["ed25519Signature"]!!.jsonPrimitive.content)
+            "${proof["ts"]!!.jsonPrimitive.content}|" +
+            "${proof["nonce"]!!.jsonPrimitive.content}"
+        val sig = Hex.decode(proof["signature"]!!.jsonPrimitive.content)
         assertTrue(
             "回退路径重协商签名必须可被独立实现验证",
             Ed25519.verify(Hex.decode(vector1.publicHex), signed.toByteArray(Charsets.UTF_8), sig),

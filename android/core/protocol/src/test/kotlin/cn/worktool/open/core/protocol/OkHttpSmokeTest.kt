@@ -198,14 +198,16 @@ class OkHttpSmokeTest {
         val response = client.renegotiate("device-9f2c7b41", signingPair.private)
         assertEquals("5f0f6e58-7a9b-4c1d-8e2f-3a4b5c6d7e80", response.sessionId)
 
-        // 服务端视角：请求体携带 deviceId/ts/nonce/ed25519Signature，签名串 = deviceId|ts|nonce
+        // 服务端视角：请求体携带 deviceId + 嵌套 renegotiate{ts,nonce,signature}（服务端冻结
+        // 契约 v2.go renegotiateProof），签名串 = deviceId|ts|nonce
         val recorded = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/api/v2/device-sessions", recorded.path)
         val body = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
         val deviceId = body["deviceId"]!!.jsonPrimitive.content
-        val ts = body["ts"]!!.jsonPrimitive.content
-        val nonce = body["nonce"]!!.jsonPrimitive.content
-        val sig = Hex.decode(body["ed25519Signature"]!!.jsonPrimitive.content)
+        val proof = body["renegotiate"]!!.jsonObject
+        val ts = proof["ts"]!!.jsonPrimitive.content
+        val nonce = proof["nonce"]!!.jsonPrimitive.content
+        val sig = Hex.decode(proof["signature"]!!.jsonPrimitive.content)
         assertTrue(
             Ed25519.verify(
                 Ed25519.publicRaw(signingPair.public),
