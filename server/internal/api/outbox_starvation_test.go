@@ -319,3 +319,56 @@ func TestOutboxEmptySecretRefusesDelivery(t *testing.T) {
 		t.Fatalf("密钥配置后应恢复投递：hits=%d", hits)
 	}
 }
+
+// TestOutboxRobotIdAsTargetRoutes（E2E 发现回归）：管理面以 robotId 为 target
+// 提交（无 v1: 前缀、非 deviceId）→ exec_result 行按该 robot 的 type1 绑定投递。
+func TestOutboxRobotIdAsTargetRoutes(t *testing.T) {
+	db, err := sqlite.OpenMem()
+	if err != nil {
+		t.Fatalf("sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	var hits int
+	rcv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(200) }))
+	t.Cleanup(rcv.Close)
+
+	// 设备绑定 robot-x；指令 target 直接写 robot-x（管理面形态）
+	seedCommandWithRobotTarget(ctx, t, db, "cmd-r1", "robot-x", "robot-x")
+	if err := seedRobotBinding(ctx, db, "robot-x", 1, rcv.URL); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	_ = db.EnqueueOutbox(ctx, nil, "exec_result", "cmd-r1", map[string]any{"type": 203}, now)
+
+	worker, _ := NewOutboxWorker(db, OutboxConfig{CallbackSecret: "s"}, nil)
+	if err := worker.DeliverDue(ctx); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("robotId-as-target 的 exec_result 应回调投递：hits=%d", hits)
+	}
+}
+
+// seedCommandWithRobotTarget target=robotId 直填形态。
+func seedCommandWithRobotTarget(ctx context.Context, t *testing.T, db *sqlite.DB, commandID, deviceID, target string) {
+	t.Helper()
+	tx, err := db.Tx(ctx)
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO devices(device_id, robot_id, device_name, token_hash, token_version, status, epoch, paired_at, updated_at)
+		 VALUES (?,?,'t','h',1,'active',0,0,0)`, deviceID, "robot-x"); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO commands(command_id, target, command_type, payload, state, epoch, seq, event_id, risk_class, dry_run, created_at)
+		 VALUES (?,?,'203','{}','succeeded',0,0,'','L0',0,0)`, commandID, target); err != nil {
+		t.Fatalf("seed command: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}

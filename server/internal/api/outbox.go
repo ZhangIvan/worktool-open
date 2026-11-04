@@ -321,10 +321,19 @@ func (w *OutboxWorker) robotIDForTarget(ctx context.Context, target string) (str
 	if derr != nil {
 		return "", fmt.Errorf("deviceId→robot 反查失败: %w", derr)
 	}
-	if len(drows) != 1 || drows[0][0] == "" {
-		return "", nil // 设备缺失/未绑=确定不可路由（非错误）
+	if len(drows) == 1 && drows[0][0] != "" {
+		return drows[0][0], nil
 	}
-	return drows[0][0], nil
+	// E2E 发现（2026-11-04 管理台闭环）：管理面提交可直接以 robotId 为 target
+	//（无 v1: 前缀、非 deviceId）——target 本身命中 devices.robot_id 即视为该 robot。
+	rrows, rerr := w.db.QueryDump(ctx, `SELECT COUNT(*) FROM devices WHERE robot_id = ?`, target)
+	if rerr != nil {
+		return "", fmt.Errorf("robotId 直查失败: %w", rerr)
+	}
+	if len(rrows) == 1 && rrows[0][0] != "0" {
+		return target, nil
+	}
+	return "", nil // 设备缺失/未绑=确定不可路由（非错误）
 }
 
 // robotCallbackURL 取 robot 登记的指定 type 回调绑定 URL（未登记/空返回空串）。
