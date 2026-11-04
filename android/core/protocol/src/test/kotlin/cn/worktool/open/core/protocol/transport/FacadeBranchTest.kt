@@ -191,6 +191,71 @@ class FacadeBranchTest {
     }
 
     @Test
+    fun `V2Session-重建自持ephemeral-公钥上送并内部重派`() {
+        // W-M6：无 cryptoRebuilder 且初始 crypto 存在 → 重建 POST 携带新生
+        // x25519EphemeralPublicKey（服务端会话行按其派生）→ 端侧以新私钥重派。
+        val server = MockWebServer()
+        server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
+        val base = "http://127.0.0.1:" + server.port
+        val newSessionId = "22222222-3333-4444-5555-666666666666"
+        val serverPair = cn.worktool.open.core.protocol.crypto.X25519.generateKeyPair()
+        val serverPubHex = cn.worktool.open.core.protocol.crypto.Hex.encode(
+            cn.worktool.open.core.protocol.crypto.X25519.publicRaw(serverPair.public),
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody(
+                """{"sessionId":"$newSessionId","wsPath":"/api/v2/device-sessions/$newSessionId","serverX25519PublicKey":"$serverPubHex"}""",
+            ),
+        )
+        val urlCapture = object : WsTransport, TransportListener by NoopListener {
+            var url = ""
+            override fun connect(url: String, listener: TransportListener) {
+                this.url = url
+                listener.onOpen()
+            }
+            override fun send(text: String) = true
+            override fun close(code: Int, reason: String) {}
+        }
+        // 初始 crypto（模拟配对时派生）：任意合法 X25519 材料
+        val initPair = cn.worktool.open.core.protocol.crypto.X25519.generateKeyPair()
+        val initCrypto = cn.worktool.open.core.protocol.session.SessionCrypto.derive(
+            deviceEphemeralPrivate = initPair.private,
+            serverX25519PublicKeyRaw = cn.worktool.open.core.protocol.crypto.X25519.publicRaw(serverPair.public),
+            sessionId = "00000000-0000-0000-0000-000000000000",
+        )
+        val session = ProtocolClient.V2Session(
+            credentials = DeviceCredentials(
+                deviceId = "device-9f2c7b41",
+                deviceTokenHex = tokenHex,
+                tokenVersion = 1,
+                sessionId = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+                wsPath = null, // ← 立即走重建路径
+            ),
+            baseUrl = base,
+            sessionCrypto = initCrypto,
+            journal = null,
+            scheduler = ManualScheduler(),
+            clock = { 1_793_613_600_000L },
+            capabilities = ProtocolClient.Capabilities("0.1.0", 2, listOf(203)),
+            onCommand = { _, _, _ -> },
+            onRejected = { },
+            transportFactory = object : WsTransport.Factory {
+                override fun create(): WsTransport = urlCapture
+            },
+            // cryptoRebuilder = null ← 自持路径
+        )
+        session.start()
+        assertEquals("$base/api/v2/device-sessions/$newSessionId", urlCapture.url)
+        val req = server.takeRequest(2, TimeUnit.SECONDS)!!
+        assertEquals("/api/v2/device-sessions", req.path)
+        val body = req.body.readUtf8()
+        assertTrue("重建 POST 须上送新 ephemeral 公钥: $body", body.contains("\"x25519EphemeralPublicKey\":\"[0-9a-f]{64}\"".toRegex()))
+        assertTrue(body.contains("\"deviceId\":\"device-9f2c7b41\""))
+        session.stop()
+        server.shutdown()
+    }
+
+    @Test
     fun `V2Session-sendExecResult 无 journal 直发`() {
         val transport = FakeTransport()
         val scheduler = ManualScheduler()

@@ -151,14 +151,15 @@ class AccessibilityUiDriver(
     }
 
     /**
-     * 目标窗口可得判定（会话 9i 实证修复：服务 windows 列表恒空——flag 未生效时
-     * interactiveRoots 全空，即使目标应用已前台）。**回退 rootInActiveWindow**：
-     * 与 [currentRoot] 的回退语义一致——目标在前台时活动窗口根即目标根。
+     * 目标**前台**判定（会话 10 系列收口）：只认活动窗口——服务 windows 列表
+     * 包含**后台**企微窗（会话 10d 实证：后台窗命中导致跳过拉起 → 对后台窗
+     * 点击无效 → 首发群头超时）。活动窗=rootInActiveWindow 包名命中或 windows
+     * 中 isActive 的企微窗；后台企微窗不算（须拉起）。
      */
     private fun hasTargetRoot(): Boolean {
         val s = service ?: return false
-        if (s.interactiveRoots().any { it.packageName == WETARGET_PACKAGE }) return true
-        return s.rootInActiveWindow?.packageName == WETARGET_PACKAGE
+        if (s.rootInActiveWindow?.packageName == WETARGET_PACKAGE) return true
+        return s.windows?.any { it.isActive && it.root?.packageName == WETARGET_PACKAGE } == true
     }
 
     /** 最近一次 ensureTargetForeground 失败原因（执行报告 errorReason 透传）。 */

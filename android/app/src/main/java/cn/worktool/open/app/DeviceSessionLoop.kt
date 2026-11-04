@@ -17,6 +17,7 @@ import cn.worktool.open.core.protocol.transport.Scheduler
 import cn.worktool.open.core.protocol.validation.ControlPayloadValidator
 import cn.worktool.open.feature.executor.exec.ExecutorErrorCodes
 import cn.worktool.open.feature.executor.exec.ExecutorRegistry
+import cn.worktool.open.feature.executor.ports.TargetOutcome
 import cn.worktool.open.feature.executor.intent.IntentNormalizer
 import cn.worktool.open.feature.executor.intent.NormalizedIntent
 import cn.worktool.open.feature.executor.runtime.CommandRunner
@@ -123,10 +124,16 @@ class DeviceSessionLoop(
      * 会话重建密钥重派器（2026-11-04 会话 9g 主根因）：服务端每会话独立 X25519
      * 密钥对，重连重建会话后须以新 sessionId+serverX25519PublicKey 重派
      * [SessionCrypto]（设备保留配对时同一 ephemeral 私钥）。装配层（Lab/
-     * SessionRuntime）持有私钥时注入；null = 沿用初始 crypto（重建会话后帧
-     * 将全部 decrypt_failed——仅历史行为兼容）。
+     * SessionRuntime）持有私钥时注入；null = 协议层自持 ephemeral（W-M6：
+     * 重建 POST 上送新公钥+新私钥派生，产品变体第二连接起升 encryptType=2）。
      */
     private val cryptoRebuilder: ((sessionId: String, serverX25519PublicKeyHex: String) -> SessionCrypto?)? = null,
+    /**
+     * W-M6 fullBatch 批量结果取数（RuntimePortHub.takeBatchOutcomes）：执行器
+     * 经 BatchOutcomeSink 上报逐格成败 → RAW_CONFIRM 回执组装时并入
+     * successList/failList。null = 首批行为（单目标 target 归档）。
+     */
+    private val takeBatchOutcomes: (() -> List<TargetOutcome>)? = null,
 ) {
 
     private val codec = EnvelopeCodec()
@@ -455,14 +462,22 @@ class DeviceSessionLoop(
         deviceDryRun: Boolean = false,
         skippedExpired: Boolean = false,
     ) {
+        // W-M6：批量结果并入回执（有逐格上报则覆盖单目标归档；空批=首批行为）。
+        val batch = takeBatchOutcomes?.invoke().orEmpty()
+        val successList = batch.filter { it.succeeded }.map { it.target }.ifEmpty {
+            if (success && target != null) listOf(target) else emptyList()
+        }
+        val failList = batch.filter { !it.succeeded }.map { it.target }.ifEmpty {
+            if (!success && target != null) listOf(target) else emptyList()
+        }
         val bean = WeworkMessageBean(
             type = commandType,
             errorCode = errorCode,
             errorReason = errorReason ?: "",
             runTime = RUN_TIME_FORMAT.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault())),
             timeCost = timeCostMillis,
-            successList = if (success && target != null) listOf(target) else emptyList(),
-            failList = if (!success && target != null) listOf(target) else emptyList(),
+            successList = successList,
+            failList = failList,
             metaJson = buildJsonObject {
                 put("dispatchId", commandId)
                 if (deviceDryRun) put("deviceDryRun", true) // FR-54 端侧干跑审计标记
@@ -473,6 +488,24 @@ class DeviceSessionLoop(
         onExecResult?.invoke(commandId, commandType, errorCode, success)
         onEvent?.invoke("RAW_CONFIRM commandId=$commandId type=$commandType errorCode=$errorCode")
     }
+
+    /**
+     * 结构化查询结果上行（W-M6 RuntimePortHub.StructuredResultSink 出口）：
+     * socketType=2 上报帧（同 101/102 上报通道），载荷键值经 bean.extras 原样
+     * 上送（511/512/513/515 契约字段；网关侧 HandleQueryResult 消费）。
+     */
+    fun sendStructuredReport(commandType: Int, payload: JsonObject) {
+        session.sendReport(
+            WeworkMessageBean(type = commandType, extras = payload),
+        )
+    }
+
+    /**
+     * 批量上报帧直发（W-M6 MessageReportSink 出口，FR-01 端→云 101/102）：
+     * 全部成功才 true（任一失败=不可投递语义，调用方重试整批幂等）。
+     */
+    fun sendReportBeans(beans: List<WeworkMessageBean>): Boolean =
+        beans.fold(true) { acc, bean -> session.sendReport(bean) && acc }
 
     /** 当前重连序号（采纳项「重连中(第N次)」文案；状态卡观测面透出）。 */
     fun reconnectAttempts(): Int = session.reconnectAttempts()

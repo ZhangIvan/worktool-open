@@ -11,6 +11,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import cn.worktool.open.app.AccessibilityUiDriver
+import cn.worktool.open.app.DevicePortImpls
+import cn.worktool.open.app.RuntimePortHub
 import cn.worktool.open.app.DeviceSessionLoop
 import cn.worktool.open.app.R
 import cn.worktool.open.core.protocol.DeviceCredentials
@@ -176,49 +178,68 @@ class LabPairingActivity : Activity() {
                 ),
             ),
         )
-        val registry = ExecutorRegistry.defaultFirstBatch(
+        // W-M6：全量批（62 执行器）+ RuntimePortHub 端口装配——lab 与产品
+        // （SessionRuntime）同构，真机验证即产品验证。校准规则注入 501/502。
+        val portHub = RuntimePortHub(
+            pauseManager = cn.worktool.open.core.task.PauseManager(System::currentTimeMillis),
+            clock = System::currentTimeMillis,
+            notifier = { errorCode, errorReason, _ ->
+                runOnUiThread { log("控制台提示 [$errorCode] $errorReason") }
+            },
+            onEvent = { line -> log(line) },
+        )
+        val registry = ExecutorRegistry.defaultFullBatch(
             rules = calibratedRules,
-            querySink = QueryResultSink { type, result ->
-                val summary = when (result) {
-                    is QueryResult.GroupList -> "群×${result.groups.size}: ${result.groups.take(5)}"
-                    is QueryResult.FriendList -> "好友×${result.friends.size}: ${result.friends.take(5)}"
-                    is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
-                }
-                log("查询结果 type=$type → $summary")
-            },
-            files = object : LocalFilePort {
-                override fun defaultLogFilePath(): String = File(labFileDir, "worktool-lab.log").absolutePath
-                override fun stat(path: String): FileInfo? = File(path).takeIf { it.isFile }?.let {
-                    FileInfo(it.name, it.absolutePath, it.length())
-                }
-            },
+            bindings = cn.worktool.open.feature.executor.ports.ExecutorBindings(
+                querySink = QueryResultSink { type, result ->
+                    val summary = when (result) {
+                        is QueryResult.GroupList -> "群×${result.groups.size}: ${result.groups.take(5)}"
+                        is QueryResult.FriendList -> "好友×${result.friends.size}: ${result.friends.take(5)}"
+                        is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
+                    }
+                    log("查询结果 type=$type → $summary")
+                },
+                files = object : LocalFilePort {
+                    override fun defaultLogFilePath(): String = File(labFileDir, "worktool-lab.log").absolutePath
+                    override fun stat(path: String): FileInfo? = File(path).takeIf { it.isFile }?.let {
+                        FileInfo(it.name, it.absolutePath, it.length())
+                    }
+                },
+                structured = portHub,
+                batch = portHub,
+                report = cn.worktool.open.feature.executor.report.MessageReportSink { beans ->
+                    portHub.loop?.sendReportBeans(beans) ?: false
+                },
+                session = portHub,
+                loop = portHub,
+                console = portHub,
+                queue = portHub,
+                resources = DevicePortImpls.Resources(applicationContext),
+                logs = DevicePortImpls.Logs { File(labFileDir, "worktool-lab.log") },
+                logUpload = DevicePortImpls.LogUpload { host },
+                remoteFiles = DevicePortImpls.RemoteFiles(applicationContext),
+                qrJoin = DevicePortImpls.QrJoin(applicationContext),
+                appConfig = DevicePortImpls.AppConfig { host },
+                corp = DevicePortImpls.CurrentCorp,
+            ),
         )
         val l = DeviceSessionLoop(
             credentials = credentials,
             baseUrl = host,
             sessionCrypto = crypto,
-            // 2026-11-04 会话 9g 主根因修复：服务端每会话独立 X25519 密钥对——
-            // 重连重建会话（POST /api/v2/device-sessions）后以新 sessionId+新
-            // 服务端公钥重派会话密钥（本设备保留配对时同一 ephemeral 私钥，与
-            // 服务端 devices 表持久公钥对齐）。缺此步则重连后所有帧 decrypt_failed。
-            cryptoRebuilder = { newSessionId, serverPubHex ->
-                runCatching {
-                    SessionCrypto.derive(
-                        deviceEphemeralPrivate = ephemeralPair.private,
-                        serverX25519PublicKeyRaw = Hex.decode(serverPubHex),
-                        sessionId = newSessionId,
-                    )
-                }.getOrNull()
-            },
+            // W-M6：不再注入外部重派器——协议层自持 ephemeral（重建 POST 上送
+            // 新公钥+新私钥派生），与产品变体同路径（会话 10 真机实证其前置版）。
             journal = SqliteJournalStore(this),
             scheduler = Scheduler.shared(),
             clock = System::currentTimeMillis,
             registry = registry,
             driverProvider = { AccessibilityUiDriver(foregroundActivityContext = { this }) },
             pauseManager = NeverPausedPauseManager(),
-            clientVersion = "0.1.0-lab-wm4",
+            clientVersion = "0.1.0-lab-wm6",
             onEvent = { line -> log(line) },
+            takeBatchOutcomes = portHub::takeBatchOutcomes,
         )
+        portHub.attach(l)
         l.start()
         loop = l
         runOnUiThread { log("hello 已发送（ws=${response.wsPath}），等待 hello_ack…") }

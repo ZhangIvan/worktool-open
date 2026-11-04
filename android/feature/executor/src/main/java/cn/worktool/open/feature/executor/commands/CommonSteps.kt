@@ -19,29 +19,51 @@ import cn.worktool.open.feature.executor.runtime.WeworkSelectorIds
 internal object CommonSteps {
 
     /**
-     * 会话列表定位目标会话（203/207/225 入口）：
-     * 当前界面根缺失或找不到目标会话名 → NODE_NOT_FOUND。
+     * 会话列表定位目标会话（203/207/225/501 入口）：
+     * 首屏未命中 → **滚动搜索兜底**（对齐原版 intoRoom 列表扫描；W-M6 会话 10b
+     * 实证：列表滚动位置致目标行不可见时 201001——findByText 只扫活动根可见节点）。
+     * 滚动 N 页仍无 → NODE_NOT_FOUND。
      */
     fun openConversation(
         rules: WeworkScreenRules,
         conversationName: String,
         stepId: String = "open-conversation",
+        maxScrolls: Int = 8,
     ): PlanStep = PlanStep(
         id = stepId,
-        description = "在会话列表定位会话「$conversationName」并点击进入聊天页",
+        description = "在会话列表定位会话「$conversationName」并点击进入聊天页（含滚动搜索）",
     ) { driver ->
         val root = driver.currentRoot()
             ?: return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.NODE_NOT_FOUND,
                 "界面根节点不可得（无障碍服务未连接或前台无窗）",
             )
-        val node = rules.findByText(root, conversationName)
-            ?: rules.find(root, WeworkSelectorIds.CONVERSATION_ITEM_NAME)
-                ?.takeIf { it.text == conversationName }
-            ?: return@PlanStep StepOutcome.Failure(
-                ExecutorErrorCodes.NODE_NOT_FOUND,
-                "会话列表未找到目标会话「$conversationName」",
-            )
+
+        fun findTarget(r: UiNode?) = r?.let {
+            rules.findByText(it, conversationName)
+                ?: rules.find(it, WeworkSelectorIds.CONVERSATION_ITEM_NAME)
+                    ?.takeIf { n -> n.text == conversationName }
+        }
+
+        var node = findTarget(root)
+        if (node == null) {
+            // 滚动搜索兜底：逐页下滚重查（容器=首个可滚动节点；无容器=不滚）
+            val container = findScrollable(root)
+            if (container != null) {
+                var scrolls = 0
+                while (node == null && scrolls < maxScrolls) {
+                    if (!driver.scroll(container, cn.worktool.open.core.accessibility.tree.ScrollDirection.FORWARD)) break
+                    scrolls += 1
+                    node = findTarget(driver.currentRoot())
+                }
+            }
+            if (node == null) {
+                return@PlanStep StepOutcome.Failure(
+                    ExecutorErrorCodes.NODE_NOT_FOUND,
+                    "会话列表未找到目标会话「$conversationName」（含 ${maxScrolls} 页滚动搜索）",
+                )
+            }
+        }
         if (!driver.click(node)) {
             return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.ACTION_REJECTED,
@@ -49,6 +71,17 @@ internal object CommonSteps {
             )
         }
         StepOutcome.Success
+    }
+
+    /** 全树先序找首个可滚动容器（会话/群列表定位用）。 */
+    private fun findScrollable(node: UiNode): UiNode? {
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            node.childAt(i)?.let { child ->
+                findScrollable(child)?.let { return it }
+            }
+        }
+        return null
     }
 
     /** 等待聊天页就绪（输入框出现）；超时 → STEP_TIMEOUT。 */

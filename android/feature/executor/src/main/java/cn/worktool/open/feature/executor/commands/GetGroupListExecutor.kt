@@ -95,8 +95,11 @@ class GetGroupListExecutor(
         id = "read-group-header-$index",
         description = "等待群「$name」聊天页就绪并读取群显示名",
     ) { driver ->
+        // 冷启动渲染余量：真机冷启首次进群可超常规 5s（会话 10 系列实证首发
+        // 201002）——群头等待下限 10s。
+        val headerTimeoutMs = maxOf(timeouts.awaitNodeMs, HEADER_TIMEOUT_FLOOR_MS)
         val header = driver.awaitNode(
-            timeouts.awaitNodeMs,
+            headerTimeoutMs,
             timeouts.pollMs,
             "群「$name」聊天页标题",
         ) { root ->
@@ -108,7 +111,7 @@ class GetGroupListExecutor(
         }
             ?: return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.STEP_TIMEOUT,
-                "群「$name」聊天页标题未在 ${timeouts.awaitNodeMs}ms 内出现（会话未进入/非群聊？）",
+                "群「$name」聊天页标题未在 ${headerTimeoutMs}ms 内出现（会话未进入/非群聊？）",
             )
         header.text?.let { collected += it }
         StepOutcome.Success
@@ -126,6 +129,9 @@ class GetGroupListExecutor(
     private companion object {
         /** 未命名群头形态（成员数 N≥2）。 */
         private val UNNAMED_GROUP_HEADER = Regex("群聊\\((\\d+)\\)")
+
+        /** 群头等待下限（冷启动首次进群渲染余量）。 */
+        private const val HEADER_TIMEOUT_FLOOR_MS = 10_000L
 
         /** 全树先序找群头 TextView（「群聊(N)」或与定位名一致的文本）。 */
         fun findGroupHeader(root: UiNode, name: String): UiNode? {

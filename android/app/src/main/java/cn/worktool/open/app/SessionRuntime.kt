@@ -154,20 +154,53 @@ class SessionRuntime(
             return false
         }
         stop()
-        val registry = ExecutorRegistry.defaultFirstBatch(
-            querySink = QueryResultSink { type, result ->
-                val summary = when (result) {
-                    is QueryResult.GroupList -> "群×${result.groups.size}: ${result.groups.take(3)}"
-                    is QueryResult.FriendList -> "好友×${result.friends.size}: ${result.friends.take(3)}"
-                    is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
-                }
-                appendEvent("查询结果 type=$type → $summary")
+        // W-M6：全量批（62 执行器，docs/10 §B B1~B4）+ 16 端口真实装配。
+        // 回路自有端口经 RuntimePortHub（batch/structured/sessionControl/receiveLoop/
+        // console/queue），设备侧端口见 DevicePortImpls（边界如实：510/514 打包=
+        // Phase B 日志落盘器、243 扫码=FR-56 未交付诚实失败、223 企业名=null）。
+        val portHub = RuntimePortHub(
+            pauseManager = pauseManager,
+            clock = clock,
+            notifier = { errorCode, errorReason, stopMain ->
+                DevicePortImpls.ConsoleToast(appContext).notice(errorCode, errorReason, stopMain)
+                if (stopMain) this.stop()
             },
-            files = object : LocalFilePort {
-                override fun defaultLogFilePath(): String = logFile.absolutePath
-                override fun stat(path: String): FileInfo? =
-                    File(path).takeIf { it.isFile }?.let { FileInfo(it.name, it.absolutePath, it.length()) }
-            },
+            onEvent = { appendEvent(it) },
+        )
+        val registry = ExecutorRegistry.defaultFullBatch(
+            cn.worktool.open.feature.executor.ports.ExecutorBindings(
+                querySink = QueryResultSink { type, result ->
+                    val summary = when (result) {
+                        is QueryResult.GroupList -> "群×${result.groups.size}: ${result.groups.take(3)}"
+                        is QueryResult.FriendList -> "好友×${result.friends.size}: ${result.friends.take(3)}"
+                        is QueryResult.LocalFile -> "${result.fileName} ${result.sizeBytes}B"
+                    }
+                    appendEvent("查询结果 type=$type → $summary")
+                },
+                files = object : LocalFilePort {
+                    override fun defaultLogFilePath(): String = logFile.absolutePath
+                    override fun stat(path: String): FileInfo? =
+                        File(path).takeIf { it.isFile }?.let { FileInfo(it.name, it.absolutePath, it.length()) }
+                },
+                structured = portHub,
+                batch = portHub,
+                report = cn.worktool.open.feature.executor.report.MessageReportSink { beans ->
+                    // FR-01 端→云上报（101/102）：socketType=2 上行；回路未连=不可投递
+                    // （false，调用方 MessageEventReporter 内存暂存重试）。
+                    portHub.loop?.sendReportBeans(beans) ?: false
+                },
+                session = portHub,
+                loop = portHub,
+                console = portHub,
+                queue = portHub,
+                resources = DevicePortImpls.Resources(appContext),
+                logs = DevicePortImpls.Logs { logFile },
+                logUpload = DevicePortImpls.LogUpload { baseUrl },
+                remoteFiles = DevicePortImpls.RemoteFiles(appContext),
+                qrJoin = DevicePortImpls.QrJoin(appContext),
+                appConfig = DevicePortImpls.AppConfig { baseUrl },
+                corp = DevicePortImpls.CurrentCorp,
+            ),
         )
         val l = DeviceSessionLoop(
             credentials = credentials,
@@ -216,7 +249,9 @@ class SessionRuntime(
             },
             expiredTtlMillis = { expiredTtlMillis },
             retryCountProvider = { retryCount },
+            takeBatchOutcomes = portHub::takeBatchOutcomes,
         )
+        portHub.attach(l) // 端口解环：回路构造完成即挂（structured/report 经此转发）
         l.start()
         synchronized(lock) { loop = l }
         statusTracker.onSessionStarted()

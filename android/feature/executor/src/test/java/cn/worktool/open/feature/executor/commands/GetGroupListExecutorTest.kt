@@ -124,6 +124,50 @@ class GetGroupListExecutorTest {
         assertEquals(0, sink.results.size)
     }
 
+    // ---- ⑦ 滚动搜索兜底（W-M6 会话 10b）：目标行不在首屏 → 滚动命中 ----
+
+    @Test
+    fun `滚动兜底-目标会话不在首屏则滚动搜索命中`() {
+        val clock = cn.worktool.open.feature.executor.fake.FakeClock()
+        val gate = cn.worktool.open.feature.executor.fake.FakePauseGate()
+        val hiddenRow = cn.worktool.open.feature.executor.fake.fakeNode(
+            text = "第二页群",
+            resId = "com.tencent.wework:id/conversation_item_name",
+            cls = "android.widget.TextView",
+            clickable = true,
+        )
+        val visibleRow = cn.worktool.open.feature.executor.fake.fakeNode(
+            text = "首屏会话",
+            resId = "com.tencent.wework:id/conversation_item_name",
+            cls = "android.widget.TextView",
+            clickable = true,
+        )
+        val container = cn.worktool.open.feature.executor.fake.fakeNode(
+            cls = "android.view.ViewGroup",
+            scrollable = true,
+        ) { add(visibleRow) }
+        val screen = cn.worktool.open.feature.executor.fake.FakeScreen(
+            name = "home",
+            root = cn.worktool.open.feature.executor.fake.fakeNode(cls = "android.view.ViewGroup") {
+                add(cn.worktool.open.feature.executor.fake.fakeNode(text = "消息", cls = "android.widget.TextView", clickable = true))
+                add(container)
+            },
+        )
+        val chat = cn.worktool.open.feature.executor.fixture.ChatFixture(title = "群聊(9)")
+        val driver = cn.worktool.open.feature.executor.fake.FakeUiDriver(clock).apply {
+            show(screen)
+            onClick(screen, hiddenRow) { push(chat.screen) }
+            onScroll(screen, container) { container.add(hiddenRow) } // 首滚后目标行入树
+        }
+        val report = CommandRunner(driver, gate).execute(
+            CommandIntent.GetGroupList(groupNames = listOf("第二页群")),
+            registry(),
+        )
+        assertEquals(ExecutionStatus.SUCCEEDED, report.status)
+        assertTrue(driver.actionLog.any { it.startsWith("scroll(") })
+        assertEquals(listOf("群聊(9)"), (sink.results.single().second as QueryResult.GroupList).groups)
+    }
+
     // ---- ⑥ 暂停拦截（FR-52）与干跑（FR-54） ----
 
     @Test

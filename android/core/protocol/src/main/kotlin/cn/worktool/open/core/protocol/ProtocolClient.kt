@@ -178,13 +178,19 @@ object ProtocolClient {
                 // 后续帧自 2 连续 +1；服务端每连接从 1 起算消费 seq）。此前复位点在
                 // onConnected（hello 之后）——首连 hello 之后的帧会重发 seq=1、重连时
                 // hello 会带着旧计数（>1），两种形态都会被网关 4405 拒收（CR T34-01）。
+                // encryptTypeMax 动态取值（W-M6 自持 ephemeral）：重建升级后新连接
+                // hello 须声明 2，否则服务端按首连声明 0 拒收加密帧。
                 sendSequencer.reset()
                 builder.buildHello(
                     deviceId = credentials.deviceId,
                     lastEpoch = lastEpoch(),
                     lastReceivedSeq = lastReceivedSeq(),
                     clientVersion = capabilities.clientVersion,
-                    encryptTypeMax = capabilities.encryptTypeMax,
+                    encryptTypeMax = if (activeCrypto != null) {
+                        maxOf(capabilities.encryptTypeMax, 2)
+                    } else {
+                        capabilities.encryptTypeMax
+                    },
                     commands = capabilities.commands,
                 )
             },
@@ -218,7 +224,23 @@ object ProtocolClient {
          */
         private fun rebuildSessionUrl(): String {
             return try {
-                val body = """{"deviceId":"${credentials.deviceId}"}"""
+                // 2026-11-04 W-M6：无外部 cryptoRebuilder 且初始 crypto 存在（加密
+                // 模式）→ **自持 ephemeral**：每轮重建生成新 X25519 对，公钥随
+                // POST 上送（服务端 createSessionRequest.x25519EphemeralPublicKey，
+                // 会话行按其派生共享密钥）→ 以新私钥重派会话密钥。产品变体
+                // （SessionRuntime，跨重启无配对临时私钥）凭此在第二连接起升
+                // encryptType=2，无需持久化任何私钥。
+                var selfPrivate: java.security.PrivateKey? = null
+                val body = if (cryptoRebuilder == null && activeCrypto != null) {
+                    val pair = cn.worktool.open.core.protocol.crypto.X25519.generateKeyPair()
+                    selfPrivate = pair.private
+                    val pubHex = cn.worktool.open.core.protocol.crypto.Hex.encode(
+                        cn.worktool.open.core.protocol.crypto.X25519.publicRaw(pair.public),
+                    )
+                    "{\"deviceId\":\"${credentials.deviceId}\",\"x25519EphemeralPublicKey\":\"$pubHex\"}"
+                } else {
+                    """{"deviceId":"${credentials.deviceId}"}"""
+                }
                 val request = okhttp3.Request.Builder()
                     .url(baseUrl.trimEnd('/') + "/api/v2/device-sessions")
                     .post(okhttp3.RequestBody.create(null, body))
@@ -232,14 +254,24 @@ object ProtocolClient {
                     // 2026-11-04 会话 9g 主根因修复：重建会话=新 X25519 密钥对+新
                     // sessionId（SessionCrypto 派生绑 sessionId）——不重派则所有
                     // 重连帧 decrypt_failed（会话 9g 实证：journal seq 推进但
-                    // 全部拒帧、指令 execution_unknown）。服务端按 devices 表持久
-                    // 的设备 ephemeral 公钥派生共享密钥 → 端侧以配对时同一私钥
-                    // 重派即对齐。
+                    // 全部拒帧、指令 execution_unknown）。优先外部 cryptoRebuilder
+                    // （lab：配对私钥同源）；否则自持 ephemeral 私钥派生。
                     val sessionId = json.jsonObject["sessionId"]?.jsonPrimitive?.content
                     val serverPubHex = json.jsonObject["serverX25519PublicKey"]?.jsonPrimitive?.content
-                    if (cryptoRebuilder != null && sessionId != null && serverPubHex != null) {
+                    if (sessionId != null && serverPubHex != null) {
                         try {
-                            cryptoRebuilder?.invoke(sessionId, serverPubHex)?.let(::refreshSessionCrypto)
+                            val derived = if (cryptoRebuilder != null) {
+                                cryptoRebuilder?.invoke(sessionId, serverPubHex)
+                            } else {
+                                selfPrivate?.let { priv ->
+                                    cn.worktool.open.core.protocol.session.SessionCrypto.derive(
+                                        deviceEphemeralPrivate = priv,
+                                        serverX25519PublicKeyRaw = cn.worktool.open.core.protocol.crypto.Hex.decode(serverPubHex),
+                                        sessionId = sessionId,
+                                    )
+                                }
+                            }
+                            derived?.let(::refreshSessionCrypto)
                         } catch (_: Exception) {
                             // 重派失败保留旧 crypto：新会话帧将被拒（拒帧→断连→
                             // 下一轮重建重试，自愈路径不变）。

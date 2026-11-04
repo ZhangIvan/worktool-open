@@ -156,15 +156,19 @@ class ExecutorRegistry private constructor(
          */
         fun defaultFullBatch(
             bindings: cn.worktool.open.feature.executor.ports.ExecutorBindings,
-        ): ExecutorRegistry = of(
+            /** 真机校准规则注入（W-M6：查询执行器共用；null = 占位默认）。 */
+            rules: cn.worktool.open.feature.executor.runtime.WeworkScreenRules? = null,
+        ): ExecutorRegistry {
+            val r = rules ?: cn.worktool.open.feature.executor.runtime.WeworkScreenRules()
+            return of(
             // 首批 8 条（defaultFirstBatch 全集）
             SendTextExecutor(),
             InitGroupExecutor(),
             UpdateGroupExecutor(),
             ModifyGroupMemberInfoExecutor(),
             PassFriendExecutor(),
-            GetGroupListExecutor(bindings.querySink),
-            GetFriendListExecutor(bindings.querySink),
+            GetGroupListExecutor(bindings.querySink, r),
+            GetFriendListExecutor(bindings.querySink, r),
             GetLocalFileExecutor(bindings.files, bindings.querySink),
             // B1 补齐（docs/10 §B B1 行）
             StopAndGoHomeExecutor(bindings.session),
@@ -228,6 +232,7 @@ class ExecutorRegistry private constructor(
             // B4 批（docs/10 §B B4 行：长尾 2 条）
             PushMicroprogramExecutor(bindings.remoteFiles, bindings.batch),
             PushOfficeExecutor(bindings.remoteFiles, bindings.batch),
-        )
+            )
+        }
     }
 }
