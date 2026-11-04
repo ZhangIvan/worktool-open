@@ -135,6 +135,10 @@ func (s *CallbackStore) lockScopeMode(ctx context.Context, tx pgx.Tx, tenant, de
 	return nil
 }
 
+// The immutable version is resolved by the frozen outbox tuple, not the current
+// pointer. The same row lock fences per-version revocation at Claim and Prepare.
+const callbackReadDestinationVersion = `SELECT canonical_url,key_ref,revoked_at IS NULL FROM callback_destination_versions WHERE tenant=$1 AND app=$2 AND destination_id=$3 AND policy_version=$4 AND key_version=$5 FOR SHARE`
+
 // authority locks precede the delivery row; result evidence is not modified.
 // Revocation does not invalidate Complete, which settles an already-issued send.
 type callbackAuthority struct {
@@ -146,12 +150,12 @@ type callbackAuthority struct {
 func (s *CallbackStore) lockAuthority(ctx context.Context, tx pgx.Tx, tenant, id, dest string) (callbackAuthority, error) {
 	var a callbackAuthority
 	var app, device, command, sub string
-	var appEpoch, deviceEpoch, version int64
-	e := tx.QueryRow(ctx, `SELECT app,device,command,app_epoch,device_epoch,subscription_id,subscription_version FROM callback_outbox WHERE tenant=$1 AND delivery_id=$2 AND destination_id=$3`, tenant, id, dest).Scan(&app, &device, &command, &appEpoch, &deviceEpoch, &sub, &version)
+	var appEpoch, deviceEpoch, version, policyVersion, keyVersion int64
+	e := tx.QueryRow(ctx, `SELECT app,device,command,app_epoch,device_epoch,subscription_id,subscription_version,policy_version,key_version FROM callback_outbox WHERE tenant=$1 AND delivery_id=$2 AND destination_id=$3`, tenant, id, dest).Scan(&app, &device, &command, &appEpoch, &deviceEpoch, &sub, &version, &policyVersion, &keyVersion)
 	if e != nil {
 		return a, e
 	}
-	var appOK, deviceOK, bound, destOK, subOK bool
+	var appOK, deviceOK, bound, destOK, versionOK, subOK bool
 	var epoch int64
 	e = tx.QueryRow(ctx, `SELECT active AND scopes ? 'callbacks:read' AND scopes ? 'results:read',auth_epoch,token_expires FROM developer_apps WHERE tenant=$1 AND id=$2 FOR SHARE`, tenant, app).Scan(&appOK, &epoch, &a.expires)
 	if e != nil {
@@ -171,11 +175,17 @@ func (s *CallbackStore) lockAuthority(ctx context.Context, tx pgx.Tx, tenant, id
 	bound = e == nil
 	a.binding.Tenant = tenant
 	a.binding.Destination = dest
-	e = tx.QueryRow(ctx, `SELECT canonical_url,key_ref,policy_version,key_version,state='active' FROM callback_destinations WHERE tenant=$1 AND id=$2 AND app=$3 FOR SHARE`, tenant, dest, app).Scan(&a.binding.URL, &a.binding.KeyRef, &a.binding.PolicyVersion, &a.binding.KeyVersion, &destOK)
+	// Current config only determines eligibility, never the historical target.
+	e = tx.QueryRow(ctx, `SELECT state='active' AND policy_version=$4 AND key_version=$5 FROM callback_destinations WHERE tenant=$1 AND id=$2 AND app=$3 FOR SHARE`, tenant, dest, app, policyVersion, keyVersion).Scan(&destOK)
 	if e != nil {
 		return a, e
 	}
-	e = tx.QueryRow(ctx, `SELECT retired_at IS NULL FROM callback_subscription_versions WHERE tenant=$1 AND app=$2 AND subscription_id=$3 AND version=$4 AND destination_id=$5 FOR SHARE`, tenant, app, sub, version, dest).Scan(&subOK)
+	a.binding.PolicyVersion, a.binding.KeyVersion = policyVersion, keyVersion
+	e = tx.QueryRow(ctx, callbackReadDestinationVersion, tenant, app, dest, policyVersion, keyVersion).Scan(&a.binding.URL, &a.binding.KeyRef, &versionOK)
+	if e != nil {
+		return a, e
+	}
+	e = tx.QueryRow(ctx, `SELECT retired_at IS NULL AND destination_policy_version=$6 AND key_version=$7 FROM callback_subscription_versions WHERE tenant=$1 AND app=$2 AND subscription_id=$3 AND version=$4 AND destination_id=$5 FOR SHARE`, tenant, app, sub, version, dest, policyVersion, keyVersion).Scan(&subOK)
 	if e != nil {
 		return a, e
 	}
@@ -184,7 +194,7 @@ func (s *CallbackStore) lockAuthority(ctx context.Context, tx pgx.Tx, tenant, id
 		return a, e
 	}
 	p, ok := s.policies[tenant+"\x00"+dest]
-	a.valid = ok && p.Binding == a.binding && appOK && deviceOK && bound && destOK && subOK
+	a.valid = ok && p.Binding == a.binding && appOK && deviceOK && bound && destOK && versionOK && subOK
 	return a, nil
 }
 func callbackReadLocked(ctx context.Context, tx pgx.Tx, tenant, id string) (callbackDeliveryRow, error) {

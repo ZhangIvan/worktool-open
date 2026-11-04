@@ -330,6 +330,14 @@ func (s *AdmissionStore) admitText(ctx context.Context, a AppAuthority, r AppTex
 			if app != a.app || state != "active" || !enabled || policy != v.Policy || key != v.Key || v.Version < 1 || v.Version > maxSafeInteger || v.Policy < 1 || v.Policy > maxSafeInteger || v.Key < 1 || v.Key > maxSafeInteger || v.Attempts < 1 || v.Attempts > 4 || v.Event != "command.result" || v.Schema != "bounded-result-v1" || v.Events != 1 || v.Body != 65536 {
 				return admissionError("SUBSCRIPTION_POLICY_UNAVAILABLE")
 			}
+			var versionActive bool
+			e = tx.QueryRow(ctx, `SELECT revoked_at IS NULL FROM callback_destination_versions WHERE tenant=$1 AND app=$2 AND destination_id=$3 AND policy_version=$4 AND key_version=$5 FOR SHARE`, a.tenant, a.app, v.Destination, v.Policy, v.Key).Scan(&versionActive)
+			if errors.Is(e, pgx.ErrNoRows) || (e == nil && !versionActive) {
+				return admissionError("SUBSCRIPTION_POLICY_UNAVAILABLE")
+			}
+			if e != nil {
+				return e
+			}
 		}
 		locked, e := subscriptions(ctx, tx, a, true)
 		if e != nil {

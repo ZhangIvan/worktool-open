@@ -160,12 +160,13 @@ func callbackClaimReadyTx(t *testing.T, dest, id string, now time.Time) *callbac
 		row(callbackLockTenant+" SKIP LOCKED", []any{"tenant_cb"}, []any{"tenant_cb"}),
 		row(callbackLockDestination+" SKIP LOCKED", []any{"tenant_cb", dest}, []any{dest}),
 		row("SELECT boot_id,recovery_epoch,state", []any{"worker_cb", "worker"}, []any{"boot_cb", "recovery_cb", "active", true}),
-		row("SELECT app,device,command,app_epoch", []any{"tenant_cb", id, dest}, []any{"app_cb", "device_cb", "command_cb", int64(1), int64(1), "sub_cb", int64(1)}),
+		row("SELECT app,device,command,app_epoch", []any{"tenant_cb", id, dest}, []any{"app_cb", "device_cb", "command_cb", int64(1), int64(1), "sub_cb", int64(1), int64(1), int64(1)}),
 		row("SELECT active AND scopes", []any{"tenant_cb", "app_cb"}, []any{true, int64(1), now.Add(time.Hour).UnixMilli()}),
 		row("SELECT state='active',epoch", []any{"tenant_cb", "device_cb"}, []any{true, int64(1)}),
 		row("SELECT device FROM developer_bindings", []any{"tenant_cb", "app_cb", "device_cb"}, []any{"device_cb"}),
-		row("SELECT canonical_url,key_ref,policy_version,key_version", []any{"tenant_cb", dest, "app_cb"}, []any{"https://callbacks.example.com/result", "key_cb", int64(1), int64(1), true}),
-		row("SELECT retired_at IS NULL", []any{"tenant_cb", "app_cb", "sub_cb", int64(1), dest}, []any{true}),
+		row("SELECT state='active' AND policy_version=", []any{"tenant_cb", dest, "app_cb", int64(1), int64(1)}, []any{true}),
+		row(callbackReadDestinationVersion, []any{"tenant_cb", "app_cb", dest, int64(1), int64(1)}, []any{"https://callbacks.example.com/result", "key_cb", true}),
+		row("SELECT retired_at IS NULL", []any{"tenant_cb", "app_cb", "sub_cb", int64(1), dest, int64(1), int64(1)}, []any{true}),
 		row("SELECT id FROM commands", []any{"tenant_cb", "app_cb", "device_cb", "command_cb"}, []any{"command_cb"}),
 		row(callbackReadDelivery, []any{"tenant_cb", id}, []any{dest, "ready", int64(0), 0, 4, nil, nil, nil, nil, nil, now.Add(time.Hour), nil, now.Add(-time.Minute), body, hashText(string(body)), nil, true, body}),
 		row("SELECT event_id,policy_version,key_version", []any{"tenant_cb", id}, []any{"event_cb", int64(1), int64(1)}),
@@ -246,8 +247,8 @@ func TestCallbackClaimFailuresStopBeforeNextCandidate(t *testing.T) {
 				failed.steps[4].err = errors.New("PRIVATE authority read failure")
 			case "integrity":
 				failed = callbackClaimReadyTx(t, "destination_a", "delivery_a", now)
-				failed.steps = failed.steps[:11]
-				failed.steps[10].values[16] = false // Invalid immutable reservation graph.
+				failed.steps = failed.steps[:12]
+				failed.steps[11].values[16] = false // Invalid immutable reservation graph.
 				want = cb.ErrDenied.Error()
 			}
 			// Any acquire beyond the failed transaction fails this script, so the

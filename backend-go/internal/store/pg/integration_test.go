@@ -205,9 +205,11 @@ func expectRejected(t *testing.T, f *pgFixture, setup func(pgx.Tx), q string, ar
 }
 func TestPGIntegrationSchemaAndDeviceBindings(t *testing.T) {
 	f := integrationFixture(t)
+	callbackDestinationVersionCases(t, f)
+	callbackDestinationMigrationCases(t, f)
 	var count int
-	if e := f.owner.QueryRow(f.ctx, "SELECT count(*) FROM pg_tables WHERE schemaname=$1", f.schema).Scan(&count); e != nil || count != 28 {
-		t.Fatalf("expected28 tables got %d", count)
+	if e := f.owner.QueryRow(f.ctx, "SELECT count(*) FROM pg_tables WHERE schemaname=$1", f.schema).Scan(&count); e != nil || count != 29 {
+		t.Fatalf("expected29 tables got %d", count)
 	}
 	var deferred int
 	if e := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND c.conname IN ('delivery_reserved_identity','reservation_exact_delivery') AND c.contype='f' AND c.condeferrable AND c.condeferred`, f.schema).Scan(&deferred); e != nil || deferred != 2 {

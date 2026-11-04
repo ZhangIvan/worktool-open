@@ -143,7 +143,7 @@ func resultGuardShadow(t *testing.T, f *gwFixture) string {
 	execOwner(t, tx, f.ctx, "REVOKE ALL ON SCHEMA "+qs+" FROM PUBLIC")
 	execOwner(t, tx, f.ctx, "SET LOCAL search_path TO "+qs+",pg_catalog")
 	firstSeven := []string{"0001_base19.sql", "0002_control7.sql", "0003_admission2.sql", "0004_admission_constraints.sql", "0005_indexes_roles.sql", "0006_commands_payload_json.sql", "0007_gateway_lease_connection.sql"}
-	if len(migrations.Order) != 8 || migrations.Order[7] != "0008_gateway_session_result.sql" {
+	if len(migrations.Order) < 8 || migrations.Order[7] != "0008_gateway_session_result.sql" {
 		t.Fatal("guard fixture migration boundary changed")
 	}
 	for i, name := range firstSeven {

@@ -227,6 +227,22 @@ func callbackPolicyLocks(ctx context.Context, tx pgx.Tx, h LeaseHandle, id strin
 	if e != nil {
 		return e
 	}
+	rows, e = tx.Query(ctx, `SELECT v.destination_id FROM callback_destination_versions v JOIN admission_reservations r ON r.tenant=v.tenant AND r.app=v.app AND r.destination_id=v.destination_id AND r.destination_policy_version=v.policy_version AND r.key_version=v.key_version WHERE r.tenant=$1 AND r.command=$2 AND r.kind='callback' ORDER BY v.destination_id COLLATE "C" FOR SHARE OF v`, h.Tenant, id)
+	if e != nil {
+		return e
+	}
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return e
+		}
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
 	rows, e = tx.Query(ctx, `SELECT s.subscription_id FROM callback_subscription_versions s JOIN admission_reservations r ON r.tenant=s.tenant AND r.app=s.app AND r.subscription_id=s.subscription_id AND r.subscription_version=s.version WHERE r.tenant=$1 AND r.command=$2 AND r.kind='callback' ORDER BY s.destination_id COLLATE "C" FOR SHARE OF s`, h.Tenant, id)
 	if e != nil {
 		return e
@@ -282,7 +298,7 @@ func (s *GatewayStore) materializeCallbacks(ctx context.Context, tx pgx.Tx, h Le
 			return admissionError("INTEGRITY_CONFLICT")
 		}
 		var active bool
-		e = tx.QueryRow(ctx, `SELECT a.active AND a.auth_epoch=$4 AND a.token_expires>$5 AND a.scopes ? 'callbacks:read' AND a.scopes ? 'results:read' AND d.state='active' AND d.policy_version=$6 AND d.key_version=$7 AND s.retired_at IS NULL AND EXISTS(SELECT 1 FROM devices dv WHERE dv.tenant=a.tenant AND dv.id=$8 AND dv.state='active' AND dv.epoch=$11) AND EXISTS(SELECT 1 FROM developer_bindings b WHERE b.tenant=a.tenant AND b.app=a.id AND b.device=$8) FROM developer_apps a JOIN callback_destinations d ON d.tenant=a.tenant AND d.app=a.id JOIN callback_subscription_versions s ON s.tenant=d.tenant AND s.app=d.app AND s.destination_id=d.id WHERE a.tenant=$1 AND a.id=$2 AND d.id=$3 AND s.subscription_id=$9 AND s.version=$10`, h.Tenant, *c.app, r.destination, *c.appEpoch, ms, r.policy, r.key, h.DeviceID, r.sub, r.version, epoch).Scan(&active)
+		e = tx.QueryRow(ctx, `SELECT a.active AND a.auth_epoch=$4 AND a.token_expires>$5 AND a.scopes ? 'callbacks:read' AND a.scopes ? 'results:read' AND d.state='active' AND d.policy_version=$6 AND d.key_version=$7 AND v.revoked_at IS NULL AND s.destination_policy_version=$6 AND s.key_version=$7 AND s.retired_at IS NULL AND EXISTS(SELECT 1 FROM devices dv WHERE dv.tenant=a.tenant AND dv.id=$8 AND dv.state='active' AND dv.epoch=$11) AND EXISTS(SELECT 1 FROM developer_bindings b WHERE b.tenant=a.tenant AND b.app=a.id AND b.device=$8) FROM developer_apps a JOIN callback_destinations d ON d.tenant=a.tenant AND d.app=a.id JOIN callback_destination_versions v ON v.tenant=d.tenant AND v.app=d.app AND v.destination_id=d.id AND v.policy_version=$6 AND v.key_version=$7 JOIN callback_subscription_versions s ON s.tenant=d.tenant AND s.app=d.app AND s.destination_id=d.id WHERE a.tenant=$1 AND a.id=$2 AND d.id=$3 AND s.subscription_id=$9 AND s.version=$10`, h.Tenant, *c.app, r.destination, *c.appEpoch, ms, r.policy, r.key, h.DeviceID, r.sub, r.version, epoch).Scan(&active)
 		if errors.Is(e, pgx.ErrNoRows) {
 			active = false
 		} else if e != nil {

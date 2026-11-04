@@ -1,4 +1,20 @@
-# G-P1 candidate schema source — not yet executed on PostgreSQL
+# Current callback destination migration candidate
+
+Append-only migration 0009 adds immutable destination URL/key_ref versions,
+bringing the current table inventory to **29**. It is a local candidate, not a
+production migration run. Original migrations 0001–0008 remain unchanged.
+
+**Existing callback history blocks this migration.** Any subscription, callback
+reservation/outbox, legacy callback or nonempty command subscription snapshot
+causes an explicit refusal. Current mutable configuration cannot prove historical
+targets. No old data is deleted or silently backfilled. Only destination-only
+config with no callback history can be frozen for future use. See the
+[phase A migration/rotation/revocation contract](../internal/store/pg/callback_destination_versions_ADR.md).
+Its gated PostgreSQL cases are authored under the existing schema group and remain
+**NOT_RUN** locally. Older test counts and status below describe their original
+baseline, not evidence for 0009.
+
+## Historical G-P1 candidate schema notes
 
 Baseline: `dd13ce7`; approved integration-plan SHA256
 `a7d9bcdeec1b743b3ef8ed6e8dec85d15c95d27c948e11f18dd53d17e0763484`.
