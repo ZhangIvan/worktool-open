@@ -334,6 +334,21 @@ class SessionRuntime(
             expiredTtlMillis = { expiredTtlMillis },
             retryCountProvider = { retryCount },
             takeBatchOutcomes = portHub::takeBatchOutcomes,
+            // 会话 21 自愈（spec §5.5.1）：服务端重启凭据失忆 → 重建 POST 401 →
+            // 以配对时注册的同一 Ed25519 签名密钥重协商换发新凭据（PairingActivity
+            // 同源解析：JCA 优先/回退种子持久化 → 公钥稳定）。签名失败由协议层
+            // 捕获落事件日志并回退重试路径，不撕裂重连循环。
+            renegotiationSigner = { deviceId, ts, nonce ->
+                val signingKey = cn.worktool.open.core.protocol.crypto.Ed25519Keys.resolve(
+                    persistedFallbackSeedHex = SigningSeedStore(appContext).loadSeedHex(),
+                )
+                cn.worktool.open.core.protocol.crypto.Hex.encode(
+                    cn.worktool.open.core.protocol.crypto.Ed25519Keys.sign(
+                        signingKey,
+                        "$deviceId|$ts|$nonce".toByteArray(Charsets.UTF_8),
+                    ),
+                )
+            },
         )
         portHub.attach(l) // 端口解环：回路构造完成即挂（structured/report 经此转发）
         l.start()

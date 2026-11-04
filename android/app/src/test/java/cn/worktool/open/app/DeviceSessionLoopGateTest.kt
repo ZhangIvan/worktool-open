@@ -171,6 +171,23 @@ class DeviceSessionLoopGateTest {
         ),
     ).text
 
+    /**
+     * 服务端回执帧（socketType=3，re-write 形态：同 commandId + 结果载荷、无 epoch、
+     * 新 eventId——gateway rememberReceipt/writeReceipt 的线缆形状）。
+     */
+    private fun receiptFrame(builder: FrameBuilder, commandId: String): String = builder.build(
+        socketType = MessageTypes.SOCKET_RAW_CONFIRM,
+        commandId = commandId,
+        apiSend = 1,
+        list = listOf(
+            WeworkMessageBean(
+                type = MessageTypes.SEND_MESSAGE,
+                errorCode = 0,
+                metaJson = """{"dispatchId":"$commandId"}""",
+            ),
+        ),
+    ).text
+
     private fun newLoop(
         transport: FakeTransport,
         journal: InMemoryJournalStore,
@@ -462,6 +479,118 @@ class DeviceSessionLoopGateTest {
         transport.serverMessage(helloAckText(serverBuilder(now)))
         transport.serverMessage(commandFrame(serverBuilder(now), "11111111-aaaa-4bbb-8ccc-00000000000b"))
         assertEquals("暂停拦截非 FAILED，不进重试循环", 0, clicks.get())
+        loop.stop()
+    }
+
+    // ---- 会话 21 回归：服务端回执帧（socketType=3）不入门禁（拒旧误伤/重 ack 乒乓） ----
+
+    @Test
+    fun `回执帧-不入门禁不执行不重发回执-消拒旧误伤`() {
+        val transport = FakeTransport()
+        val clicks = AtomicInteger()
+        val events = mutableListOf<String>()
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 0))
+        val loop = newLoop(
+            transport, InMemoryJournalStore(), registry,
+            pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),
+            events = events,
+        )
+        loop.start()
+        val builder = serverBuilder(now)
+        transport.serverMessage(helloAckText(builder))
+        // 指令照常执行（载荷带 epoch=1002，水位推进至 1002）
+        transport.serverMessage(commandFrame(builder, "11111111-aaaa-4bbb-8ccc-00000000000c"))
+        assertEquals(1, clicks.get())
+        val confirmsBefore = transport.sent.count { it.contains("\"socketType\":3") }
+        // 服务端回执重写帧（同 commandId、无 epoch、新 eventId、seq 接续）——历史实现
+        // 入门禁：epoch=0 < 水位 →「拒旧」误伤日志；若改为去重命中又触发重 ack（与
+        // 服务端回执重写互为因果 = 乒乓循环）。正确语义：回执帧单向信息，静默消费。
+        transport.serverMessage(receiptFrame(builder, "11111111-aaaa-4bbb-8ccc-00000000000c"))
+        assertEquals("回执帧不得触发执行", 1, clicks.get())
+        assertEquals("回执帧不得重发结果回执（防乒乓）", confirmsBefore, transport.sent.count { it.contains("\"socketType\":3") })
+        assertTrue("回执帧不得产生拒旧误伤日志", events.none { it.contains("拒旧") })
+        loop.stop()
+    }
+
+    // ---- 会话 21 回归：出站 RAW_CONFIRM 载荷回填会话 epoch（spec §5.7.2 对偶面） ----
+
+    @Test
+    fun `RAW_CONFIRM-载荷回填会话 epoch-取已应用水位`() {
+        val transport = FakeTransport()
+        val clicks = AtomicInteger()
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 0))
+        val loop = newLoop(
+            transport, InMemoryJournalStore(), registry,
+            pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),
+            events = mutableListOf(),
+        )
+        loop.start()
+        transport.serverMessage(helloAckText(serverBuilder(now)))
+        // 指令载荷 epoch=1002 → 门禁接受后水位=1002 → 回执载荷须回填该会话 epoch
+        val builder = serverBuilder(now)
+        transport.serverMessage(
+            builder.build(
+                socketType = MessageTypes.SOCKET_MESSAGE_LIST,
+                commandId = "11111111-aaaa-4bbb-8ccc-00000000000d",
+                apiSend = 1,
+                list = listOf(
+                    WeworkMessageBean(
+                        type = MessageTypes.SEND_MESSAGE,
+                        roomType = 1,
+                        extras = buildMap {
+                            put("targetRoom", JsonPrimitive("e2e群"))
+                            put("receivedContent", JsonPrimitive("x"))
+                            put("epoch", JsonPrimitive(1002))
+                        },
+                    ),
+                ),
+            ).text,
+        )
+        assertEquals(1, clicks.get())
+        val confirm = transport.sent.last { it.contains("\"socketType\":3") }
+        val bean = codec.beans(Json.parseToJsonElement(confirm).jsonObject["list"]!!).single()
+        assertEquals(
+            "回执载荷须携带会话 epoch（服务端对账/审计证据面）",
+            "1002",
+            (bean.extras["epoch"] as? JsonPrimitive)?.content,
+        )
+        loop.stop()
+    }
+
+    @Test
+    fun `RAW_CONFIRM-无已应用 epoch-回填 0（904 epoch≥0 同语义）`() {
+        val transport = FakeTransport()
+        val clicks = AtomicInteger()
+        val registry = ExecutorRegistry.of(FlakyExecutor(clicks, failFirst = 0))
+        val loop = newLoop(
+            transport, InMemoryJournalStore(), registry,
+            pause = cn.worktool.open.feature.executor.runtime.NeverPausedPauseManager(),
+            events = mutableListOf(),
+        )
+        loop.start()
+        transport.serverMessage(helloAckText(serverBuilder(now)))
+        // 缺 epoch 指令（=0，不拒旧仅去重）→ 执行 → 回执 epoch=0（无已应用水位）
+        transport.serverMessage(
+            serverBuilder(now).build(
+                socketType = MessageTypes.SOCKET_MESSAGE_LIST,
+                commandId = "11111111-aaaa-4bbb-8ccc-00000000000e",
+                apiSend = 1,
+                list = listOf(
+                    WeworkMessageBean(
+                        type = MessageTypes.SEND_MESSAGE,
+                        roomType = 1,
+                        extras = buildMap {
+                            put("targetRoom", JsonPrimitive("e2e群"))
+                            put("receivedContent", JsonPrimitive("x"))
+                        },
+                    ),
+                ),
+            ).text,
+        )
+        assertEquals(1, clicks.get())
+        val confirm = transport.sent.last { it.contains("\"socketType\":3") }
+        val bean = codec.beans(Json.parseToJsonElement(confirm).jsonObject["list"]!!).single()
+        assertEquals("0", (bean.extras["epoch"] as? JsonPrimitive)?.content)
         loop.stop()
     }
 }

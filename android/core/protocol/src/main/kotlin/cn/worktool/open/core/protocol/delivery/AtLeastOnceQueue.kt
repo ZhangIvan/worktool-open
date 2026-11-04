@@ -162,15 +162,18 @@ class InboundCommandGate(
 
     /**
      * 门禁 + 副作用。顺序：
-     * 1. epoch 拒旧（未持久，无副作用风险）；
+     * 1. epoch 拒旧（未持久，无副作用风险；**epoch=0 = 载荷缺 epoch，不拒旧仅去重**
+     *    ——DeviceSessionLoop.epochOf 契约，服务端按 spec §5.7.2 注入 epoch（int ≥1），
+     *    AllocateEpochs 自 1 起，0 不会是合法分配值。会话 21 实锤：回执帧重写/缺
+     *    epoch 载荷按 0 撞高水位被一刀切拒旧，指令与回执不落地）；
      * 2. TTL 过期跳过（U4：持久去重记录先于判定返回，副作用不下发）；
      * 3. journal 记录启动（持久，先于副作用；重复 commandId → AlreadyApplied）；
      * 4. 执行副作用；
-     * 5. 推进 appliedEpoch。
+     * 5. 推进 appliedEpoch（0 不推进）。
      */
     fun apply(command: InboundCommand): Decision {
         val watermark = store.appliedEpoch()
-        if (command.epoch < watermark) {
+        if (command.epoch in 1 until watermark) {
             return Decision.RejectedOld(command.epoch, watermark)
         }
         if (!store.recordInboundStart(command.commandId, command.type, command.epoch)) {

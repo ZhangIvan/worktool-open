@@ -17,6 +17,7 @@ import cn.worktool.open.core.protocol.transport.Scheduler
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.security.PrivateKey
 
 /**
@@ -100,22 +101,37 @@ object ProtocolClient {
          * （设备保留配对时同一 ephemeral 私钥；null = 沿用初始 crypto 的旧行为）。
          */
         private val cryptoRebuilder: ((sessionId: String, serverX25519PublicKeyHex: String) -> SessionCrypto?)? = null,
+        /**
+         * 凭据重协商签名器（2026-11-04 会话 21 根因修复）：服务端凭据注册表为进程
+         * 内存（重启即失忆，仅存 TokenHash 无法恢复明文）→ 重建 POST 返回
+         * 401 RENEGOTIATION_REQUIRED。提供者返回 hex Ed25519(UTF-8(deviceId|ts|nonce))
+         * （spec §5.5.1，复用配对注册签名公钥）；null = 不自愈（fallback 重试，历史行为）。
+         */
+        private val renegotiationSigner: ((deviceId: String, ts: Long, nonce: String) -> String)? = null,
+        /** 传输层事件观察口（断连原因/会话重建留痕；诊断面，不参与控制流）。 */
+        private val onTransportEvent: ((String) -> Unit)? = null,
     ) {
         private val httpClient = httpClient
         private val codec = EnvelopeCodec()
         private val sendSequencer = SendSequencer()
+
+        /**
+         * 凭据（var：401 重协商换发后本类内原位换新 token/tokenVersion，verifier/
+         * builder 经 `activeCredentials` 属性引用读取即见新值；spec §5.5.1）。
+         */
+        private var activeCredentials = credentials
         private var activeCrypto: SessionCrypto? = sessionCrypto
         private var verifier = FrameVerifier(
             codec = codec,
-            deviceToken = { credentials.deviceToken },
-            tokenVersion = { credentials.tokenVersion },
+            deviceToken = { activeCredentials.deviceToken },
+            tokenVersion = { activeCredentials.tokenVersion },
             crypto = activeCrypto,
             clock = clock,
         )
         private var builder = FrameBuilder(
             codec = codec,
-            deviceToken = { credentials.deviceToken },
-            tokenVersion = { credentials.tokenVersion },
+            deviceToken = { activeCredentials.deviceToken },
+            tokenVersion = { activeCredentials.tokenVersion },
             crypto = activeCrypto,
             clock = clock,
             sequencer = sendSequencer,
@@ -130,15 +146,15 @@ object ProtocolClient {
             activeCrypto = newCrypto
             verifier = FrameVerifier(
                 codec = codec,
-                deviceToken = { credentials.deviceToken },
-                tokenVersion = { credentials.tokenVersion },
+                deviceToken = { activeCredentials.deviceToken },
+                tokenVersion = { activeCredentials.tokenVersion },
                 crypto = newCrypto,
                 clock = clock,
             )
             builder = FrameBuilder(
                 codec = codec,
-                deviceToken = { credentials.deviceToken },
-                tokenVersion = { credentials.tokenVersion },
+                deviceToken = { activeCredentials.deviceToken },
+                tokenVersion = { activeCredentials.tokenVersion },
                 crypto = newCrypto,
                 clock = clock,
                 sequencer = sendSequencer,
@@ -166,7 +182,7 @@ object ProtocolClient {
                 // v1 修复（a3b29e0）重连拨 `/api/v2/device-sessions`——但这是 POST 端点（创建会话）
                 // 不是 WS upgrade 路径。重连永远 404。v2 修复：**同步 POST 创建新会话**拿到新
                 // sessionId → 拨新 wsPath。首连仍优先用配对 wsPath（零额外 RTT）。
-                val wsPath = credentials.wsPath
+                val wsPath = activeCredentials.wsPath
                 if (wsPath != null && !wsPathUsedAndExpired) {
                     baseUrl.trimEnd('/') + wsPath
                 } else {
@@ -182,7 +198,7 @@ object ProtocolClient {
                 // hello 须声明 2，否则服务端按首连声明 0 拒收加密帧。
                 sendSequencer.reset()
                 builder.buildHello(
-                    deviceId = credentials.deviceId,
+                    deviceId = activeCredentials.deviceId,
                     lastEpoch = lastEpoch(),
                     lastReceivedSeq = lastReceivedSeq(),
                     clientVersion = capabilities.clientVersion,
@@ -196,8 +212,8 @@ object ProtocolClient {
             },
             onServerMessage = { text -> handleInbound(text, onCommand, onRejected, onHelloAck) },
             heartbeatFrame = { builder.buildHeartbeat().text },
-            heartbeatIntervalMillis = (credentials.heartbeatIntervalSeconds * 1000).toLong(),
-            inactivityTimeoutMillis = (credentials.sessionTimeoutSeconds * 1000).toLong(),
+            heartbeatIntervalMillis = (activeCredentials.heartbeatIntervalSeconds * 1000).toLong(),
+            inactivityTimeoutMillis = (activeCredentials.sessionTimeoutSeconds * 1000).toLong(),
             backoff = BackoffPolicy.v2(),
             scheduler = scheduler,
             clock = clock,
@@ -208,6 +224,20 @@ object ProtocolClient {
                 if (!wsPathUsedAndExpired) wsPathUsedAndExpired = true // 首连消耗一次性 wsPath
                 verifier.resetForReconnect(lastReceivedSeq())
                 queue?.flushPending()
+            },
+            // 会话 21 诊断面：断连原因（含 OkHttpWsTransport 端点策略拒拨、TLS 失败
+            // 等此前完全不可见的本地失败）上抛 onTransportEvent——真机 lab 日志从此
+            // 能看到「为什么连不上」。
+            onEvent = { event ->
+                when (event) {
+                    is ReconnectingWsClient.Event.Connected -> onTransportEvent?.invoke("WS 已连接")
+                    is ReconnectingWsClient.Event.Disconnected -> onTransportEvent?.invoke("WS 断开: ${event.cause}")
+                    is ReconnectingWsClient.Event.ReconnectScheduled ->
+                        onTransportEvent?.invoke("重连已排程（${event.delayMillis}ms 后）")
+                    is ReconnectingWsClient.Event.InactivityTimeout ->
+                        onTransportEvent?.invoke("不活跃超时（${event.idleMillis}ms）→ 重连")
+                    else -> Unit
+                }
             },
         )
 
@@ -221,8 +251,14 @@ object ProtocolClient {
         /**
          * 重连时同步 POST /api/v2/device-sessions 创建新会话 → 返回新 wsPath（会话 4/5 根因修复）。
          * 阻塞式（在 urlProvider 线程调用），失败时返回无效路径（让 WS 连接失败触发下一轮退避重连）。
+         *
+         * 2026-11-04 会话 21 自愈扩展：POST 401 RENEGOTIATION_REQUIRED（服务端重启
+         * 凭据失忆）→ 以 [renegotiationSigner] 签 Ed25519(deviceId|ts|nonce) 重协商
+         * （spec §5.5.1），响应携换发 token/tokenVersion → 本类内换凭据 + 重派密钥后
+         * 以新 wsPath 建连。签名器未注入或重协商仍失败 → fallback 重试（历史行为）。
          */
         private fun rebuildSessionUrl(): String {
+            val base = baseUrl.trimEnd('/')
             return try {
                 // 2026-11-04 W-M6：无外部 cryptoRebuilder 且初始 crypto 存在（加密
                 // 模式）→ **自持 ephemeral**：每轮重建生成新 X25519 对，公钥随
@@ -231,33 +267,67 @@ object ProtocolClient {
                 // （SessionRuntime，跨重启无配对临时私钥）凭此在第二连接起升
                 // encryptType=2，无需持久化任何私钥。
                 var selfPrivate: java.security.PrivateKey? = null
-                val body = if (cryptoRebuilder == null && activeCrypto != null) {
+                val ephemeralPubHex = if (cryptoRebuilder == null && activeCrypto != null) {
                     val pair = cn.worktool.open.core.protocol.crypto.X25519.generateKeyPair()
                     selfPrivate = pair.private
-                    val pubHex = cn.worktool.open.core.protocol.crypto.Hex.encode(
+                    cn.worktool.open.core.protocol.crypto.Hex.encode(
                         cn.worktool.open.core.protocol.crypto.X25519.publicRaw(pair.public),
                     )
-                    "{\"deviceId\":\"${credentials.deviceId}\",\"x25519EphemeralPublicKey\":\"$pubHex\"}"
                 } else {
-                    """{"deviceId":"${credentials.deviceId}"}"""
+                    null
                 }
-                val request = okhttp3.Request.Builder()
-                    .url(baseUrl.trimEnd('/') + "/api/v2/device-sessions")
-                    .post(okhttp3.RequestBody.create(null, body))
-                    .build()
-                val response = httpClient.newCall(request).execute()
+                val response = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = null)
                 val respBody = response.body?.string() ?: "{}"
+                val status = response.code
                 response.close()
-                val json = kotlinx.serialization.json.Json.parseToJsonElement(respBody)
-                val wsPath = json.jsonObject["wsPath"]?.jsonPrimitive?.content
+                var json = kotlinx.serialization.json.Json.parseToJsonElement(respBody).jsonObject
+                // 会话 21 自愈：服务端凭据失忆（重启/撤销）→ 401 RENEGOTIATION_REQUIRED
+                // → Ed25519 重协商换发（spec §5.5.1），换用新凭据继续建连。
+                if (status == 401 &&
+                    json["error"]?.jsonPrimitive?.content == "RENEGOTIATION_REQUIRED" &&
+                    renegotiationSigner != null
+                ) {
+                    onTransportEvent?.invoke("会话重建 401（服务端凭据失忆）→ Ed25519 重协商（spec §5.5.1）")
+                    val ts = clock()
+                    val nonce = cn.worktool.open.core.protocol.crypto.Hex.encode(
+                        ByteArray(16).also { java.security.SecureRandom().nextBytes(it) },
+                    )
+                    val signature = try {
+                        renegotiationSigner?.invoke(activeCredentials.deviceId, ts, nonce)
+                    } catch (e: Exception) {
+                        onTransportEvent?.invoke("重协商签名失败: ${e.message}")
+                        null
+                    }
+                    if (signature != null) {
+                        val retry = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = Triple(ts, nonce, signature))
+                        val retryBody = retry.body?.string() ?: "{}"
+                        val retryStatus = retry.code
+                        retry.close()
+                        json = kotlinx.serialization.json.Json.parseToJsonElement(retryBody).jsonObject
+                        if (retryStatus == 201) {
+                            // 凭据换发：原位换新 token/tokenVersion（verifier/builder 经
+                            // 属性引用读取即见新值；deviceId 不变）。换发 token 未持久化
+                            // ——下进程重启再次重协商自愈（TokenVersion 服务端单调递增）。
+                            val rotatedToken = json["deviceToken"]?.jsonPrimitive?.content
+                            val rotatedVersion = json["tokenVersion"]?.jsonPrimitive?.longOrNull?.toInt()
+                            if (rotatedToken != null && rotatedVersion != null) {
+                                activeCredentials = activeCredentials.copy(deviceTokenHex = rotatedToken, tokenVersion = rotatedVersion)
+                                onTransportEvent?.invoke("重协商成功 → tokenVersion=$rotatedVersion（凭据已换发，内存生效）")
+                            }
+                        } else {
+                            onTransportEvent?.invoke("重协商被拒（HTTP $retryStatus）→ fallback 重试")
+                        }
+                    }
+                }
+                val wsPath = json["wsPath"]?.jsonPrimitive?.content
                 if (wsPath != null) {
                     // 2026-11-04 会话 9g 主根因修复：重建会话=新 X25519 密钥对+新
                     // sessionId（SessionCrypto 派生绑 sessionId）——不重派则所有
                     // 重连帧 decrypt_failed（会话 9g 实证：journal seq 推进但
                     // 全部拒帧、指令 execution_unknown）。优先外部 cryptoRebuilder
                     // （lab：配对私钥同源）；否则自持 ephemeral 私钥派生。
-                    val sessionId = json.jsonObject["sessionId"]?.jsonPrimitive?.content
-                    val serverPubHex = json.jsonObject["serverX25519PublicKey"]?.jsonPrimitive?.content
+                    val sessionId = json["sessionId"]?.jsonPrimitive?.content
+                    val serverPubHex = json["serverX25519PublicKey"]?.jsonPrimitive?.content
                     if (sessionId != null && serverPubHex != null) {
                         try {
                             val derived = if (cryptoRebuilder != null) {
@@ -272,18 +342,46 @@ object ProtocolClient {
                                 }
                             }
                             derived?.let(::refreshSessionCrypto)
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
                             // 重派失败保留旧 crypto：新会话帧将被拒（拒帧→断连→
-                            // 下一轮重建重试，自愈路径不变）。
+                            // 下一轮重建重试，自愈路径不变）。会话 21：不再吞音——留痕。
+                            onTransportEvent?.invoke("会话密钥重派失败: ${e.message}")
                         }
                     }
-                    baseUrl.trimEnd('/') + wsPath
+                    onTransportEvent?.invoke("会话重建 OK → ${wsPath.substringBeforeLast('/').takeLast(40)}/…")
+                    base + wsPath
                 } else {
-                    baseUrl.trimEnd('/') + "/api/v2/device-sessions/fallback-retry"
+                    onTransportEvent?.invoke("会话重建失败（HTTP $status，无 wsPath）→ fallback 重试")
+                    base + "/api/v2/device-sessions/fallback-retry"
                 }
             } catch (e: Exception) {
-                baseUrl.trimEnd('/') + "/api/v2/device-sessions/retry"
+                onTransportEvent?.invoke("会话重建异常: ${e.message}")
+                base + "/api/v2/device-sessions/retry"
             }
+        }
+
+        /** POST /api/v2/device-sessions（[renegotiateProof] 非空 = 附 §5.5.1 重协商材料）。 */
+        private fun postCreateSession(
+            base: String,
+            deviceId: String,
+            ephemeralPubHex: String?,
+            renegotiateProof: Triple<Long, String, String>?,
+        ): okhttp3.Response {
+            val body = buildString {
+                append("{\"deviceId\":\"").append(deviceId).append('"')
+                ephemeralPubHex?.let { append(",\"x25519EphemeralPublicKey\":\"").append(it).append('"') }
+                renegotiateProof?.let { (ts, nonce, signature) ->
+                    append(",\"renegotiate\":{\"ts\":").append(ts)
+                        .append(",\"nonce\":\"").append(nonce)
+                        .append("\",\"signature\":\"").append(signature).append("\"}")
+                }
+                append('}')
+            }
+            val request = okhttp3.Request.Builder()
+                .url(base + "/api/v2/device-sessions")
+                .post(okhttp3.RequestBody.create(null, body))
+                .build()
+            return httpClient.newCall(request).execute()
         }
 
         /**

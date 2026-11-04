@@ -134,6 +134,12 @@ class DeviceSessionLoop(
      * successList/failList。null = 首批行为（单目标 target 归档）。
      */
     private val takeBatchOutcomes: (() -> List<TargetOutcome>)? = null,
+    /**
+     * 凭据重协商签名器（会话 21 自愈，spec §5.5.1；透传 ProtocolClient.V2Session）：
+     * 服务端重启凭据失忆 → 重建 POST 401 → Ed25519(deviceId|ts|nonce) 换发新凭据。
+     * null = 不自愈（fallback 重试，历史行为）。
+     */
+    private val renegotiationSigner: ((deviceId: String, ts: Long, nonce: String) -> String)? = null,
 ) {
 
     private val codec = EnvelopeCodec()
@@ -184,6 +190,10 @@ class DeviceSessionLoop(
         },
         transportFactory = transportFactory,
         cryptoRebuilder = cryptoRebuilder,
+        renegotiationSigner = renegotiationSigner,
+        // 会话 21 诊断面：WS 断连原因/重建留痕进事件日志（真机 lab 日志可见
+        // 「为什么连不上」——此前端点策略拒拨/TLS 失败完全不可见）。
+        onTransportEvent = onEvent,
     )
 
     fun start() {
@@ -219,6 +229,17 @@ class DeviceSessionLoop(
         duplicateReAck: Boolean,
     ) {
         lastReceivedSeq.set(frame.meta.seq)
+        // socketType=3 = 服务端对端出向结果帧的确认/重写（rememberReceipt re-write，
+        // 新 eventId + 同 commandId + 无 epoch 载荷）——单向信息，不入门禁：
+        // 入门禁则 epoch=0 撞高水位被「拒旧」误伤（会话 21 真机实锤）；若按缺 epoch
+        // 去重命中走 reAckOriginal 又与服务端回执重写互为因果（乒乓循环）。
+        // 执行只源于 socketType=2 指令载荷（spec §5.4 帧表语义）。
+        if (frame.socketType == MessageTypes.SOCKET_RAW_CONFIRM) {
+            onEvent?.invoke(
+                "回执帧已消费（socketType=3 commandId=${frame.meta.commandId} 单向确认，不入门禁）",
+            )
+            return
+        }
         val beans = try {
             codec.beans(payload)
         } catch (e: Exception) {
@@ -510,6 +531,14 @@ class DeviceSessionLoop(
             rawMsg = rawMsgJson,
             successList = successList,
             failList = failList,
+            // 会话 21 回归：回执载荷回填**会话 epoch**（端侧拒旧水位；hello_ack 不携
+            // epoch——session-hello-ack schema 冻结无该字段，故水位即客户端唯一会话
+            // epoch 镜像）。gate.apply 的水位推进在 effect（含本回执）**之后**，故取
+            // max(已应用水位, 本指令 epoch)=推进后终值——等价于回执落地时刻的会话
+            // epoch。载荷级字段（exec-callback additionalProperties:true，同 spec
+            // §5.7.2 dispatch 载荷注入的线缆对偶面；0 = 无已应用 epoch，与 904
+            // entries epoch(≥0) 同语义）。服务端审计/对账证据面，不改变结果处理。
+            extras = mapOf("epoch" to JsonPrimitive(maxOf(journal.appliedEpoch(), pendingEpoch))),
             metaJson = buildJsonObject {
                 put("dispatchId", commandId)
                 if (deviceDryRun) put("deviceDryRun", true) // FR-54 端侧干跑审计标记

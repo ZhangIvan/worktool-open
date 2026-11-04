@@ -62,6 +62,12 @@ class LabPairingActivity : Activity() {
 
     private var loop: DeviceSessionLoop? = null
 
+    /** RIG 自动化 prefill extras（见 onCreate 注释；仅 labDebug）。 */
+    private companion object {
+        const val EXTRA_PREFILL_HOST = "lab_prefill_host"
+        const val EXTRA_PREFILL_CODE = "lab_prefill_code"
+    }
+
     /** 进程级会话标识（301 快照 processSessionId；进程存活期恒定）。 */
     private val processSessionId: String = java.util.UUID.randomUUID().toString()
     private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
@@ -69,6 +75,16 @@ class LabPairingActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_lab_pairing)
+        // RIG 自动化通道（会话 21；仅 labDebug 源集，产品零改动）：adb am start
+        // 显式 prefill——MIUI 恢复已销毁 Activity 的视图状态（含陈旧/损坏的输入
+        // 内容），uiautomator 在本机不可用，触摸注入被恢复态污染。显式 extra
+        // 覆盖恢复态 = RIG 可靠装配面。无 extra = 人工输入路径不变。
+        intent?.getStringExtra(EXTRA_PREFILL_HOST)?.let {
+            findViewById<EditText>(R.id.lab_host).setText(it)
+        }
+        intent?.getStringExtra(EXTRA_PREFILL_CODE)?.let {
+            findViewById<EditText>(R.id.lab_code).setText(it)
+        }
         findViewById<Button>(R.id.lab_pair_button).setOnClickListener { pairAsync() }
     }
 
@@ -110,7 +126,14 @@ class LabPairingActivity : Activity() {
         val signingKey = Ed25519Keys.resolve(
             persistedFallbackSeedHex = seedStore.loadSeedHex(),
         )
-        signingKey.fallbackSeedHex?.let { seedStore.saveSeedHex(it) }
+        signingKey.fallbackSeedHex?.let {
+            seedStore.saveSeedHex(it)
+            // 会话 21：同步镜像到产品面 SigningSeedStore——重装/进程重建后的会话自启
+            // 走 SessionRuntime（产品装配），其重协商签名器从产品店取种子；双店同种
+            // 子 = 配对注册公钥与重协商签名公钥同源（缺此镜像 → 签名公钥漂移 →
+            // 服务端 RENEGOTIATE_FAILED，设备永不在线）。
+            cn.worktool.open.app.SigningSeedStore(this).saveSeedHex(it)
+        }
         when (signingKey.origin) {
             Ed25519Keys.Origin.DEVICE_JCA ->
                 log("Ed25519 密钥：设备生成密钥 ✓（JCA 路径）pub=${signingKey.publicHex.take(16)}…")
@@ -247,6 +270,11 @@ class LabPairingActivity : Activity() {
             clientVersion = "0.1.0-lab-wm6",
             onEvent = { line -> log(line) },
             takeBatchOutcomes = portHub::takeBatchOutcomes,
+            // 会话 21 自愈（spec §5.5.1）：服务端重启凭据失忆 → 重建 POST 401 →
+            // 同一配对签名密钥重协商换发新凭据（signingKey 上方已解析，公钥稳定）。
+            renegotiationSigner = { deviceId, ts, nonce ->
+                Hex.encode(Ed25519Keys.sign(signingKey, "$deviceId|$ts|$nonce".toByteArray(Charsets.UTF_8)))
+            },
         )
         portHub.attach(l)
         l.start()

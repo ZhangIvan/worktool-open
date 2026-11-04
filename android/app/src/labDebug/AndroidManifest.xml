@@ -8,10 +8,14 @@
     （res/raw/ca_lab.crt，公钥材料；对应私钥仅存 local-private/，G13 不入库）——lab 独有，产品变体零改动；
   - LabPairingActivity：配对最小面（host + 6 位配对码 → PairingClient → V2Session hello）。
     exported=true 仅为 RIG/adb 显式启动通道（lab 装配验证），无 intent-filter。
+  - LabApp（会话 21 P0）：进程入口——启动即从已存 server 地址恢复 lab 裸 IP 例外
+    （EndpointPolicy 注册表为进程内易失态，配对后重装/重建进程若不恢复则主界面
+    自启会话被本地拒拨，设备永不在线）。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
+        android:name="cn.worktool.open.app.lab.LabApp"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <activity
