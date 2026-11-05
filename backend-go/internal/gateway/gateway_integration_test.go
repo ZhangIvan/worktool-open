@@ -862,6 +862,7 @@ func TestPGGatewayGW09(t *testing.T) {
 func TestPGGatewayGW10(t *testing.T) {
 	gatewayGate(t)
 	migrationResultGuardCases(t)
+	replayMigrationNegativeCases(t)
 	for _, invalid := range []string{"cross_tenant", "wrong_session", "sequence_gap", "stale_timestamp"} {
 		t.Run(invalid, func(t *testing.T) {
 			f := newGW(t)

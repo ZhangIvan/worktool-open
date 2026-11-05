@@ -218,6 +218,7 @@ func TestPGCallbackCB02(t *testing.T) {
 	gatewayGate(t)
 	callbackObservationIntegrationCases(t)
 	callbackReplayReceiptIntegrationCases(t)
+	replayReceiptCorruptionCases(t)
 	t.Run("same_delivery_single_claim_and_prepare", func(t *testing.T) {
 		f := newGWWithStoreConstructor(t, callbackSyntheticStore)
 		store, _ := callbackSetup(t, f)
