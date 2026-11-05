@@ -46,6 +46,11 @@ PROVISION_DIAGNOSTIC_CLASSES = frozenset(('SQL_PROCESS_PENDING', 'SQL_PROCESS_AC
     'UNEXPECTED_NONQUERY_OUTPUT', 'EMPTY_RESULT_ACKNOWLEDGED'))
 PREFLIGHT_CHECKS = ('version', 'session_user', 'current_user', 'database_absent', 'roles_absent',
                     'other_clients', 'bootstrap_superuser', 'event_triggers')
+CENSUS_MAX_BYTES = 128 << 10
+CENSUS_STATUSES = frozenset(('OBSERVED', 'SKIPPED_BUDGET', 'SKIPPED_INTERRUPTED',
+    'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_FAILED', 'SQL_PROCESS_OUTPUT_LIMIT',
+    'JSON_DECODE_FAILED', 'JSON_SIZE_LIMIT', 'JSON_SHAPE_INVALID', 'COUNT_OUT_OF_RANGE',
+    'INTERRUPTED', 'VALIDATION_BUDGET_EXHAUSTED', 'LOCAL_DIAGNOSTIC_FAILED'))
 PUBLIC_CODES = frozenset(('OK', 'NOT_RUN', 'HOSTED_CI_ONLY', 'INVALID_IDENTITY',
     'IDENTITY_MISMATCH', 'RUN_ATTEMPT_REFUSED', 'UNSAFE_PATH', 'UNSAFE_FILE',
     'SOURCE_PIN_MISMATCH', 'TOOLCHAIN_PIN_MISMATCH', 'INVALID_PIN',
@@ -465,6 +470,45 @@ def parse_json(raw):
         raise Fault('INVALID_OUTPUT') from None
 
 
+class CensusError(RuntimeError):
+    def __init__(self, code):
+        self.code = code if code in CENSUS_STATUSES else 'JSON_SHAPE_INVALID'
+        super().__init__(self.code)
+
+
+def decode_activity_census(raw, validator):
+    """Census-only strict decoder; the existing shared decoder is unchanged."""
+    if type(raw) is not bytes:
+        raise CensusError('JSON_SHAPE_INVALID')
+    if len(raw) > CENSUS_MAX_BYTES:
+        raise CensusError('JSON_SIZE_LIMIT')
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise CensusError('JSON_DECODE_FAILED')
+            result[key] = value
+        return result
+    def constant(_value):
+        raise CensusError('JSON_DECODE_FAILED')
+    try:
+        value = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=constant)
+    except CensusError:
+        raise
+    except Exception:
+        raise CensusError('JSON_DECODE_FAILED') from None
+    try:
+        # The source-pinned helper independently rebuilds only fixed keys,
+        # categories, booleans and bounded integer counts from SQL's result.
+        result = validator(value)
+    except Exception as error:
+        code = str(error)
+        raise CensusError(code if code in ('JSON_SHAPE_INVALID', 'COUNT_OUT_OF_RANGE', 'JSON_SIZE_LIMIT') else 'JSON_SHAPE_INVALID') from None
+    if len(canonical(result)) > CENSUS_MAX_BYTES:
+        raise CensusError('JSON_SIZE_LIMIT')
+    return result
+
+
 def verify_container(v, identity, owner, *, resources=True, container_id=None):
     require(isinstance(v, dict) and v.get('name') == '/' + identity.name and
             v.get('owner') == owner and v.get('identity') == identity.key and
@@ -629,6 +673,9 @@ class Supervisor:
         self.resource_diagnostics = {}
         self.provision_diagnostics = {}
         self.preflight_diagnostics = None
+        self.activity_census = None
+        self.activity_diagnostic_trigger = None
+        self.census_attempted = False
         self.server_settings_verified = False
         self.folder = Path(config.runner_temp) / self.identity.name
         self.marker = None
@@ -823,6 +870,98 @@ class Supervisor:
                 'checks': {key: checks[key] for key in PREFLIGHT_CHECKS}}
         except Exception:
             return
+
+    def activity_census_eligible(self, outcome):
+        # Base eligibility is evidence of an already terminal, narrow failure.
+        # Cancellation and remaining time determine attempt/skip only later.
+        try:
+            fields = self.preflight_diagnostics
+            return (outcome['run'] == 'FAIL' and outcome['failure_code'] == 'PROVISION_FAILED' and
+                outcome['failure_stage'] == 'provision_bootstrap_preflight' and
+                self.stage == 'provision_bootstrap_preflight' and self.started is True and
+                self.provision_diagnostics == {'bootstrap_preflight': 'QUERY_RESULT_RETURNED'} and
+                type(fields) is dict and set(fields) == {'format', 'authority', 'classification', 'shape', 'checks'} and
+                fields['format'] == 'worktool-registration-preflight-fields-v1' and fields['authority'] == 'DIAGNOSTIC_ONLY' and
+                fields['classification'] == 'VALUE_MISMATCH' and
+                fields['shape'] == {key: 'MATCH' for key in ('root', 'row_count', 'row', 'fields')} and
+                fields['checks'] == {key: 'MISMATCH' if key == 'other_clients' else 'MATCH' for key in PREFLIGHT_CHECKS} and
+                self.container_verified is True and self.server_settings_verified is True and
+                self.authentication_summary.get('status') == 'VERIFIED_IN_ISOLATED_SCOPE' and
+                self.authentication_summary.get('wrong_password_probe') == 'AUTH_DENIAL_OBSERVED' and
+                self.marker['identity'] == self.identity.data() and self.marker['container_name'] == self.identity.name and
+                self.marker['source_sha256'] == self.source_sha256 and self.marker['job_deadline_ns'] == self.config.job_deadline_ns and
+                self.marker['state'] == 'STARTED' and self.marker['create_state'] == 'ACKNOWLEDGED' and
+                type(self.marker['run_invocations']) is int and self.marker['run_invocations'] == 0 and
+                bool(HEX.fullmatch(self.marker['owner'])) and bool(HEX.fullmatch(self.marker['container_id'])) and
+                self.container_observation['id'] == self.marker['container_id'] and
+                self.container_observation['image'] == IMAGE and
+                self.container_observation['image_id'] == self.image_id and
+                bool(re.fullmatch(r'wt_admin_[a-f0-9]{32}', self.admin)) and
+                bool(HEX.fullmatch(self.credentials[self.admin])) and self.binding is None)
+        except Exception:
+            return False
+
+    def collect_activity_census(self, outcome):
+        if self.activity_census is not None or self.census_attempted or not self.activity_census_eligible(outcome):
+            return
+        self.activity_census = {'format': 'worktool-registration-activity-census-v1', 'authority': 'DIAGNOSTIC_ONLY',
+            'timing': 'AFTER_TERMINAL_PREFLIGHT_FAILURE', 'original_rows_relation': 'NOT_PROVEN',
+            'gate_disposition': 'UNCHANGED_FAIL', 'trigger_failure_code': 'PROVISION_FAILED',
+            'trigger_stage': 'provision_bootstrap_preflight', 'status': 'SKIPPED_BUDGET',
+            'read_outcome': 'NOT_ATTEMPTED', 'observation': None}
+        if self.interrupted:
+            self.activity_census['status'] = 'SKIPPED_INTERRUPTED'
+            return
+        # Five active seconds + existing five-second exceptional reap + one
+        # second local validation allowance. Never extend the run deadline.
+        if self.operation_deadline - self.monotonic() < 11:
+            return
+        query = self.provision_helper.activity_census_query()
+        if self.operation_deadline - self.monotonic() < 11:
+            return
+        if self.interrupted:
+            self.activity_census['status'] = 'SKIPPED_INTERRUPTED'
+            return
+        self.census_attempted = True
+        self.activity_census.update(status='SQL_PROCESS_FAILED', read_outcome='UNCONFIRMED')
+        result = self.sql_process(self.admin, 'postgres', query, timeout=5)
+        self.activity_census['read_outcome'] = 'PROCESS_ACKNOWLEDGED'
+        now = self.monotonic()
+        if now >= self.operation_deadline:
+            self.activity_census['status'] = 'VALIDATION_BUDGET_EXHAUSTED'
+            return
+        validation_deadline = min(self.operation_deadline, now + 1)
+        value = decode_activity_census(result.stdout, self.provision_helper.validate_activity_census_wire)
+        if self.monotonic() >= validation_deadline:
+            self.activity_census['status'] = 'VALIDATION_BUDGET_EXHAUSTED'
+            return
+        retained = dict(self.activity_census, status=value['status'], observation=value['observation'])
+        if len(canonical(retained)) > CENSUS_MAX_BYTES:
+            raise CensusError('JSON_SIZE_LIMIT')
+        if self.monotonic() >= validation_deadline:
+            self.activity_census['status'] = 'VALIDATION_BUDGET_EXHAUSTED'
+            return
+        self.activity_census = retained
+
+    def record_activity_census_error(self, error):
+        if self.activity_census is None:
+            return
+        if (isinstance(error, Fault) and error.code == 'SUBPROCESS_TIMEOUT' and not error.uncertain and
+                self.census_attempted and self.activity_census['read_outcome'] == 'UNCONFIRMED' and not self.interrupted):
+            # The existing Supervisor.call deadline check raises before invoking
+            # Executor. Executor-side failures instead mark uncertain=True.
+            self.activity_census.update(status='SKIPPED_BUDGET', read_outcome='NOT_ATTEMPTED', observation=None)
+            return
+        if isinstance(error, CensusError):
+            status = error.code
+        else:
+            fallback = ('LOCAL_DIAGNOSTIC_FAILED' if self.activity_census['read_outcome'] == 'NOT_ATTEMPTED' else
+                'JSON_SHAPE_INVALID' if self.activity_census['read_outcome'] == 'PROCESS_ACKNOWLEDGED' else 'SQL_PROCESS_FAILED')
+            status = {'SUBPROCESS_TIMEOUT': 'SQL_PROCESS_TIMEOUT', 'SUBPROCESS_NONZERO': 'SQL_PROCESS_NONZERO',
+                'OUTPUT_LIMIT': 'SQL_PROCESS_OUTPUT_LIMIT', 'INTERRUPTED': 'INTERRUPTED'}.get(safe_code(error), fallback)
+        if isinstance(error, KeyboardInterrupt) or self.interrupted:
+            status = 'INTERRUPTED'
+        self.activity_census.update(status=status, observation=None)
 
     def execute(self, step):
         require(isinstance(step.phase, str) and bool(re.fullmatch('[a-z0-9_]{1,48}', step.phase)), 'INVALID_ARGUMENTS')
@@ -1142,12 +1281,23 @@ class Supervisor:
             self.run_fixture()
             outcome.update(run='CANDIDATE_PASS', failure_code='OK', failure_stage='none')
         except BaseException as error:
-            outcome.update(run='FAIL' if self.started else 'NOT_RUN', failure_code=safe_code(error), failure_stage=self.stage)
+            try:
+                outcome.update(run='FAIL' if self.started else 'NOT_RUN', failure_code=safe_code(error), failure_stage=self.stage)
+                if outcome['failure_code'] == 'PROVISION_FAILED' and outcome['failure_stage'] == 'provision_bootstrap_preflight':
+                    self.activity_diagnostic_trigger = {'failure_code': 'PROVISION_FAILED', 'failure_stage': 'provision_bootstrap_preflight'}
+                self.collect_activity_census(outcome)
+            except BaseException as diagnostic_error:
+                try:
+                    self.record_activity_census_error(diagnostic_error)
+                except BaseException:
+                    self.activity_census = None  # Discard optional evidence, never the original failure.
         finally:
             if self.started:
                 # Cleanup stays bounded despite repeated ordinary cancellation.
                 for sig in self.old_signals:
                     signal.signal(sig, signal.SIG_IGN)
+                if outcome['failure_code'] == 'PROVISION_FAILED' and outcome['failure_stage'] == 'provision_bootstrap_preflight':
+                    self.activity_diagnostic_trigger = {'failure_code': 'PROVISION_FAILED', 'failure_stage': 'provision_bootstrap_preflight'}
                 try:
                     outcome['cleanup'] = self.cleanup()
                 except BaseException as error:
@@ -1172,6 +1322,10 @@ class Supervisor:
                         'authority': 'DIAGNOSTIC_ONLY', 'phases': dict(self.provision_diagnostics)}
                 if self.preflight_diagnostics is not None:
                     outcome['preflight_diagnostics'] = self.preflight_diagnostics
+                if self.activity_census is not None:
+                    outcome['activity_census'] = self.activity_census
+                if self.activity_diagnostic_trigger is not None:
+                    outcome['activity_diagnostic_trigger'] = self.activity_diagnostic_trigger
                 if hasattr(self, 'image_id'):
                     outcome['resource_policy'] = {'image': IMAGE, 'image_id': self.image_id, 'cpus': 2,
                         'memory_bytes': 1 << 30, 'memory_swap_bytes': 1 << 30, 'shm_bytes': 64 << 20,

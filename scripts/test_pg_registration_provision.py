@@ -376,5 +376,215 @@ class PreflightDiagnosticTests(unittest.TestCase):
         self.assertEqual(ast.dump(calls[0].args[0]), ast.dump(ast.parse('result == expected', mode='eval').body))
 
 
+class ActivityCensusTests(unittest.TestCase):
+    # Independent fixed-domain expectations, not an observed server snapshot.
+    categories = ('NOT_INITIALIZED','ARCHIVER','AUTOVACUUM_LAUNCHER','AUTOVACUUM_WORKER',
+        'CLIENT_BACKEND','DEAD_END_CLIENT_BACKEND','BACKGROUND_WORKER','BACKGROUND_WRITER',
+        'CHECKPOINTER','IO_WORKER','LOGGER','SLOTSYNC_WORKER','STANDALONE_BACKEND','STARTUP',
+        'WALRECEIVER','WALSENDER','WALSUMMARIZER','WALWRITER','LOGICAL_REPLICATION_LAUNCHER',
+        'TYPE_NULL','TYPE_OTHER')
+    presence_fields = ('role_oid_present','role_name_present','database_oid_present','database_name_present')
+
+    @classmethod
+    def wire(cls, counts=None):
+        counts = counts or {}
+        bins = []
+        for category in cls.categories:
+            for mask in range(16):
+                flags = tuple(bool(mask & bit) for bit in (8,4,2,1))
+                bins.append(dict(backend_category=category, **dict(zip(cls.presence_fields,flags)),
+                    counted_by_original_predicate=category in ('CLIENT_BACKEND','TYPE_NULL') or flags[1],
+                    count=counts.get((category,mask),0)))
+        return dict(format='worktool-registration-activity-census-wire-v1',status='OBSERVED',observation=dict(
+            scope='PG_STAT_ACTIVITY_CLUSTER_EXCLUDING_SELF', rows_total=sum(b['count'] for b in bins),
+            counted_total=sum(b['count'] for b in bins if b['counted_by_original_predicate']),
+            not_counted_total=sum(b['count'] for b in bins if not b['counted_by_original_predicate']),bins=bins))
+
+    @classmethod
+    def model_sql_projection(cls, rows, self_pid):
+        # Test-only model of the reviewed CASE/projection, not a SQL execution
+        # claim and never an API for reading real/production activity records.
+        import re
+        mapping = dict(re.findall(r" WHEN '([^']+)' THEN '([^']+)'", P.activity_census_query()))
+        counts = {}
+        for row in rows:
+            if row['pid'] == self_pid:
+                continue
+            category = 'TYPE_NULL' if row['backend_type'] is None else mapping.get(row['backend_type'],'TYPE_OTHER')
+            mask = sum(bit for name,bit in zip(('usesysid','usename','datid','datname'),(8,4,2,1)) if row[name] is not None)
+            counts[category,mask] = counts.get((category,mask),0)+1
+        if sum(counts.values()) > 4096:
+            return dict(format='worktool-registration-activity-census-wire-v1',status='COUNT_OUT_OF_RANGE',observation=None)
+        return cls.wire(counts)
+
+    def assert_rejected(self, value, code='JSON_SHAPE_INVALID'):
+        with self.assertRaises(P.ProvisionError) as caught:
+            P.validate_activity_census_wire(value)
+        self.assertEqual(str(caught.exception),code)
+
+    def test_fixed_single_select_has_no_target_or_execution_argument(self):
+        import inspect,re
+        self.assertEqual(len(inspect.signature(P.activity_census_query).parameters),0)
+        sql = P.activity_census_query()
+        self.assertEqual(sql,P.activity_census_query())
+        self.assertTrue(sql.startswith('WITH activity AS MATERIALIZED (\n'))
+        self.assertEqual(len(P._split(sql)),1)
+        self.assertEqual(sql.count(';'),1)
+        self.assertEqual(sql.count('FROM pg_catalog.pg_stat_activity'),1)
+        self.assertEqual(sql.count('WHERE pid <> pg_catalog.pg_backend_pid()'),1)
+        self.assertIn("(backend_type='client backend' OR usename IS NOT NULL OR backend_type IS NULL) AS counted",sql)
+        code = '\n'.join(part for kind,part in P._pieces(sql) if kind=='code')
+        for word in ('BEGIN','COMMIT','SET','INSERT','UPDATE','DELETE','CREATE','ALTER','GRANT','REVOKE','COPY','CALL','DO'):
+            self.assertIsNone(re.search(r'\b'+word+r'\b',code,re.I),word)
+        for forbidden in ('SELECT *','pg_authid','rolpassword','client_addr','application_name','query_start','pg_cancel_backend','pg_terminate_backend'):
+            self.assertNotIn(forbidden,sql)
+        self.assertNotIn('WHERE datid',sql)
+        self.assertIn("ELSE CASE WHEN backend_type IS NULL THEN 'TYPE_NULL' ELSE 'TYPE_OTHER' END",sql)
+        self.assertEqual(sql.count('CASE WHEN s.rows_total>4096'),2)
+        self.assertIn("THEN NULL ELSE pg_catalog.json_build_object(",sql)
+        self.assertIn('ORDER BY type_order,presence_order',sql)
+        self.assertNotIn('LIMIT ',sql)
+
+    def test_domain_and_sql_literal_inventory_are_exact(self):
+        import re
+        sql=P.activity_census_query()
+        self.assertEqual(P.ACTIVITY_CENSUS_CATEGORIES,self.categories)
+        self.assertEqual(P.ACTIVITY_CENSUS_PRESENCE_FIELDS,self.presence_fields)
+        self.assertEqual(len(set(self.categories)),21)
+        mapping = re.findall(r" WHEN '([^']+)' THEN '([^']+)'",sql)
+        self.assertEqual(len(mapping),19)
+        self.assertEqual(tuple(code for _,code in mapping),self.categories[:-2])
+        self.assertEqual(mapping[-1],('logical replication launcher','LOGICAL_REPLICATION_LAUNCHER'))
+        domain=sql.split('type_domain(type_order,backend_category) AS (VALUES\n')[1].split('\n), presence_domain')[0]
+        self.assertEqual(re.findall(r"\((\d+),'([^']+)'\)",domain),[(str(i),c) for i,c in enumerate(self.categories)])
+        flags=sql.split('presence_domain(presence_order,role_oid_present,role_name_present,database_oid_present,database_name_present) AS (VALUES\n')[1].split('\n), bins')[0]
+        self.assertEqual(re.findall(r'\((\d+),(true|false),(true|false),(true|false),(true|false)\)',flags),
+            [(str(m),*('true' if m & bit else 'false' for bit in (8,4,2,1))) for m in range(16)])
+        self.assertEqual(len(list(P._activity_census_bin_keys())),336)
+
+    def test_exhaustive_type_presence_projection_keeps_original_predicate(self):
+        import re
+        labels=[x for x,_ in re.findall(r" WHEN '([^']+)' THEN '([^']+)'",P.activity_census_query())]+[None,'unlisted-private-secret']
+        rows=[]
+        for label in labels:
+            for mask in range(16):
+                row={'pid':len(rows)+2,'backend_type':label}
+                row.update({key:'private-name-or-identifier' if mask & bit else None
+                    for key,bit in zip(('usesysid','usename','datid','datname'),(8,4,2,1))})
+                rows.append(row)
+        projected=self.model_sql_projection(rows,1)
+        clean=P.validate_activity_census_wire(projected)
+        self.assertEqual(clean['observation']['rows_total'],336)
+        self.assertEqual(clean['observation']['counted_total'],184)
+        self.assertEqual(clean['observation']['not_counted_total'],152)
+        self.assertTrue(all(b['count']==1 for b in clean['observation']['bins']))
+        self.assertNotIn('private',json.dumps(clean))
+
+    def test_self_exclusion_unknown_null_and_launchers_are_diagnostics_only(self):
+        rows=[dict(pid=5,backend_type='client backend',usesysid=9,usename='secret',datid=8,datname='private')]
+        for pid,kind,user,db in [(6,'logical replication launcher','secret',None),(7,None,None,None),
+            (8,'private-password-postgresql://example',None,'private'),(9,'logical replication launcher','secret','private')]:
+            rows.append(dict(pid=pid,backend_type=kind,usesysid=9 if user else None,usename=user,datid=8 if db else None,datname=db))
+        clean=P.validate_activity_census_wire(self.model_sql_projection(rows,5))
+        self.assertEqual(clean['observation']['rows_total'],4)
+        self.assertEqual(clean['observation']['counted_total'],3)
+        nonzero=[b for b in clean['observation']['bins'] if b['count']]
+        self.assertEqual(len(nonzero),4)
+        self.assertTrue(any(b['backend_category']=='TYPE_NULL' and b['counted_by_original_predicate'] for b in nonzero))
+        self.assertTrue(any(b['backend_category']=='TYPE_OTHER' and b['database_name_present'] and not b['counted_by_original_predicate'] for b in nonzero))
+        for forbidden in ('secret','private','postgresql://','"pid"','"usesysid"','"usename"','"datid"','"datname"'):
+            self.assertNotIn(forbidden,json.dumps(clean))
+        self.assertNotIn('PASS',json.dumps(clean))
+
+    def test_zero_bound_and_exact_overflow_sentinel(self):
+        for count in (0,1,4096):
+            clean=P.validate_activity_census_wire(self.wire({('CLIENT_BACKEND',15):count}))
+            self.assertEqual(clean['observation']['rows_total'],count)
+            self.assertEqual(len(clean['observation']['bins']),336)
+        rows=[dict(pid=2,backend_type='client backend',usesysid=None,usename=None,datid=None,datname=None)]*4097
+        wire=self.model_sql_projection(rows,1)
+        self.assertEqual(P.validate_activity_census_wire(wire),dict(format='worktool-registration-activity-census-wire-v1',status='COUNT_OUT_OF_RANGE',observation=None))
+        for obs in ({},[],self.wire()['observation'],'private secret'):
+            self.assert_rejected({**wire,'observation':obs})
+
+    def test_strict_root_and_observation_shapes_never_echo_rejected_data(self):
+        secret='UNREVIEWED_PASSWORD_DSN_SQL'
+        good=self.wire()
+        for value in (None,False,[],[good],secret,{}, {**good,secret:secret},
+            {**good,'format':secret},{**good,'status':secret},{**good,'observation':None},
+            {**good,'observation':{**good['observation'],secret:secret}},
+            {**good,'observation':{**good['observation'],'scope':secret}}):
+            self.assert_rejected(value)
+
+    def test_bin_inventory_rejects_extra_missing_duplicate_and_reordered_entries(self):
+        good=self.wire()
+        for operation in ('missing','extra','duplicate','reverse','extra-key','unknown-category','flag','predicate'):
+            bad=copy.deepcopy(good);bins=bad['observation']['bins']
+            if operation=='missing':bins.pop()
+            elif operation=='extra':bins.append(copy.deepcopy(bins[0]))
+            elif operation=='duplicate':bins[1]=copy.deepcopy(bins[0])
+            elif operation=='reverse':bins.reverse()
+            elif operation=='extra-key':bins[0]['private-secret']='private-secret'
+            elif operation=='unknown-category':bins[0]['backend_category']='private-secret'
+            elif operation=='flag':bins[0]['database_name_present']=True
+            elif operation=='predicate':bins[0]['counted_by_original_predicate']=True
+            with self.subTest(operation=operation):self.assert_rejected(bad)
+
+    def test_boolean_fields_require_real_boolean_and_exact_value(self):
+        for key in (*self.presence_fields,'counted_by_original_predicate'):
+            for value in (0,1,None,'false',[],{}):
+                bad=self.wire();bad['observation']['bins'][0][key]=value
+                with self.subTest(key=key,value=value):self.assert_rejected(bad)
+
+    def test_counts_require_bounded_real_integer(self):
+        for target in ('rows_total','counted_total','not_counted_total','count'):
+            for value in (True,False,0.0,'0',None,[],{},-1,4097):
+                bad=self.wire();obj=bad['observation']['bins'][0] if target=='count' else bad['observation'];obj[target]=value
+                code='COUNT_OUT_OF_RANGE' if type(value) is int else 'JSON_SHAPE_INVALID'
+                with self.subTest(target=target,value=value):self.assert_rejected(bad,code)
+
+    def test_totals_are_recomputed_and_not_normalized(self):
+        for key in ('rows_total','counted_total','not_counted_total'):
+            bad=self.wire({('CLIENT_BACKEND',15):1});bad['observation'][key]+=1
+            self.assert_rejected(bad)
+        bad=self.wire({('CLIENT_BACKEND',0):4096,('CLIENT_BACKEND',1):1})
+        bad['observation'].update(rows_total=4096,counted_total=4096)
+        self.assert_rejected(bad,'COUNT_OUT_OF_RANGE')
+
+    def test_clean_reconstruction_and_size_bound(self):
+        raw=self.wire({('TYPE_OTHER',15):4096})
+        clean=P.validate_activity_census_wire(raw)
+        self.assertEqual(clean,raw);self.assertIsNot(clean,raw)
+        raw['observation']['bins'][0]['count']=5
+        self.assertEqual(clean['observation']['bins'][0]['count'],0)
+        self.assertLess(len(P.canonical(clean)),128<<10)
+        with mock.patch.object(P,'ACTIVITY_CENSUS_MAX_BYTES',1):
+            self.assert_rejected(self.wire(),'JSON_SIZE_LIMIT')
+
+    def test_existing_eighteen_install_sql_hashes_unchanged(self):
+        expected=(
+            'f26206320a3df4e6f9a1f8510cabfeeb5c19725b4f3eb8d82b8b773a03b6ccc4',
+            'bd474b5a9e9f942116d145c87e82af8327eba84acb39ca5a41c68632ea3c8d4b',
+            '636f190f4973fee0c383fb9f8f790bcbf82af78d99a5adf5345462c617277bf3',
+            '321444fe29ddc6aeced8c92dc69c0ebcf056ad46895c2ac792979a870f5753bf',
+            'cac75684319ef7e6fbff6d6309781fedf8b707e8d4742cb01740d361fe8ed471',
+            'efee1b1c342044d8df0cb09ae03808edebd9662e1da4fb3478865c1fa491931e',
+            '3577a197e359ed8c44f08bab5d0cb0473e2cf74ece979c5f239740c867abd6be',
+            '98daa1d6457fcd8374c99055f7c264eac8b958477d394d2561e3e450210a19e5',
+            'eca47ff469757fd91718e39b35ee2eb4f7ae94981cde9fa2de5166ef3756da9a',
+            'fdf30dc64d4fff90f8a9491a1b576c1ec1a488ccf782c05af5a2f61532a23d11',
+            '7f54753b04463240a27f95f74586b90e7dad660b9272706b05edb75453836ac5',
+            'a15d29fb7ffe4492f6bfc8fab8bd4dc616bc9ee586be72ea49254f2ee67312a6',
+            '3154396db36c82e101fa1694e83ed3772cfd129f73669ffc06785caf8844d3a0',
+            '71d316e14fe662dcb3f0bdbe25258e7fa27cf2fd97d6eef88a62ae490bcf9b6f',
+            '87042b04b7177db3c59ba217feef6145abe05ad1dceb172645008d98b46b61e6',
+            '2e7eaaab7bcc45762349ff4f265bc8b019360667a015028cb57899368310b4cb',
+            'bbb20b5f343f3595cec03f0af21a7541ec9006b4c426456baacc2e37d41eb003',
+            'dc09ac8ae3f6e43a026e36b615571f42b658713b6d9b81f7b21401ba57aff66a')
+        plan=P.build_provision_plan(P.load_and_verify_sources(ROOT),DB,ADMIN,PASSWORDS)
+        self.assertEqual(tuple(P.sha(step.sql.encode()) for step in plan),expected)
+        self.assertTrue(all(P.activity_census_query() not in step.sql for step in plan))
+
+
 if __name__ == '__main__':
     unittest.main()

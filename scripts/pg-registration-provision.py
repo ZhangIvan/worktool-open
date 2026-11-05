@@ -95,6 +95,155 @@ class Executor(Protocol):
     def execute(self, step: SQLStep) -> list[dict]: ...
 
 
+# Optional diagnostics for an already failed, verified synthetic-only run.
+# This is never an admission check, an installation step, or a production API.
+# The supervisor owns eligibility, credential lifetime, one-call execution,
+# strict byte decoding and cleanup. No function here performs an external read.
+ACTIVITY_CENSUS_MAX_BYTES = 128 << 10
+ACTIVITY_CENSUS_MAX_COUNT = 4096
+ACTIVITY_CENSUS_WIRE_FORMAT = "worktool-registration-activity-census-wire-v1"
+ACTIVITY_CENSUS_SCOPE = "PG_STAT_ACTIVITY_CLUSTER_EXCLUDING_SELF"
+ACTIVITY_CENSUS_BACKEND_TYPES = (
+    ("not initialized", "NOT_INITIALIZED"),
+    ("archiver", "ARCHIVER"),
+    ("autovacuum launcher", "AUTOVACUUM_LAUNCHER"),
+    ("autovacuum worker", "AUTOVACUUM_WORKER"),
+    ("client backend", "CLIENT_BACKEND"),
+    ("dead-end client backend", "DEAD_END_CLIENT_BACKEND"),
+    ("background worker", "BACKGROUND_WORKER"),
+    ("background writer", "BACKGROUND_WRITER"),
+    ("checkpointer", "CHECKPOINTER"),
+    ("io worker", "IO_WORKER"),
+    ("logger", "LOGGER"),
+    ("slotsync worker", "SLOTSYNC_WORKER"),
+    ("standalone backend", "STANDALONE_BACKEND"),
+    ("startup", "STARTUP"),
+    ("walreceiver", "WALRECEIVER"),
+    ("walsender", "WALSENDER"),
+    ("walsummarizer", "WALSUMMARIZER"),
+    ("walwriter", "WALWRITER"),
+    ("logical replication launcher", "LOGICAL_REPLICATION_LAUNCHER"),
+)
+ACTIVITY_CENSUS_CATEGORIES = tuple(code for _, code in ACTIVITY_CENSUS_BACKEND_TYPES) + ("TYPE_NULL", "TYPE_OTHER")
+ACTIVITY_CENSUS_PRESENCE_FIELDS = ("role_oid_present", "role_name_present", "database_oid_present", "database_name_present")
+
+
+def _activity_census_bin_keys():
+    for category in ACTIVITY_CENSUS_CATEGORIES:
+        for mask in range(16):
+            flags = tuple(bool(mask & bit) for bit in (8, 4, 2, 1))
+            yield category, flags, category in ("CLIENT_BACKEND", "TYPE_NULL") or flags[1]
+
+
+def activity_census_query():
+    """Fixed, one-SELECT, later observation; never part of the 18-step plan.
+
+    Call only via the supervisor in its freshly verified isolated synthetic
+    instance after terminal preflight failure. Labels are reports, not verified
+    process identities or exemptions. Every unlisted non-NULL name is discarded
+    in SQL. Only fixed categories, presence flags and bounded counts can leave.
+    """
+    cases = "\n".join(f" WHEN '{label}' THEN '{code}'" for label, code in ACTIVITY_CENSUS_BACKEND_TYPES)
+    types = ",\n".join(f" ({i},'{code}')" for i, code in enumerate(ACTIVITY_CENSUS_CATEGORIES))
+    presence = ",\n".join(" (" + str(mask) + "," + ",".join("true" if mask & bit else "false" for bit in (8, 4, 2, 1)) + ")" for mask in range(16))
+    return f"""WITH activity AS MATERIALIZED (
+ SELECT CASE backend_type
+{cases}
+ ELSE CASE WHEN backend_type IS NULL THEN 'TYPE_NULL' ELSE 'TYPE_OTHER' END END AS backend_category,
+ usesysid IS NOT NULL AS role_oid_present,
+ usename IS NOT NULL AS role_name_present,
+ datid IS NOT NULL AS database_oid_present,
+ datname IS NOT NULL AS database_name_present,
+ (backend_type='client backend' OR usename IS NOT NULL OR backend_type IS NULL) AS counted
+ FROM pg_catalog.pg_stat_activity
+ WHERE pid <> pg_catalog.pg_backend_pid()
+), summary AS (
+ SELECT count(*) AS rows_total,
+ count(*) FILTER (WHERE counted) AS counted_total,
+ count(*) FILTER (WHERE NOT counted) AS not_counted_total FROM activity
+), observed_bins AS (
+ SELECT backend_category,role_oid_present,role_name_present,database_oid_present,database_name_present,count(*) AS count
+ FROM activity GROUP BY backend_category,role_oid_present,role_name_present,database_oid_present,database_name_present
+), type_domain(type_order,backend_category) AS (VALUES
+{types}
+), presence_domain(presence_order,role_oid_present,role_name_present,database_oid_present,database_name_present) AS (VALUES
+{presence}
+), bins AS (
+ SELECT t.type_order,p.presence_order,t.backend_category,p.role_oid_present,p.role_name_present,
+ p.database_oid_present,p.database_name_present,
+ (t.backend_category IN ('CLIENT_BACKEND','TYPE_NULL') OR p.role_name_present) AS counted_by_original_predicate,
+ COALESCE(o.count,0) AS count
+ FROM type_domain AS t CROSS JOIN presence_domain AS p
+ LEFT JOIN observed_bins AS o ON o.backend_category=t.backend_category
+ AND o.role_oid_present=p.role_oid_present AND o.role_name_present=p.role_name_present
+ AND o.database_oid_present=p.database_oid_present AND o.database_name_present=p.database_name_present
+)
+SELECT pg_catalog.json_build_object(
+ 'format','{ACTIVITY_CENSUS_WIRE_FORMAT}',
+ 'status',CASE WHEN s.rows_total>{ACTIVITY_CENSUS_MAX_COUNT} THEN 'COUNT_OUT_OF_RANGE' ELSE 'OBSERVED' END,
+ 'observation',CASE WHEN s.rows_total>{ACTIVITY_CENSUS_MAX_COUNT} THEN NULL ELSE pg_catalog.json_build_object(
+ 'scope','{ACTIVITY_CENSUS_SCOPE}',
+ 'rows_total',s.rows_total,'counted_total',s.counted_total,'not_counted_total',s.not_counted_total,
+ 'bins',(SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+ 'backend_category',backend_category,'role_oid_present',role_oid_present,'role_name_present',role_name_present,
+ 'database_oid_present',database_oid_present,'database_name_present',database_name_present,
+ 'counted_by_original_predicate',counted_by_original_predicate,'count',count)
+ ORDER BY type_order,presence_order) FROM bins)) END)
+FROM summary AS s;
+"""
+
+
+def validate_activity_census_wire(value):
+    """Rebuild the fixed schema after the supervisor's bounded strict decoder.
+
+    Never echo rejected fields or values. This observation cannot prove which
+    rows the preceding failed query saw and cannot change the failed decision.
+    """
+    require(type(value) is dict and set(value) == {"format", "status", "observation"}, "JSON_SHAPE_INVALID")
+    require(type(value["format"]) is str and value["format"] == ACTIVITY_CENSUS_WIRE_FORMAT, "JSON_SHAPE_INVALID")
+    status = value["status"]
+    require(type(status) is str and status in ("OBSERVED", "COUNT_OUT_OF_RANGE"), "JSON_SHAPE_INVALID")
+    observation = value["observation"]
+    if status == "COUNT_OUT_OF_RANGE":
+        require(observation is None, "JSON_SHAPE_INVALID")
+        return {"format": ACTIVITY_CENSUS_WIRE_FORMAT, "status": "COUNT_OUT_OF_RANGE", "observation": None}
+    fields = {"scope", "rows_total", "counted_total", "not_counted_total", "bins"}
+    require(type(observation) is dict and set(observation) == fields, "JSON_SHAPE_INVALID")
+    require(type(observation["scope"]) is str and observation["scope"] == ACTIVITY_CENSUS_SCOPE, "JSON_SHAPE_INVALID")
+
+    def bounded_count(number):
+        require(type(number) is int, "JSON_SHAPE_INVALID")
+        require(0 <= number <= ACTIVITY_CENSUS_MAX_COUNT, "COUNT_OUT_OF_RANGE")
+        return number
+
+    totals = {key: bounded_count(observation[key]) for key in ("rows_total", "counted_total", "not_counted_total")}
+    raw_bins = observation["bins"]
+    require(type(raw_bins) is list and len(raw_bins) == 336, "JSON_SHAPE_INVALID")
+    bins = []
+    counted_total = not_counted_total = 0
+    bin_fields = {"backend_category", "counted_by_original_predicate", "count", *ACTIVITY_CENSUS_PRESENCE_FIELDS}
+    for raw, (category, flags, counted) in zip(raw_bins, _activity_census_bin_keys()):
+        require(type(raw) is dict and set(raw) == bin_fields, "JSON_SHAPE_INVALID")
+        require(type(raw["backend_category"]) is str and raw["backend_category"] == category, "JSON_SHAPE_INVALID")
+        for key, flag in zip(ACTIVITY_CENSUS_PRESENCE_FIELDS, flags):
+            require(type(raw[key]) is bool and raw[key] is flag, "JSON_SHAPE_INVALID")
+        require(type(raw["counted_by_original_predicate"]) is bool and raw["counted_by_original_predicate"] is counted, "JSON_SHAPE_INVALID")
+        count = bounded_count(raw["count"])
+        if counted:
+            counted_total += count
+        else:
+            not_counted_total += count
+        bins.append({"backend_category": category, **dict(zip(ACTIVITY_CENSUS_PRESENCE_FIELDS, flags)),
+                     "counted_by_original_predicate": counted, "count": count})
+    require(counted_total + not_counted_total <= ACTIVITY_CENSUS_MAX_COUNT, "COUNT_OUT_OF_RANGE")
+    require(totals == {"rows_total": counted_total + not_counted_total, "counted_total": counted_total,
+                       "not_counted_total": not_counted_total}, "JSON_SHAPE_INVALID")
+    clean = {"format": ACTIVITY_CENSUS_WIRE_FORMAT, "status": "OBSERVED", "observation": {
+        "scope": ACTIVITY_CENSUS_SCOPE, **totals, "bins": bins}}
+    require(len(canonical(clean)) <= ACTIVITY_CENSUS_MAX_BYTES, "JSON_SIZE_LIMIT")
+    return clean
+
+
 # This lexer is intentionally narrow. It does not claim to parse PostgreSQL SQL.
 # It keeps literals/dollar bodies opaque, preserves exact bodies, and refuses
 # unclosed quotes/comments. Pins restrict the accepted grammar to reviewed files.

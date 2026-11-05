@@ -1161,5 +1161,350 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.executor.calls, [])
 
 
+def census_wire():
+    categories = ('NOT_INITIALIZED', 'ARCHIVER', 'AUTOVACUUM_LAUNCHER', 'AUTOVACUUM_WORKER', 'CLIENT_BACKEND',
+        'DEAD_END_CLIENT_BACKEND', 'BACKGROUND_WORKER', 'BACKGROUND_WRITER', 'CHECKPOINTER', 'IO_WORKER', 'LOGGER',
+        'SLOTSYNC_WORKER', 'STANDALONE_BACKEND', 'STARTUP', 'WALRECEIVER', 'WALSENDER', 'WALSUMMARIZER', 'WALWRITER',
+        'LOGICAL_REPLICATION_LAUNCHER', 'TYPE_NULL', 'TYPE_OTHER')
+    bins = []
+    for category in categories:
+        for mask in range(16):
+            flags = [bool(mask & bit) for bit in (8, 4, 2, 1)]
+            bins.append(dict(backend_category=category, role_oid_present=flags[0], role_name_present=flags[1],
+                database_oid_present=flags[2], database_name_present=flags[3],
+                counted_by_original_predicate=category in ('CLIENT_BACKEND', 'TYPE_NULL') or flags[1], count=0))
+    return {'format': 'worktool-registration-activity-census-wire-v1', 'status': 'OBSERVED', 'observation': {
+        'scope': 'PG_STAT_ACTIVITY_CLUSTER_EXCLUDING_SELF', 'rows_total': 0, 'counted_total': 0, 'not_counted_total': 0, 'bins': bins}}
+
+
+class CensusTests(unittest.TestCase):
+    def setUp(self):
+        self.base = SupervisorTests('runTest')
+        self.base.setUp()
+        helper = m.load_helper('pg-registration-provision.py')
+        class Provision(FakeProvision):
+            activity_census_query = staticmethod(helper.activity_census_query)
+            validate_activity_census_wire = staticmethod(helper.validate_activity_census_wire)
+            def provision(self, executor, bundle, database, bootstrap, passwords):
+                rows = executor.execute(types.SimpleNamespace(phase='bootstrap_preflight', login_role=bootstrap,
+                    database='postgres', sql='SELECT census_test_pristine;', timeout_seconds=30, query=True))
+                expected = [dict(version=180006, session_user=bootstrap, current_user=bootstrap, database_absent=True,
+                    roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)]
+                executor.record_preflight_diagnostics(helper.preflight_field_diagnostics(rows, expected))
+                raise helper.ProvisionError('BOOTSTRAP_NOT_PRISTINE')
+        class Executor(FakeExecutor):
+            census_result = None
+            def phase(self, args):
+                if args[:3] == [m.DOCKER, 'exec', '-i']:
+                    if b'worktool-registration-activity-census-wire-v1' in self.last_data:
+                        return 'census'
+                    if b'census_test_pristine' in self.last_data:
+                        return 'sql_bootstrap_preflight'
+                return super().phase(args)
+            def call(self, args, **kwargs):
+                result = super().call(args, **kwargs)
+                phase = self.phase(args)
+                if phase == 'sql_bootstrap_preflight':
+                    admin = self.supervisor.admin
+                    return m.Result(0, m.canonical([dict(version=180006, session_user=admin, current_user=admin,
+                        database_absent=True, roles_absent=True, other_clients=1, bootstrap_superuser=True, event_triggers=0)]))
+                if phase == 'census':
+                    if isinstance(self.census_result, BaseException):
+                        raise self.census_result
+                    return self.census_result if self.census_result is not None else m.Result(0, m.canonical(census_wire()))
+                return result
+        self.helper = helper
+        self.executor = Executor()
+        self.s = m.Supervisor(self.base.config, self.executor, Provision(), FakeEvidence(), sleep=lambda _: None)
+        self.executor.supervisor = self.s
+
+    def tearDown(self):
+        self.base.tearDown()
+
+    def run_fake(self):
+        with patch.object(m, '__file__', str(self.base.source / 'scripts/pg-registration-acceptance.py')), \
+                patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            return self.s.run(handle_signals=False)
+
+    def census_calls(self):
+        return [call for call in self.executor.calls if b'worktool-registration-activity-census-wire-v1' in call[1]]
+
+    def assert_failed_clean(self, result):
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['failure_stage'], 'provision_bootstrap_preflight')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertEqual(self.executor.invocations, 0)
+        self.assertEqual(self.executor.removals, 1)
+        self.assertEqual(result['provision_diagnostics']['phases'], {'bootstrap_preflight': 'QUERY_RESULT_RETURNED'})
+        self.assertEqual(result['activity_diagnostic_trigger'], {'failure_code': 'PROVISION_FAILED', 'failure_stage': 'provision_bootstrap_preflight'})
+        self.assertFalse(any(b'CREATE ROLE' in call[1] for call in self.executor.calls))
+
+    def test_one_later_empty_observation_never_changes_failure_or_cleanup(self):
+        result = self.run_fake()
+        self.assert_failed_clean(result)
+        self.assertEqual(result['failure_code'], 'PROVISION_FAILED')
+        record = result['activity_census']
+        self.assertEqual(record['status'], 'OBSERVED')
+        self.assertEqual(record['read_outcome'], 'PROCESS_ACKNOWLEDGED')
+        self.assertEqual(record['original_rows_relation'], 'NOT_PROVEN')
+        self.assertEqual(record['gate_disposition'], 'UNCHANGED_FAIL')
+        self.assertEqual(record['observation']['rows_total'], 0)
+        self.assertEqual(len(record['observation']['bins']), 336)
+        self.assertEqual(len(self.census_calls()), 1)
+        args, data, _, _, timeout = self.census_calls()[0]
+        self.assertEqual(args[:3], [m.DOCKER, 'exec', '-i'])
+        self.assertEqual(args[-2:], [self.s.admin, 'postgres'])
+        self.assertEqual(data.split(b'\n', 1)[1].rstrip(), self.helper.activity_census_query().encode().rstrip())
+        self.assertLessEqual(timeout, 5)
+        before = len(self.executor.calls)
+        self.s.collect_activity_census(result)
+        self.assertEqual(len(self.executor.calls), before)
+        self.assertEqual(self.s.cleanup(), 'CONFIRMED')
+        self.assertEqual(len(self.census_calls()), 1)
+        self.assertEqual(self.s.run(handle_signals=False)['failure_code'], 'RUN_ALREADY_STARTED')
+        self.assertEqual(len(self.census_calls()), 1)
+
+    def test_every_base_eligibility_condition_suppresses_the_read(self):
+        mutations = [lambda s, o: o.update(failure_code='RUN_FAILED'), lambda s, o: o.update(failure_stage='fixture'),
+            lambda s, o: setattr(s, 'stage', 'fixture'), lambda s, o: setattr(s, 'started', False),
+            lambda s, o: s.provision_diagnostics.update(bootstrap_roles='EMPTY_RESULT_ACKNOWLEDGED'),
+            lambda s, o: s.provision_diagnostics.update(bootstrap_preflight='JSON_SHAPE_INVALID'),
+            lambda s, o: s.preflight_diagnostics.update(classification='VALUE_MATCH'),
+            lambda s, o: s.preflight_diagnostics.update(authority='INVALID'),
+            lambda s, o: setattr(s, 'container_verified', False), lambda s, o: setattr(s, 'server_settings_verified', False),
+            lambda s, o: s.authentication_summary.update(status='NOT_VERIFIED'),
+            lambda s, o: s.authentication_summary.update(wrong_password_probe='NOT_RUN'),
+            lambda s, o: s.marker.update(run_invocations=1), lambda s, o: s.marker.update(run_invocations=False),
+            lambda s, o: s.marker.update(state='FINISHED'), lambda s, o: s.marker.update(create_state='SENT'),
+            lambda s, o: s.marker.update(owner='FOREIGN'), lambda s, o: s.marker.update(container_id='FOREIGN'),
+            lambda s, o: s.marker.update(container_name='FOREIGN'), lambda s, o: s.marker.update(identity={}),
+            lambda s, o: s.marker.update(source_sha256='FOREIGN'), lambda s, o: s.marker.update(job_deadline_ns=0),
+            lambda s, o: s.container_observation.update(id='f' * 64),
+            lambda s, o: s.container_observation.update(image='FOREIGN'),
+            lambda s, o: s.container_observation.update(image_id='sha256:' + 'f' * 64),
+            lambda s, o: s.credentials.clear(), lambda s, o: setattr(s, 'binding', {})]
+        mutations += [lambda s, o, key=key: s.preflight_diagnostics['shape'].update({key: 'INVALID_SHAPE'})
+                      for key in ('root', 'row_count', 'row', 'fields')]
+        mutations += [lambda s, o, key=key: s.preflight_diagnostics['checks'].update({key: 'MATCH' if key == 'other_clients' else 'MISMATCH'})
+                      for key in m.PREFLIGHT_CHECKS]
+        original = self.s.collect_activity_census
+        checked = []
+        def inspect_eligibility(outcome):
+            attrs = ('stage', 'started', 'provision_diagnostics', 'preflight_diagnostics', 'container_verified',
+                'server_settings_verified', 'authentication_summary', 'marker', 'container_observation', 'credentials', 'binding')
+            baseline = {key: copy.deepcopy(getattr(self.s, key)) for key in attrs}
+            self.assertTrue(self.s.activity_census_eligible(outcome))
+            for mutate in mutations:
+                for key, value in baseline.items(): setattr(self.s, key, copy.deepcopy(value))
+                trial = dict(outcome)
+                mutate(self.s, trial)
+                self.assertFalse(self.s.activity_census_eligible(trial))
+                original(trial)
+                self.assertIsNone(self.s.activity_census)
+                checked.append(True)
+            for key, value in baseline.items(): setattr(self.s, key, copy.deepcopy(value))
+        self.s.collect_activity_census = inspect_eligibility
+        result = self.run_fake()
+        self.assert_failed_clean(result)
+        self.assertEqual(len(checked), len(mutations))
+        self.assertEqual(self.census_calls(), [])
+
+    def test_budget_skip_and_immediate_pre_dispatch_recheck(self):
+        for remaining, consume, expected_calls in ((10.999, 0, 0), (11.0, 0, 1), (11.0, .001, 0)):
+            case = CensusTests('runTest'); case.setUp()
+            try:
+                original = case.s.collect_activity_census
+                now = [100.0]
+                def collect(outcome):
+                    case.s.operation_deadline = now[0] + remaining
+                    case.s.monotonic = lambda: now[0]
+                    query = case.s.provision_helper.activity_census_query
+                    def prepare():
+                        now[0] += consume
+                        return query()
+                    case.s.provision_helper.activity_census_query = prepare
+                    original(outcome)
+                case.s.collect_activity_census = collect
+                result = case.run_fake()
+                case.assert_failed_clean(result)
+                self.assertEqual(len(case.census_calls()), expected_calls)
+                if not expected_calls:
+                    self.assertEqual(result['activity_census']['status'], 'SKIPPED_BUDGET')
+                    self.assertEqual(result['activity_census']['read_outcome'], 'NOT_ATTEMPTED')
+            finally:
+                case.tearDown()
+
+    def test_acknowledged_validation_deadline_exhaustion_discards_observation(self):
+        for point in ('before_validation', 'during_validation', 'after_reconstruction'):
+            case = CensusTests('runTest'); case.setUp()
+            try:
+                clock = [100.0]
+                original = case.s.collect_activity_census
+                def collect(outcome):
+                    case.s.operation_deadline = 111.0
+                    case.s.monotonic = lambda: clock[0]
+                    original(outcome)
+                case.s.collect_activity_census = collect
+                process = case.s.sql_process
+                def sql(*args, **kwargs):
+                    response = process(*args, **kwargs)
+                    if 'worktool-registration-activity-census-wire-v1' in args[2] and point == 'before_validation':
+                        clock[0] = 112.0
+                    return response
+                case.s.sql_process = sql
+                validate = case.s.provision_helper.validate_activity_census_wire
+                def validator(value):
+                    result = validate(value)
+                    if point == 'during_validation': clock[0] += 1.001
+                    return result
+                case.s.provision_helper.validate_activity_census_wire = validator
+                canonical = m.canonical
+                def encoded(value):
+                    result = canonical(value)
+                    if point == 'after_reconstruction' and isinstance(value, dict) and value.get('format') == 'worktool-registration-activity-census-v1' and value.get('status') == 'OBSERVED':
+                        clock[0] += 1.001
+                    return result
+                with patch.object(m, 'canonical', side_effect=encoded):
+                    result = case.run_fake()
+                case.assert_failed_clean(result)
+                self.assertEqual(result['activity_census']['status'], 'VALIDATION_BUDGET_EXHAUSTED')
+                self.assertEqual(result['activity_census']['read_outcome'], 'PROCESS_ACKNOWLEDGED')
+                self.assertIsNone(result['activity_census']['observation'])
+                self.assertEqual(len(case.census_calls()), 1)
+            finally:
+                case.tearDown()
+
+    def test_process_decode_shape_count_and_size_faults_never_leak_or_retry(self):
+        bad_count = census_wire(); bad_count['observation']['rows_total'] = 4097
+        overflow = {'format': 'worktool-registration-activity-census-wire-v1', 'status': 'COUNT_OUT_OF_RANGE', 'observation': None}
+        cases = [(m.Fault('SUBPROCESS_TIMEOUT', True), 'SQL_PROCESS_TIMEOUT', 'UNCONFIRMED'),
+            (m.Result(2, b'PRIVATE_OUTPUT', b'PRIVATE_ERROR'), 'SQL_PROCESS_NONZERO', 'UNCONFIRMED'),
+            (m.Fault('OUTPUT_LIMIT'), 'SQL_PROCESS_OUTPUT_LIMIT', 'UNCONFIRMED'),
+            (m.Fault('SUBPROCESS_FAILED'), 'SQL_PROCESS_FAILED', 'UNCONFIRMED'),
+            (m.Result(0, b'PRIVATE_BAD_JSON'), 'JSON_DECODE_FAILED', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, b'{"PRIVATE":1,"PRIVATE":2}'), 'JSON_DECODE_FAILED', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, b'{"PRIVATE":NaN}'), 'JSON_DECODE_FAILED', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, b'{"PRIVATE":1}'), 'JSON_SHAPE_INVALID', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, b' ' * (m.CENSUS_MAX_BYTES + 1)), 'JSON_SIZE_LIMIT', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, m.canonical(bad_count)), 'COUNT_OUT_OF_RANGE', 'PROCESS_ACKNOWLEDGED'),
+            (m.Result(0, m.canonical(overflow)), 'COUNT_OUT_OF_RANGE', 'PROCESS_ACKNOWLEDGED')]
+        for response, status, read in cases:
+            case = CensusTests('runTest'); case.setUp()
+            try:
+                case.executor.census_result = response
+                result = case.run_fake()
+                case.assert_failed_clean(result)
+                self.assertEqual(result['failure_code'], 'PROVISION_FAILED')
+                self.assertEqual(result['activity_census']['status'], status)
+                self.assertEqual(result['activity_census']['read_outcome'], read)
+                self.assertIsNone(result['activity_census']['observation'])
+                self.assertEqual(len(case.census_calls()), 1)
+                self.assertNotIn('PRIVATE', json.dumps(result))
+            finally:
+                case.tearDown()
+
+    def test_signal_windows_keep_trigger_final_interrupted_and_cleanup(self):
+        for point in ('eligibility', 'pending', 'preparation', 'dispatch', 'validation'):
+            case = CensusTests('runTest'); case.setUp()
+            try:
+                def interrupted(*args, **kwargs):
+                    case.s.activity_diagnostic_trigger = None  # Exercise finally fallback after capture.
+                    case.s.interrupted = True
+                    raise m.Fault('INTERRUPTED', True)
+                if point == 'eligibility': case.s.activity_census_eligible = interrupted
+                elif point == 'pending':
+                    original = case.s.collect_activity_census
+                    def collect(outcome):
+                        case.s.interrupted = True
+                        original(outcome)
+                    case.s.collect_activity_census = collect
+                elif point == 'preparation': case.s.provision_helper.activity_census_query = interrupted
+                elif point == 'validation': case.s.provision_helper.validate_activity_census_wire = interrupted
+                else:
+                    process = case.s.sql_process
+                    def dispatch(*args, **kwargs):
+                        if 'worktool-registration-activity-census-wire-v1' in args[2]:
+                            self.assertTrue(case.s.census_attempted)
+                            return interrupted()
+                        return process(*args, **kwargs)
+                    case.s.sql_process = dispatch
+                result = case.run_fake()
+                case.assert_failed_clean(result)
+                self.assertEqual(result['failure_code'], 'INTERRUPTED')
+                if point == 'eligibility': self.assertNotIn('activity_census', result)
+                elif point == 'pending': self.assertEqual(result['activity_census']['status'], 'SKIPPED_INTERRUPTED')
+                else: self.assertEqual(result['activity_census']['status'], 'INTERRUPTED')
+            finally:
+                case.tearDown()
+
+    def test_deadline_expires_before_ack_without_dispatch_or_retry(self):
+        clock = [100.0]
+        original = self.s.collect_activity_census
+        def collect(outcome):
+            self.s.operation_deadline = 111.0
+            self.s.monotonic = lambda: clock[0]
+            original(outcome)
+        self.s.collect_activity_census = collect
+        process = self.s.sql_process
+        def sql(*args, **kwargs):
+            if 'worktool-registration-activity-census-wire-v1' in args[2]:
+                self.assertTrue(self.s.census_attempted)
+                self.assertEqual(self.s.operation_deadline, 111.0)
+                clock[0] = 112.0
+            return process(*args, **kwargs)
+        self.s.sql_process = sql
+        result = self.run_fake()
+        self.assert_failed_clean(result)
+        self.assertEqual(result['activity_census']['status'], 'SKIPPED_BUDGET')
+        self.assertEqual(result['activity_census']['read_outcome'], 'NOT_ATTEMPTED')
+        self.assertIsNone(result['activity_census']['observation'])
+        self.assertEqual(self.census_calls(), [])
+        self.s.collect_activity_census(result)
+        self.assertEqual(self.census_calls(), [])
+
+    def test_preparation_and_error_record_failures_do_not_replace_original_failure(self):
+        for point in ('query', 'record'):
+            case = CensusTests('runTest'); case.setUp()
+            try:
+                def error(*a, **kw): raise RuntimeError('PRIVATE_LOCAL_FAILURE')
+                case.s.provision_helper.activity_census_query = error
+                if point == 'record': case.s.record_activity_census_error = error
+                result = case.run_fake()
+                case.assert_failed_clean(result)
+                self.assertEqual(result['failure_code'], 'PROVISION_FAILED')
+                self.assertNotIn('PRIVATE', json.dumps(result))
+                self.assertEqual(case.census_calls(), [])
+                if point == 'query':
+                    self.assertEqual(result['activity_census']['status'], 'LOCAL_DIAGNOSTIC_FAILED')
+                    self.assertEqual(result['activity_census']['read_outcome'], 'NOT_ATTEMPTED')
+                else: self.assertNotIn('activity_census', result)
+            finally:
+                case.tearDown()
+
+    def test_strict_decoder_independent_mutations_and_no_raw_return(self):
+        validator = self.helper.validate_activity_census_wire
+        self.assertEqual(m.decode_activity_census(m.canonical(census_wire()), validator), census_wire())
+        mutations = [lambda v: v.update(PRIVATE='PRIVATE'), lambda v: v.update(status='PRIVATE'),
+            lambda v: v['observation'].update(rows_total=True), lambda v: v['observation'].update(rows_total=1.0),
+            lambda v: v['observation'].update(rows_total='0'), lambda v: v['observation'].update(rows_total=-1),
+            lambda v: v['observation'].update(rows_total=1), lambda v: v['observation']['bins'].pop(),
+            lambda v: v['observation']['bins'].reverse(), lambda v: v['observation']['bins'][0].update(backend_category='PRIVATE'),
+            lambda v: v['observation']['bins'][0].update(count=False), lambda v: v['observation']['bins'][0].update(count=4097),
+            lambda v: v['observation']['bins'][0].update(role_oid_present=0),
+            lambda v: v['observation']['bins'][0].update(counted_by_original_predicate=True),
+            lambda v: v['observation']['bins'].__setitem__(1, v['observation']['bins'][0])]
+        for mutate in mutations:
+            value = census_wire(); mutate(value)
+            with self.assertRaises(m.CensusError) as caught:
+                m.decode_activity_census(m.canonical(value), validator)
+            self.assertNotIn('PRIVATE', str(caught.exception))
+        for raw in (b'{"a":1,"a":2}', b'{"a":Infinity}', b'{"a":-Infinity}', b'{"a":NaN}', b'\xff', b'[]'):
+            with self.assertRaises(m.CensusError): m.decode_activity_census(raw, validator)
+        with self.assertRaises(m.CensusError) as caught:
+            m.decode_activity_census(m.canonical(census_wire()), lambda value: {'PRIVATE': 'x' * (m.CENSUS_MAX_BYTES + 1)})
+        self.assertEqual(caught.exception.code, 'JSON_SIZE_LIMIT')
+        self.assertEqual(self.executor.calls, [])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
