@@ -47,7 +47,10 @@ PUBLIC_CODES = frozenset(('OK', 'NOT_RUN', 'HOSTED_CI_ONLY', 'INVALID_IDENTITY',
     'PG_READY_TIMEOUT', 'PG_SETTINGS_MISMATCH', 'PG_AUTHENTICATION_MISMATCH', 'PROVISION_FAILED',
     'BUILD_FAILED', 'EXECUTABLE_MISMATCH', 'EVIDENCE_REJECTED', 'RUN_FAILED',
     'CLEANUP_UNCONFIRMED', 'CLEANUP_IDENTITY_MISMATCH', 'CLEANUP_FILES_FAILED',
-    'INTERNAL_FAILURE', 'MISSING_RUN_MARKER', 'INVALID_ARGUMENTS'))
+    'INTERNAL_FAILURE', 'MISSING_RUN_MARKER', 'INVALID_ARGUMENTS',
+    'PATH_NOT_CANONICAL', 'PATH_NOT_DIRECTORY', 'PATH_OWNER_REFUSED', 'PATH_MODE_REFUSED',
+    'TOOLCHAIN_STAGE_EXISTS', 'TOOLCHAIN_STAGE_CHANGED', 'TOOLCHAIN_STAGE_INVALID',
+    'TOOLCHAIN_STAGE_TIMEOUT', 'TOOLCHAIN_STAGE_FAILED'))
 
 
 def canonical(value):
@@ -125,11 +128,12 @@ class Identity:
 
 def checked_directory(path, *, private=False, allow_root_owner=False):
     path = Path(path)
-    require(path.is_absolute() and str(path) == os.path.normpath(str(path)), 'UNSAFE_PATH')
-    require(path.resolve() == path, 'UNSAFE_PATH')
+    require(path.is_absolute() and str(path) == os.path.normpath(str(path)), 'PATH_NOT_CANONICAL')
+    require(path.resolve() == path, 'PATH_NOT_CANONICAL')
     s = path.lstat()
-    require(stat.S_ISDIR(s.st_mode) and s.st_uid in ((0, os.getuid()) if allow_root_owner and not private else (os.getuid(),)), 'UNSAFE_PATH')
-    require(stat.S_IMODE(s.st_mode) == 0o700 if private else not s.st_mode & 0o022, 'UNSAFE_PATH')
+    require(stat.S_ISDIR(s.st_mode), 'PATH_NOT_DIRECTORY')
+    require(s.st_uid in ((0, os.getuid()) if allow_root_owner and not private else (os.getuid(),)), 'PATH_OWNER_REFUSED')
+    require(stat.S_IMODE(s.st_mode) == 0o700 if private else not s.st_mode & 0o022, 'PATH_MODE_REFUSED')
     return path
 
 
@@ -166,6 +170,135 @@ def replace_private(path, value):
     temporary = path.with_name(path.name + '.new')
     private_file(temporary, canonical(value))
     os.replace(temporary, path)
+
+
+def _toolchain_input_root(root):
+    # Read-only intake of an explicitly selected official setup-go cache. It is
+    # NOT accepted as an execution/pin root here. Shared writable mode is allowed
+    # only for byte-copy intake; all existing execution root checks are intact.
+    root = Path(root)
+    require(root.is_absolute() and str(root) == os.path.normpath(str(root)) and root.resolve() == root,
+            'PATH_NOT_CANONICAL')
+    info = root.lstat()
+    require(stat.S_ISDIR(info.st_mode), 'PATH_NOT_DIRECTORY')
+    require(info.st_uid in (0, os.getuid()), 'PATH_OWNER_REFUSED')
+    return root
+
+
+def _stage_fingerprint(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _stage_read_file(path, deadline, expected=None, output=None):
+    require(time.monotonic() < deadline, 'TOOLCHAIN_STAGE_TIMEOUT')
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and before.st_nlink == 1 and
+            before.st_uid in (0, os.getuid()) and not before.st_mode & 0o7000 and before.st_size <= 128 << 20,
+            'TOOLCHAIN_STAGE_INVALID')
+    fingerprint = _stage_fingerprint(before)
+    if expected is not None:
+        require(fingerprint == expected['metadata'], 'TOOLCHAIN_STAGE_CHANGED')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    digest, total = hashlib.sha256(), 0
+    with os.fdopen(fd, 'rb') as stream:
+        require(_stage_fingerprint(os.fstat(stream.fileno())) == fingerprint, 'TOOLCHAIN_STAGE_CHANGED')
+        while True:
+            require(time.monotonic() < deadline, 'TOOLCHAIN_STAGE_TIMEOUT')
+            chunk = stream.read(1 << 20)
+            if not chunk:
+                break
+            total += len(chunk)
+            require(total <= 128 << 20 and total <= before.st_size, 'TOOLCHAIN_STAGE_INVALID')
+            digest.update(chunk)
+            if output is not None:
+                output.write(chunk)
+        require(_stage_fingerprint(os.fstat(stream.fileno())) == fingerprint and
+                _stage_fingerprint(path.lstat()) == fingerprint and total == before.st_size, 'TOOLCHAIN_STAGE_CHANGED')
+    result = {'sha256': digest.hexdigest(), 'size': total,
+              'executable': bool(before.st_mode & 0o111), 'metadata': fingerprint}
+    if expected is not None:
+        require(result == expected, 'TOOLCHAIN_STAGE_CHANGED')
+    return result
+
+
+def _stage_inventory(root, deadline):
+    root = _toolchain_input_root(root)
+    root_info = _stage_fingerprint(root.lstat())
+    files, directories, nodes, total = {}, {}, 0, 0
+    def refuse_walk_error(_error):
+        raise Fault('TOOLCHAIN_STAGE_INVALID')
+    for parent, dirs, names in os.walk(root, followlinks=False, onerror=refuse_walk_error):
+        for name in sorted(dirs + names):
+            require(time.monotonic() < deadline, 'TOOLCHAIN_STAGE_TIMEOUT')
+            nodes += 1
+            path = Path(parent) / name
+            rel = path.relative_to(root).as_posix()
+            info = path.lstat()
+            require(nodes <= 40000 and len(rel) <= 512 and not re.search(r'[\x00\r\n]', rel) and
+                    name not in ('.git', 'node_modules', '__pycache__') and not stat.S_ISLNK(info.st_mode) and
+                    info.st_uid in (0, os.getuid()), 'TOOLCHAIN_STAGE_INVALID')
+            if name in dirs:
+                require(stat.S_ISDIR(info.st_mode), 'TOOLCHAIN_STAGE_INVALID')
+                directories[rel] = _stage_fingerprint(info)
+            else:
+                require(len(files) < 30000, 'TOOLCHAIN_STAGE_INVALID')
+                record = _stage_read_file(path, deadline)
+                total += record['size']
+                require(total <= 512 << 20, 'TOOLCHAIN_STAGE_INVALID')
+                files[rel] = record
+    require(files and _stage_fingerprint(root.lstat()) == root_info, 'TOOLCHAIN_STAGE_CHANGED')
+    return {'root': root_info, 'directories': dict(sorted(directories.items())), 'files': dict(sorted(files.items())), 'bytes': total}
+
+
+def stage_toolchain(root, destination):
+    """Bounded private byte copy only. No execution, permission repair or retry.
+
+    Official provenance remains the pinned setup-go/download step. Snapshot
+    comparison detects ordinary changes; it is not hostile-host attestation.
+    Existing cache paths and modes are never changed. A partial failed output
+    remains non-adoptable and unpinned; subsequent invocation refuses it.
+    """
+    deadline = time.monotonic() + 60
+    root = _toolchain_input_root(root)
+    destination = Path(destination)
+    require(destination.is_absolute() and str(destination) == os.path.normpath(str(destination)) and
+            destination.parent.resolve() == destination.parent and not destination.is_relative_to(root), 'PATH_NOT_CANONICAL')
+    checked_directory(destination.parent, private=True)
+    require(not destination.exists() and not destination.is_symlink(), 'TOOLCHAIN_STAGE_EXISTS')
+    before = _stage_inventory(root, deadline)
+    executables = ('bin/go', 'pkg/tool/linux_amd64/compile', 'pkg/tool/linux_amd64/link',
+                   'pkg/tool/linux_amd64/asm', 'pkg/tool/linux_amd64/vet')
+    required = ('VERSION', 'src/cmd/test2json/main.go') + executables
+    require(all(name in before['files'] for name in required) and
+            read_regular(root / 'VERSION', 4096).splitlines()[0] == b'go1.27.3' and
+            all(before['files'][name]['executable'] for name in executables), 'TOOLCHAIN_STAGE_INVALID')
+    destination.mkdir(mode=0o700)
+    for rel in sorted(before['directories'], key=lambda value: (len(Path(value).parts), value)):
+        require(time.monotonic() < deadline, 'TOOLCHAIN_STAGE_TIMEOUT')
+        (destination / rel).mkdir(mode=0o700)
+    for rel, record in before['files'].items():
+        target = destination / rel
+        mode = 0o700 if record['executable'] else 0o600
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+        with os.fdopen(fd, 'wb') as output:
+            _stage_read_file(root / rel, deadline, expected=record, output=output)
+        info = target.lstat()
+        require(stat.S_IMODE(info.st_mode) == mode and info.st_uid == os.getuid() and info.st_nlink == 1,
+                'TOOLCHAIN_STAGE_INVALID')
+    after = _stage_inventory(root, deadline)
+    require(after == before, 'TOOLCHAIN_STAGE_CHANGED')
+    copied = _stage_inventory(destination, deadline)
+    require(set(copied['directories']) == set(before['directories']) and set(copied['files']) == set(before['files']) and
+            copied['bytes'] == before['bytes'] and
+            all(all(copied['files'][name][key] == record[key] for key in ('sha256', 'size', 'executable'))
+                for name, record in before['files'].items()), 'TOOLCHAIN_STAGE_CHANGED')
+    checked_directory(destination, private=True)
+    require(time.monotonic() < deadline, 'TOOLCHAIN_STAGE_TIMEOUT')
+    hashes = {name: record['sha256'] for name, record in before['files'].items()}
+    return {'status': 'TOOLCHAIN_STAGED_NOT_EXECUTED', 'tree_sha256': tree_digest(hashes),
+            'file_count': len(hashes), 'bytes': before['bytes'], 'input': 'READ_ONLY_COPY_SOURCE',
+            'output': 'PRIVATE_OWNED_NO_SYMLINKS', 'provenance': 'PINNED_SETUP_GO_REQUIRED'}
 
 
 def tree_files(root, *, toolchain=False):
@@ -952,7 +1085,7 @@ def parser():
     sub = p.add_subparsers(dest='action')
     sub.add_parser('noop')
     sub.add_parser('selftest')
-    for action in ('make-source-pin', 'make-toolchain-pin'):
+    for action in ('make-source-pin', 'make-toolchain-pin', 'stage-toolchain'):
         q = sub.add_parser(action)
         q.add_argument('--root', required=True)
         q.add_argument('--output', required=True)
@@ -978,6 +1111,10 @@ def main(argv=None, *, executor=None, environ=None):
             import unittest
             suite = unittest.defaultTestLoader.discover(str(Path(__file__).parent), 'test_pg_registration_acceptance.py')
             return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+        if args.action == 'stage-toolchain':
+            result = stage_toolchain(Path(args.root), Path(args.output))
+            print(json.dumps(result, separators=(',', ':')))
+            return 0
         if args.action in ('make-source-pin', 'make-toolchain-pin'):
             body = make_pin(Path(args.root), toolchain=args.action == 'make-toolchain-pin')
             output = Path(args.output)

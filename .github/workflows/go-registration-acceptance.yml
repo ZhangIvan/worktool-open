@@ -167,7 +167,9 @@ jobs:
           set -euo pipefail
           input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           script="$input/source/scripts/pg-registration-acceptance.py"
-          goroot="$(go env GOROOT)"
+          cache_root="$(go env GOROOT)"
+          goroot="$input/toolchain"
+          python3 -B "$script" stage-toolchain --root "$cache_root" --output "$goroot"
           python3 -B "$script" make-source-pin --root "$input/source" --output "$input/source-pin.json"
           python3 -B "$script" make-toolchain-pin --root "$goroot" --output "$input/toolchain-pin.json"
       - name: Run one new controlled registration acceptance
@@ -175,7 +177,7 @@ jobs:
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          goroot="$(go env GOROOT)"
+          goroot="$input/toolchain"
           python3 -B "$input/source/scripts/pg-registration-acceptance.py" run \
             --source-root "$input/source" \
             --source-manifest "$input/source-pin.json" \

@@ -300,6 +300,176 @@ class SupervisorTests(unittest.TestCase):
         self.assertNotIn('owner_dsn', json.dumps(result))
         self.assertFalse((supervisor.folder / 'envelope.json').exists())
 
+    def make_stage_source(self):
+        cache = self.root / 'shared-cache'
+        cache.mkdir(mode=0o700)
+        for name in ('bin/go', 'pkg/tool/linux_amd64/compile', 'pkg/tool/linux_amd64/link',
+                     'pkg/tool/linux_amd64/asm', 'pkg/tool/linux_amd64/vet'):
+            target = cache / name
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+            with os.fdopen(fd, 'wb') as output:
+                output.write(b'FAKE_OFFLINE_NEVER_EXECUTED_' + name.encode())
+        (cache / 'src/cmd/test2json').mkdir(mode=0o700, parents=True)
+        m.private_file(cache / 'src/cmd/test2json/main.go', b'package main // FAKE_OFFLINE_NEVER_COMPILED')
+        m.private_file(cache / 'VERSION', b'go1.27.3\ntime 2026-11-05\n')
+        m.private_file(cache / 'LICENSE', b'FAKE_PUBLIC_SOURCE_FIXTURE')
+        (cache / 'empty').mkdir(mode=0o700)
+        return cache
+
+    def test_private_toolchain_stage_copies_bytes_and_exec_bits_without_launch(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        before = m.make_pin(cache, toolchain=True)
+        with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            result = m.stage_toolchain(cache, destination)
+        self.assertEqual(result['status'], 'TOOLCHAIN_STAGED_NOT_EXECUTED')
+        self.assertEqual(m.make_pin(destination, toolchain=True), before)
+        self.assertEqual(m.make_pin(cache, toolchain=True), before)
+        self.assertEqual((destination / 'bin/go').stat().st_mode & 0o777, 0o700)
+        self.assertEqual((destination / 'LICENSE').stat().st_mode & 0o777, 0o600)
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o700)
+        self.assertTrue((destination / 'empty').is_dir())
+        self.assertEqual(self.executor.calls, [])
+
+    def test_shared_writable_cache_is_read_only_intake_not_executable_root(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        original = m.Path.lstat
+        def writable_cache(path):
+            info = original(path)
+            if path == cache:
+                fields = list(info)
+                fields[0] = (info.st_mode & ~0o777) | 0o775
+                return os.stat_result(fields)
+            return info
+        with patch.object(m.Path, 'lstat', writable_cache):
+            with self.assertRaises(m.Fault) as caught:
+                m.make_pin(cache, toolchain=True)
+            self.assertEqual(caught.exception.code, 'PATH_MODE_REFUSED')
+            result = m.stage_toolchain(cache, destination)
+            self.assertEqual(result['status'], 'TOOLCHAIN_STAGED_NOT_EXECUTED')
+            with self.assertRaises(m.Fault) as unchanged:
+                m.checked_directory(cache, allow_root_owner=True)
+            self.assertEqual(unchanged.exception.code, 'PATH_MODE_REFUSED')
+        self.assertEqual(m.tree_digest(m.tree_files(destination, toolchain=True)), result['tree_sha256'])
+
+    def test_staging_refuses_existing_destination_without_mutation(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'foreign-destination'
+        destination.mkdir(mode=0o700)
+        m.private_file(destination / 'keep', b'UNCHANGED')
+        with self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_EXISTS')
+        self.assertEqual((destination / 'keep').read_bytes(), b'UNCHANGED')
+        self.assertEqual(sorted(p.name for p in destination.iterdir()), ['keep'])
+
+    def test_staging_refuses_root_and_nested_symlinks(self):
+        cache = self.make_stage_source()
+        alias = self.root / 'cache-alias'
+        alias.symlink_to(cache, target_is_directory=True)
+        destination = self.root / 'private-toolchain'
+        with self.assertRaises(m.Fault) as root_error:
+            m.stage_toolchain(alias, destination)
+        self.assertEqual(root_error.exception.code, 'PATH_NOT_CANONICAL')
+        (cache / 'nested-link').symlink_to(cache / 'VERSION')
+        with self.assertRaises(m.Fault):
+            m.stage_toolchain(cache, destination)
+        self.assertFalse(destination.exists())
+
+    def test_staging_refuses_hardlinked_files(self):
+        cache = self.make_stage_source()
+        os.link(cache / 'VERSION', cache / 'VERSION-link')
+        with self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, self.root / 'private-toolchain')
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_INVALID')
+        self.assertFalse((self.root / 'private-toolchain').exists())
+
+    def test_staging_refuses_foreign_owner_without_relaxing_other_roots(self):
+        cache = self.make_stage_source()
+        original = m.Path.lstat
+        def foreign_owner(path):
+            info = original(path)
+            if path == cache:
+                fields = list(info)
+                fields[4] = 999999
+                return os.stat_result(fields)
+            return info
+        with patch.object(m.Path, 'lstat', foreign_owner), self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, self.root / 'private-toolchain')
+        self.assertEqual(caught.exception.code, 'PATH_OWNER_REFUSED')
+
+    def test_staging_rejects_source_change_and_leaves_unadoptable_partial_copy(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        original = m._stage_read_file
+        changed = [False]
+        def mutate_after_read(path, deadline, expected=None, output=None):
+            result = original(path, deadline, expected=expected, output=output)
+            if output is not None and not changed[0]:
+                (cache / 'VERSION').write_bytes(b'go1.27.3\ntime CHANGED_SOURCE\n')
+                changed[0] = True
+            return result
+        with patch.object(m, '_stage_read_file', mutate_after_read), self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_CHANGED')
+        self.assertTrue(destination.is_dir())
+        with self.assertRaises(m.Fault) as repeated:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(repeated.exception.code, 'TOOLCHAIN_STAGE_EXISTS')
+
+    def test_staging_rejects_destination_byte_drift(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        original = m._stage_inventory
+        def mutate_before_target_inventory(root, deadline):
+            if root == destination:
+                (destination / 'bin/go').write_bytes(b'ALTERED_COPY')
+            return original(root, deadline)
+        with patch.object(m, '_stage_inventory', mutate_before_target_inventory), self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_CHANGED')
+
+    def test_staging_traversal_error_never_becomes_partial_success(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        def failing_walk(root, *, followlinks, onerror):
+            self.assertFalse(followlinks)
+            onerror(PermissionError('private unreadable subtree detail'))
+            return iter(())
+        with patch.object(m.os, 'walk', failing_walk), self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_INVALID')
+        self.assertNotIn('private', str(caught.exception))
+        self.assertFalse(destination.exists())
+
+    def test_staging_deadline_expires_before_any_copy(self):
+        cache = self.make_stage_source()
+        destination = self.root / 'private-toolchain'
+        with patch.object(m.time, 'monotonic', side_effect=[0, 61]), self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, destination)
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_TIMEOUT')
+        self.assertFalse(destination.exists())
+
+    def test_staging_bounds_and_wrong_version_rejected(self):
+        cache = self.make_stage_source()
+        (cache / 'VERSION').write_bytes(b'go1.28.0\n')
+        with self.assertRaises(m.Fault) as caught:
+            m.stage_toolchain(cache, self.root / 'private-toolchain')
+        self.assertEqual(caught.exception.code, 'TOOLCHAIN_STAGE_INVALID')
+        original = m.Path.lstat
+        def oversized_file(path):
+            info = original(path)
+            if path == cache / 'LICENSE':
+                fields = list(info)
+                fields[6] = (128 << 20) + 1
+                return os.stat_result(fields)
+            return info
+        with patch.object(m.Path, 'lstat', oversized_file), self.assertRaises(m.Fault):
+            m.stage_toolchain(cache, self.root / 'private-toolchain')
+        self.assertFalse((self.root / 'private-toolchain').exists())
+
     def test_default_and_noop_never_launch(self):
         for argv in ([], ['noop']):
             with self.subTest(argv=argv), contextlib.redirect_stdout(io.StringIO()), patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
