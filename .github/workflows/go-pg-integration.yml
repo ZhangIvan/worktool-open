@@ -14,6 +14,8 @@ on:
       - 'backend-go/internal/store/pg/enrollment*.go'
       - 'backend-go/internal/store/pg/session*.go'
       - 'backend-go/internal/store/pg/receipt*.go'
+      - 'backend-go/internal/store/pg/retention*.go'
+      - 'backend-go/internal/store/pg/runner*.go'
       - 'backend-go/internal/store/pg/callback*.go'
       - 'backend-go/internal/callback/**'
       - 'backend-go/internal/store/pg/send_authority*.go'
@@ -68,10 +70,11 @@ jobs:
         shell: bash
         run: |
           bash -n scripts/pg-integration-ci.sh
-          bash scripts/pg-integration-ci.sh --selftest
+          bash -n scripts/pg-integration-ci.evidence.sh
+          bash scripts/pg-integration-ci.evidence.sh --selftest
       - name: Single disposable synthetic PostgreSQL suite
         shell: bash
-        run: bash scripts/pg-integration-ci.sh run
+        run: bash scripts/pg-integration-ci.evidence.sh run
       - name: Always remove this run's resources and secret files
         if: ${{ always() }}
         shell: bash

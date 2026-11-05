@@ -144,3 +144,64 @@ used. HTTP response-loss is a controlled receiver socket close. CB03's expiry
 is explicit DB fault injection, while CB05 observes the actual PG retry delay.
 The real HTTP/PG groups are NOT_RUN during source preparation. Publishing would
 trigger the expanded suite and therefore requires separate exact batch approval.
+
+## Exact child evidence adapter (source candidate, 2026-11-05)
+
+The preceding head `4cf8e85430502eb22ca77ad867da18c5a0f396a9` passed the
+43-group isolated suite in run `41946952315`. Its sanitized report lists parent
+groups, not each safety child. That is historical evidence for that head; the
+adapter below has **not run PostgreSQL or CI during local preparation**.
+
+The new `pg-integration-ci.evidence.py` validates a pinned, finite
+`pg-integration-ci.cases.json` manifest and imports the exact verified bytes of
+the existing resource harness. The original `pg-integration-ci.py`, its shell
+entry and both browser diagnostic consumers remain byte-for-byte unchanged.
+Their hash chain therefore remains valid without changing a browser-triggering
+file. The new shell entry preserves the original working directory and cleanup
+trap; the PG workflow's always-cleanup step still uses the original entry.
+
+Only the existing PG workflow selects this new entry. Its two added path filters
+are `retention*.go` and `runner*.go`; the existing `scripts/pg-integration-ci.*`
+filter covers all three new evidence files. No browser workflow, production
+startup, Go source, migration, dependency, privilege or resource limit changes.
+
+The original result gate and the stricter gate must both accept the same raw Go
+JSON output. In addition to all 43 original parents, the adapter requires:
+
+- All 255 exact `(Package, Test)` child identities in the manifest, each with
+  one terminal PASS: CB02 36, CB03 5, CB05 2, GW10 168, schema/device bindings 38,
+  and retention audit 6. These are 243 leaf cases and 12 nested parent cases,
+  not 255 independent leaf tests.
+- Exactly one successful terminal event from each of the two selected packages.
+- No observed skip/fail anywhere, including non-required tests or packages;
+  no duplicate test/package terminal event; no wrong package for a known parent
+  or its children; valid JSON objects and typed identity/action/Output fields.
+
+The list includes all current children under those six roots: 23 corrupted or
+missing-receipt no-ACK cases, F0/F1/F4 receipt controls, completion observation,
+same-generation worker recovery, retention audit, 0009 version constraints and
+the GW10 migration/0010 guard matrices. Go's second `missing_command` child is
+explicitly named `missing_command#01`; it is not deduplicated out of the list.
+New mandatory tests require a reviewed manifest update and matching digest.
+This validates terminal evidence, not a complete Go event-order state machine
+or cryptographic authentication of an arbitrary supplied log. The actual run
+still requires the real `go test` process to exit zero under the pinned harness.
+
+Diagnostics emit only reviewed package/case IDs, bounded terminal classifications,
+allowlisted SQLSTATE values and finite source basenames/line numbers. They never
+emit arbitrary test names, raw Output, SQL, DSNs, callback bodies or error text.
+The existing 64 source-location cap remains. Missing children can be reported as
+NOT_OBSERVED instead of silently relying on a passing parent. The new success
+record is printed only after the original run, its Go-exit gate and its Python
+finally-cleanup all return successfully. The shell trap and workflow always step
+must still independently confirm their original cleanup duties; the new record
+alone does not replace those checks.
+
+`--selftest` executes only pure fixtures and original pure resource-gate checks.
+It rejects each missing required identity, duplicate/conflicting/skip/fail events,
+wrong packages, malformed critical fields, manifest tampering and unknown-output
+disclosure. Mocked run cases ensure Go failure, cleanup failure, missing or double
+report cannot produce the new success record. It starts no Go process, Docker,
+database, listener or browser. A separate local gate check compiles the unchanged
+Go packages with PG authorization unset; all 43 groups skip, and the adapter
+correctly rejects that stream. Those skips are not PG execution evidence.
