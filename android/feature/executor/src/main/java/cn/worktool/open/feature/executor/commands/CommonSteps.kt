@@ -24,17 +24,23 @@ internal object CommonSteps {
      * 实证：列表滚动位置致目标行不可见时 201001——findByText 只扫活动根可见节点）。
      * rc1 遗留硬化收口（2026-11-05）：①方向双向——正向下滚 [maxScrolls] 页耗尽后
      * 反向上滚再搜 [maxScrolls] 页（残留屏态：目标行在视口上方，真机会话 10 首发
-     * 201002 即此类环境性失败）；②容器定向——优先取「可滚动且含会话项」的容器，
-     * 防先序更前的横幅/页签等可滚动容器劫持。正反向均耗尽 → NODE_NOT_FOUND。
+     * 201002 即此类环境性失败）；②容器定向——优先取「可滚动**且含会话项**」的容器，
+     * 防先序更前的横幅/页签等可滚动容器劫持。
+     * 滚动兜底耗尽 → **搜索框兜底** [openConversationViaSearch]（原版 intoRoom 搜索
+     * 语义：回消息主页 → 搜索入口 → 输入会话名 → 结果命中进入）。挂载于本步动作内
+     * （计划「首错即停」，独立列表步在滚动失败后不可达）；**禁高频：单发不重试**，
+     * 单指令至多一次搜索兜底。兜底每环节失败如实透出错误码（入口缺失=NODE_NOT_FOUND、
+     * 输入/点击被拒=ACTION_REJECTED、结果未命中=STEP_TIMEOUT）。
      */
     fun openConversation(
         rules: WeworkScreenRules,
         conversationName: String,
         stepId: String = "open-conversation",
         maxScrolls: Int = 8,
+        timeouts: StepTimeouts = StepTimeouts(),
     ): PlanStep = PlanStep(
         id = stepId,
-        description = "在会话列表定位会话「$conversationName」并点击进入聊天页（含正反向滚动搜索）",
+        description = "在会话列表定位会话「$conversationName」并点击进入聊天页（含正反向滚动搜索与搜索框兜底）",
     ) { driver ->
         val root = driver.currentRoot()
             ?: return@PlanStep StepOutcome.Failure(
@@ -67,16 +73,95 @@ internal object CommonSteps {
                 }
             }
             if (node == null) {
-                return@PlanStep StepOutcome.Failure(
-                    ExecutorErrorCodes.NODE_NOT_FOUND,
-                    "会话列表未找到目标会话「$conversationName」（含正反向各 ${maxScrolls} 页滚动搜索）",
-                )
+                // 滚动兜底耗尽 → 搜索框兜底（单发禁高频）；失败如实透出兜底环节错误码
+                val viaSearch = openConversationViaSearch(
+                    rules, conversationName, timeouts, stepId = "$stepId-search-fallback",
+                ).action(driver)
+                return@PlanStep when (viaSearch) {
+                    is StepOutcome.Success -> viaSearch
+                    is StepOutcome.Failure -> StepOutcome.Failure(
+                        viaSearch.errorCode,
+                        "滚动定位未命中（正反向各 ${maxScrolls} 页）→ 搜索兜底：${viaSearch.reason}",
+                    )
+                }
             }
         }
         if (!driver.click(requireNotNull(node))) {
             return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.ACTION_REJECTED,
                 "点击会话项「$conversationName」被界面拒绝",
+            )
+        }
+        StepOutcome.Success
+    }
+
+    /**
+     * 搜索框兜底（原版 intoRoom 搜索语义，2026-11-05）：会话列表滚尽未中时的
+     * 第二段兜底——回消息主页（[openMessageTab]，对齐原版 goHome）→ 点搜索入口
+     * （HOME_SEARCH_ENTRY，真机校准 desc=「搜索，按钮」/ `o7a`）→ 搜索页输入框
+     * （SEARCH_INPUT，真机校准 `m0f`，点入聚焦后输入会话名）→ 等待搜索结果
+     * **精确命中**会话名（SEARCH_RESULT_ITEM；「全部」页签默认态，过滤 tab
+     * 全部/联系人/群聊见 dump）→ 点击进入聊天页。
+     *
+     * 每环节失败如实错误码：消息 Tab 缺失/搜索入口缺失=NODE_NOT_FOUND；
+     * 搜索页未打开（输入框未现）/结果未命中=STEP_TIMEOUT；点击/输入被拒=ACTION_REJECTED。
+     * **单发语义**：无重试循环，单次调用至多一次搜索动线（禁高频护栏由调用方
+     * [openConversation] 的单步动作结构保证——单指令至多一次搜索兜底）。
+     * 选择器族真机证据：local-private/evidence/session21/uitree-search-page.xml、
+     * uitree-msg-home.xml（o7a）。
+     */
+    fun openConversationViaSearch(
+        rules: WeworkScreenRules,
+        conversationName: String,
+        timeouts: StepTimeouts = StepTimeouts(),
+        stepId: String = "open-conversation-via-search",
+    ): PlanStep = PlanStep(
+        id = stepId,
+        description = "搜索兜底：回消息主页搜索「$conversationName」并点击结果进入聊天页",
+    ) { driver ->
+        val home = openMessageTab(rules).action(driver)
+        if (home is StepOutcome.Failure) return@PlanStep home
+        val entry = driver.awaitNode(timeouts.awaitNodeMs, timeouts.pollMs, "消息页搜索入口") {
+            rules.find(it, WeworkSelectorIds.HOME_SEARCH_ENTRY)
+        } ?: return@PlanStep StepOutcome.Failure(
+            ExecutorErrorCodes.NODE_NOT_FOUND,
+            "消息页搜索入口未出现（desc=「搜索，按钮」缺失）",
+        )
+        if (!driver.click(entry)) {
+            return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.ACTION_REJECTED,
+                "点击搜索入口被界面拒绝",
+            )
+        }
+        val input = driver.awaitNode(timeouts.awaitNodeMs, timeouts.pollMs, "搜索页输入框") {
+            rules.find(it, WeworkSelectorIds.SEARCH_INPUT)
+        } ?: return@PlanStep StepOutcome.Failure(
+            ExecutorErrorCodes.STEP_TIMEOUT,
+            "搜索页输入框未在 ${timeouts.awaitNodeMs}ms 内出现（搜索页未打开？）",
+        )
+        if (!driver.click(input)) {
+            return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.ACTION_REJECTED,
+                "聚焦搜索输入框被界面拒绝",
+            )
+        }
+        if (!driver.inputText(input, conversationName)) {
+            return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.ACTION_REJECTED,
+                "输入会话名被界面拒绝",
+            )
+        }
+        val hit = driver.awaitNode(timeouts.awaitNodeMs, timeouts.pollMs, "搜索结果「$conversationName」") { root ->
+            rules.findAll(root, WeworkSelectorIds.SEARCH_RESULT_ITEM)
+                .firstOrNull { it.text == conversationName }
+        } ?: return@PlanStep StepOutcome.Failure(
+            ExecutorErrorCodes.STEP_TIMEOUT,
+            "搜索结果未在 ${timeouts.awaitNodeMs}ms 内出现「$conversationName」（无结果或结果形态漂移）",
+        )
+        if (!driver.click(hit)) {
+            return@PlanStep StepOutcome.Failure(
+                ExecutorErrorCodes.ACTION_REJECTED,
+                "点击搜索结果被界面拒绝",
             )
         }
         StepOutcome.Success

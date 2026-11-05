@@ -24,11 +24,17 @@ import cn.worktool.open.feature.executor.fake.fakeNode
  * 其余为支撑跳转的次要界面（发起菜单/编辑页/成员选择/成员详情/通讯录）。
  */
 
-/** 会话列表（主界面）：底部 Tab + 「+」入口 + 会话项。 */
+/** 会话列表（主界面）：底部 Tab + 「+」入口 + 搜索入口 + 会话项。 */
 class HomeFixture(
     conversations: List<String>,
     withContactsTab: Boolean = true,
     withPlusButton: Boolean = true,
+    /**
+     * 消息页右上搜索入口（真机 dump uitree-msg-home.xml：`o7a` desc=「搜索，按钮」，
+     * 真机 clickable=false 靠手势回退点击；Fake 无手势通道故置 clickable=true）。
+     * 默认 false=既有「会话定位失败」路径测试口径不变（搜索兜底场景显式开启）。
+     */
+    withSearchEntry: Boolean = false,
 ) {
     val messageTab: FakeExecutorNode = fakeNode(text = "消息", cls = TEXT_VIEW, clickable = true)
     val contactsTab: FakeExecutorNode? =
@@ -36,6 +42,17 @@ class HomeFixture(
     val plusButton: FakeExecutorNode? =
         if (withPlusButton) {
             fakeNode(resId = "com.tencent.wework:id/home_create_plus", cls = "android.widget.ImageView", clickable = true)
+        } else {
+            null
+        }
+    val searchEntryNode: FakeExecutorNode? =
+        if (withSearchEntry) {
+            fakeNode(
+                resId = "com.tencent.wework:id/o7a",
+                cls = TEXT_VIEW,
+                clickable = true,
+                contentDesc = "搜索，按钮",
+            )
         } else {
             null
         }
@@ -67,12 +84,58 @@ class HomeFixture(
             add(fakeNode(cls = VIEW_GROUP) { add(fakeNode(text = "企业微信", cls = TEXT_VIEW)) })
             add(conversationList)
             plusButton?.let { add(it) }
+            searchEntryNode?.let { add(it) }
             add(
                 fakeNode(cls = VIEW_GROUP) {
                     add(messageTab)
                     contactsTab?.let { add(it) }
                 },
             )
+        },
+    )
+}
+
+/**
+ * 搜索页（openConversation 搜索框兜底，2026-11-05）：搜索框（SEARCH_INPUT=`m0f`，
+ * 真机为 SearchView，Fake 以 EDIT_TEXT 承载 SET_TEXT 语义）+ 过滤页签 +
+ * 结果条目（SEARCH_RESULT_ITEM）。树形证据：local-private/evidence/session21/
+ * uitree-search-page.xml（m0f desc=「搜索，搜索框，空白」；页签 全部/联系人/群聊…）。
+ */
+class SearchPageFixture(results: List<String> = emptyList()) {
+    val inputNode: FakeExecutorNode = fakeNode(
+        resId = "com.tencent.wework:id/m0f",
+        cls = EDIT_TEXT,
+        editable = true,
+        clickable = true,
+    )
+
+    /** 结果名 → 名称节点（输入后由测试装配点击效果追加进 [resultList]；可点击=点击被接受）。 */
+    val resultNodes: Map<String, FakeExecutorNode> = results.associateWith { name ->
+        fakeNode(
+            text = name,
+            resId = "com.tencent.wework:id/search_result_item_name",
+            cls = TEXT_VIEW,
+            clickable = true,
+        )
+    }
+
+    /** 结果列表容器（真机为 ViewPager `pnv`；本流程不滚它，仅承载结果行）。 */
+    val resultList: FakeExecutorNode = fakeNode(
+        cls = VIEW_GROUP,
+        resId = "com.tencent.wework:id/pnv",
+        scrollable = true,
+    )
+
+    /** 过滤页签（dump 形态：全部已选中/联系人/群聊/面聊/聊天记录/邮件/文档）。 */
+    val filterTabs: List<FakeExecutorNode> = listOf("全部", "联系人", "群聊", "面聊", "聊天记录", "邮件", "文档")
+        .map { fakeNode(text = it, cls = TEXT_VIEW, clickable = true) }
+
+    val screen: FakeScreen = FakeScreen(
+        name = "search",
+        root = fakeNode(cls = VIEW_GROUP) {
+            add(fakeNode(cls = VIEW_GROUP) { add(inputNode) })
+            add(fakeNode(cls = VIEW_GROUP) { filterTabs.forEach { add(it) } })
+            add(resultList)
         },
     )
 }

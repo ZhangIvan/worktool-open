@@ -78,9 +78,11 @@ fun fakeNode(
     clickable: Boolean = false,
     editable: Boolean = false,
     scrollable: Boolean = false,
+    contentDesc: String? = null,
     block: (FakeExecutorNode.() -> Unit)? = null,
 ): FakeExecutorNode = FakeExecutorNode(
     initialText = text,
+    contentDescription = contentDesc,
     viewIdResourceName = resId,
     cls = cls,
     isClickable = clickable,
