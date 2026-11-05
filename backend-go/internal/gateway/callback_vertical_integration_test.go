@@ -217,6 +217,7 @@ func callbackPrepared(d cb.Delivery) cb.Prepared {
 func TestPGCallbackCB02(t *testing.T) {
 	gatewayGate(t)
 	callbackObservationIntegrationCases(t)
+	callbackReplayReceiptIntegrationCases(t)
 	t.Run("same_delivery_single_claim_and_prepare", func(t *testing.T) {
 		f := newGWWithStoreConstructor(t, callbackSyntheticStore)
 		store, _ := callbackSetup(t, f)
@@ -353,7 +354,7 @@ func TestPGCallbackCB04(t *testing.T) {
 		t.Fatal("failed transaction ACKed")
 	}
 	waitCondition(t, f, func() bool { return f.controller.LiveCount() == 0 })
-	if f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 0 || f.count(t, `SELECT count(*) FROM callback_outbox`) != 0 || f.count(t, `SELECT count(*) FROM developer_callbacks`) != 0 || f.count(t, `SELECT count(*) FROM admission_reservations WHERE command=$1 AND state='held'`, id) != 2 || f.count(t, `SELECT count(*) FROM outbox WHERE command=$1 AND kind='result_ack'`, id) != 0 {
+	if f.count(t, `SELECT count(*) FROM callback_replay_receipts WHERE command=$1`, id) != 0 || f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 0 || f.count(t, `SELECT count(*) FROM callback_outbox`) != 0 || f.count(t, `SELECT count(*) FROM developer_callbacks`) != 0 || f.count(t, `SELECT count(*) FROM admission_reservations WHERE command=$1 AND state='held'`, id) != 2 || f.count(t, `SELECT count(*) FROM outbox WHERE command=$1 AND kind='result_ack'`, id) != 0 {
 		t.Fatal("partial result graph survived rollback")
 	}
 	execOwner(t, f.owner, f.ctx, `DROP TRIGGER synthetic_callback_rollback ON audit; DROP FUNCTION fail_callback_result_audit()`)
@@ -361,7 +362,7 @@ func TestPGCallbackCB04(t *testing.T) {
 	next.hello(t)
 	event := next.send(t, "execution_result", result(cmd, "OK"))
 	assertAck(t, next, event, id)
-	if f.count(t, `SELECT count(*) FROM callback_outbox WHERE command=$1`, id) != 1 || f.count(t, `SELECT charged_jobs FROM scope_limits WHERE scope_kind='tenant' AND tenant='tenant_demo' AND scope_id='tenant_demo'`) != 2 {
+	if f.count(t, `SELECT count(*) FROM callback_replay_receipts WHERE command=$1`, id) != 1 || f.count(t, `SELECT count(*) FROM callback_outbox WHERE command=$1`, id) != 1 || f.count(t, `SELECT charged_jobs FROM scope_limits WHERE scope_kind='tenant' AND tenant='tenant_demo' AND scope_id='tenant_demo'`) != 2 {
 		t.Fatal("recovery duplicate quota/graph")
 	}
 }

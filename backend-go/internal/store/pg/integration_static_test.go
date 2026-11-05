@@ -16,8 +16,8 @@ func TestCandidateMigrationStaticInventory(t *testing.T) {
 		}
 		all += string(b)
 	}
-	if got := strings.Count(all, "CREATE TABLE "); got != 29 {
-		t.Fatalf("candidate table count=%d, expected29", got)
+	if got := strings.Count(all, "CREATE TABLE "); got != 30 {
+		t.Fatalf("candidate table count=%d, expected30", got)
 	}
 	for _, required := range []string{"callback_destination_versions", "subscription_exact_destination_version", "CALLBACK_LEGACY_HISTORY_REQUIRES_RECONCILIATION", "DESTINATION_REVOCATION_TERMINAL", "SET search_path TO pg_catalog, %I, pg_temp", "commands_payload_json_object", "PAYLOAD_CHECK_GUARD_DEFINITION", "delivery_reserved_identity", "reservation_exact_delivery", "DEFERRABLE INITIALLY DEFERRED", "UNIQUE(tenant,reservation_id)", "FOREIGN KEY(tenant,device,session)", "FOREIGN KEY(tenant,device,command)", "role IN ('owner','admin','operator','approver','auditor')"} {
 		if !strings.Contains(all, required) {

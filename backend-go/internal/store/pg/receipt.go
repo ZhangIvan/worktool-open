@@ -211,12 +211,18 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 				return e
 			}
 		}
-		if callbackEvidence && c.result != nil {
+		if f.Header.Kind == "execution_result" && c.result != nil {
 			if !bytes.Equal([]byte(*c.result), f.ResultCanonical) {
 				trustedConflict = true
 				return admissionError("RESULT_CONFLICT")
 			}
+			if _, e = checkAdmissionGraphState(ctx, tx, h, c, "materialized"); e != nil {
+				return e
+			}
 			if e = s.validateCallbackMaterialized(ctx, tx, h, c); e != nil {
+				return e
+			}
+			if e = verifyCallbackReplayReceipt(ctx, tx, h, c); e != nil {
 				return e
 			}
 		}
@@ -272,6 +278,9 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 			return admissionError("EXPIRED")
 		}
 		if prior {
+			if f.Header.Kind == "execution_result" && c.result == nil {
+				return admissionError("INTEGRITY_CONFLICT")
+			}
 			if priorDigest != f.FrameDigest || priorSession != h.SessionID || priorSeq != f.Header.Seq {
 				trustedConflict = id != "" && f.Header.Kind == "execution_result"
 				return admissionError("IDEMPOTENCY_CONFLICT")
@@ -367,6 +376,20 @@ func (s *GatewayStore) ApplyDeviceFrame(ctx context.Context, a SessionAuth, h Le
 			return admissionError("INTEGRITY_CONFLICT")
 		}
 		if e = s.materializeCallbacks(ctx, tx, h, c, r.Status, r.EffectState, ms); e != nil {
+			return e
+		}
+		// New receipt is committed atomically with the first result. Never backfill
+		// on a replay or replace the retained graph with receipt-only validation.
+		completed := c
+		result := string(f.ResultCanonical)
+		completed.result, completed.status, completed.effect = &result, r.Status, r.EffectState
+		if _, e = checkAdmissionGraphState(ctx, tx, h, completed, "materialized"); e != nil {
+			return e
+		}
+		if e = s.validateCallbackMaterialized(ctx, tx, h, completed); e != nil {
+			return e
+		}
+		if e = persistCallbackReplayReceipt(ctx, tx, h, completed, len(projection)); e != nil {
 			return e
 		}
 		_, e = tx.Exec(ctx, `INSERT INTO tombstones(tenant,device,command,digest,status,retain_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant,device,command) DO UPDATE SET retain_until=GREATEST(tombstones.retain_until,EXCLUDED.retain_until)`, h.Tenant, h.DeviceID, id, c.digest, r.Status, ms+7*86400000)

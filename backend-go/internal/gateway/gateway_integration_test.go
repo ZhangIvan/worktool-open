@@ -962,19 +962,19 @@ func TestPGGatewayGW11(t *testing.T) {
 			}
 			waitCondition(t, f, func() bool { return f.controller.LiveCount() == 0 })
 			if fault == "late_audit" {
-				if f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 0 || f.count(t, `SELECT count(*) FROM admission_reservations WHERE state='materialized'`) != 0 || f.count(t, `SELECT count(*) FROM outbox WHERE kind='result_ack'`) != 0 {
+				if f.count(t, `SELECT count(*) FROM callback_replay_receipts WHERE command=$1`, id) != 0 || f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 0 || f.count(t, `SELECT count(*) FROM admission_reservations WHERE state='materialized'`) != 0 || f.count(t, `SELECT count(*) FROM outbox WHERE kind='result_ack'`) != 0 {
 					t.Fatal("late failure partial graph")
 				}
 				execOwner(t, f.owner, f.ctx, `ALTER TABLE audit DROP CONSTRAINT synthetic_result_failure`)
-			} else if f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 1 {
+			} else if f.count(t, `SELECT count(*) FROM callback_replay_receipts WHERE command=$1`, id) != 1 || f.count(t, `SELECT count(*) FROM commands WHERE id=$1 AND result IS NOT NULL`, id) != 1 {
 				t.Fatal("postcommit injection did not commit")
 			}
 			next := f.dial(t, d, f.session(t, d))
 			next.hello(t)
 			event := next.send(t, "execution_result", r)
 			assertAck(t, next, event, id)
-			if f.count(t, `SELECT charged_jobs FROM scope_limits WHERE scope_kind='tenant'`) != 1 {
-				t.Fatal("fault retry charged")
+			if f.count(t, `SELECT count(*) FROM callback_replay_receipts WHERE command=$1`, id) != 1 || f.count(t, `SELECT charged_jobs FROM scope_limits WHERE scope_kind='tenant'`) != 1 {
+				t.Fatal("fault retry charged or receipt duplicated")
 			}
 		})
 	}
