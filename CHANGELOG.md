@@ -29,7 +29,7 @@
 
 ### 513/目录/矩阵口径对齐（2026-11-05 矩阵口径对齐车道）
 
-- **支持矩阵补 513 查询设备资源行（⬜ 不翻如实）+ 目录 StatusVerified 与矩阵翻格门口径对齐**（docs/05 v1.10）：矩阵行内登记双缺口——①数据本体 query_result 事件回调契约面从未实测捕获（session10 s10f 回调监听落盘 0 字节；双轨契约见 local-private/parity/b3/events.md §五）；②结果帧时序收敛未复验（session11 实测滞留 ~5.5min=W1，H1/H2 已修根因；session20 复测 90s 窗 timeout，窗短于最坏滞留且设备构建血统未记录）。回执终态面真机 succeeded ec=0 ×2（session10/11）如实行内引用。目录侧 catalog.go 注释同步：513 的 verified=回执终态面、非全义；`TestCatalogStatusLifecycle` 冻结的 verified 集 {501,502,513} 不变。
+- **支持矩阵补 513 查询设备资源行（⬜ 不翻如实）+ 目录 StatusVerified 与矩阵翻格门口径对齐**（docs/05 v1.10）：矩阵行内登记双缺口——①数据本体 query_result 回调契约面——**session21 已捕获**（evidence-513-callback-chain.json：HMAC POST 全量 data + rawMsg 形态核对素材；session10 时点 0 字节系车道间时差，v1.10 表述已在 docs/05 v1.11 更正）；剩状态机面 execution_unknown 缺陷（FINDING-query-exec-result-after-rebuild.md）；②结果帧时序收敛未复验（session11 实测滞留 ~5.5min=W1，H1/H2 已修根因；session20 复测 90s 窗 timeout，窗短于最坏滞留且设备构建血统未记录）。回执终态面真机 succeeded ec=0 ×2（session10/11）如实行内引用。目录侧 catalog.go 注释同步：513 的 verified=回执终态面、非全义；`TestCatalogStatusLifecycle` 冻结的 verified 集 {501,502,513} 不变。
 
 ### v0.1.0-rc2（2026-11-04，发布候选——选择器真机校准批 + 管理台 v3 设计稿对齐整改）
 

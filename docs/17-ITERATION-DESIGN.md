@@ -54,7 +54,7 @@
   目标任意重排需 queueRevision 与独立排序键」）。队列清空/移除仅 queued 态
   （console.go:691-695、709-741），无并发版本防抖。
 
-### 1.3 数据模型（迁移 v4，全部加法）
+### 1.3 数据模型（迁移 v5，全部加法）
 
 ```sql
 -- 新表：批次根（仅元数据；行载荷在 commands，不复制正文防双源漂移）
@@ -147,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_commands_batch ON commands(batch_id, child_key);
 
 | 步 | 交付 | 回归测试（先写失败断言） |
 |---|---|---|
-| M1（W-M5） | 迁移 v4 + batches 表 + 批次建/读端点 | `TestBatchMigratePreservesLegacyRows`（旧行零值语义）；`TestBatchChildKeyIdempotentResubmit`（断网重试同 childKey 返回原 commandId，变参 409） |
+| M1（W-M5） | 迁移 v5 + batches 表 + 批次建/读端点 | `TestBatchMigratePreservesLegacyRows`（旧行零值语义）；`TestBatchChildKeyIdempotentResubmit`（断网重试同 childKey 返回原 commandId，变参 409） |
 | M2（W-M5） | submit 部分受理 + revision 乐观锁 + sort_key 重排 | `TestBatchSubmitPartialAcceptance`（风控拒一行不回滚已受理行）；`TestQueueRevisionConflict`（并发 remove/priority 0 行生效 → 409 带快照）；`TestQueueSortKeyPreservesCreatedAt`（重排不改 created_at） |
 | M3（W-M6，随第三批 P2 维护闭环） | 管理台批量编排行编辑器（交互图05）+ 批次摘要/取消 | `test/admin_ui_v3.spec.mjs` 增批量编辑器节（逐行校验态/重复行/提交禁用/409 保留本地编辑）；Go 侧批次聚合计数含未知不并入失败断言 |
 
@@ -186,7 +186,7 @@ next_fire 计算与预览（管理台 cron 页）按同一 zone 口径修正。
   （cron.go:211）——推进逻辑（fireCronJob cron.go:187-241，堆积保护跳过时 next_fire
   照常推进）与 zone 无关，改造须保持该键稳定性语义。
 
-### 2.3 数据模型（迁移 v5，加法）
+### 2.3 数据模型（迁移 v6，加法）
 
 ```sql
 ALTER TABLE cron_jobs ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
@@ -277,7 +277,7 @@ api_tokens 落**显式 scope 列**（admin/approver/readonly/robot 四枚举）�
   无过期判定**；`TouchAPIToken` last_used 留痕（sqlite.go:1386-1389）。
 - 管理台：`GET /api/v1/admin/tokens` 只读投影（console.go:1446-1449）。
 
-### 3.3 数据模型（迁移 v6，加法 + 一次性回填）
+### 3.3 数据模型（迁移 v7，加法 + 一次性回填）
 
 ```sql
 ALTER TABLE api_tokens ADD COLUMN scope        TEXT NOT NULL DEFAULT 'robot'; -- admin|approver|readonly|robot
@@ -369,7 +369,7 @@ txt 行 82：「前端不能只看布尔值画『已保护』」）；不一致�
 - 全仓 grep `desired/runtimeApplied` 零命中——三态模型为纯新增。v3 规格 §245 已把
   「配置desired/persisted/applied」登记为缺合同项。
 
-### 4.3 数据模型（迁移 v7，加法；KV 单一事实源不动）
+### 4.3 数据模型（迁移 v8，加法；KV 单一事实源不动）
 
 ```sql
 -- 配置状态影子表：admin_settings.value 仍为现行单一事实源（console.go:69-72 注释纪律），

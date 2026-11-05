@@ -843,7 +843,7 @@ var FIELD_DRIFT_TYPES = {
   202: "目录登记 loop.on（布尔）；端侧当前读取 loopEnabled（字符串 true/false/1/0，IntentNormalizer fail-closed）——正式提交前先干跑，端侧拒收则以端侧为准并等待契约统一",
   203: "目录登记 titleList；端侧当前读取 targetRoom（单会话名称，receivedContent 同读）——单会话发送按名称匹配待设备确认；契约统一前先干跑验证",
   204: "专用表单已按冻结契约渲染四必填（titleList/receivedName/originalContent/receivedContent，引用对象与回复内容分区块）——引用定位不唯一时端侧明确失败，不退化为普通发送",
-  205: "专用表单：titleList=来源会话，receivedName+originalContent 定位原消息，nameList=接收方（extraText 可选附言）——originTitle 为两侧均不消费的幻影字段，不提供",
+  205: "专用表单：titleList=来源会话，receivedName+originalContent 定位原消息，nameList=接收方（extraText 附言：端侧当前版本不执行该输入，仅随参数记录）——originTitle 为两侧均不消费的幻影字段，不提供",
   206: "目录登记 groupName+selectList；端侧读取 groupName（或 targetRoom），成员走 groupMembers 数组、公告走 announcement/extraText——selectList 未被端侧读取",
   207: "目录仅登记 groupName；端侧必填 targetRoom 且公告/备注/加人至少一项（announcement/groupRemark/addMembers）——当前端侧无踢人字段",
   208: "目录登记 fileUrl；端侧未读取 fileUrl——微盘图片按 objectName（微盘内已存图片显示名）查找，请改在高级模式填写 objectName",
@@ -854,7 +854,7 @@ var FIELD_DRIFT_TYPES = {
   226: "目录将 originalContent 称为消息 ID；端侧按原文内容定位——ID/原文语义未冻结前结果可能失败，先干跑验证",
   227: "专用表单：titleList（来源）+messageList（逐行 originalContent 定位，textType 默认 0）+nameList（接收方）——originTitle 幻影字段不提供",
   228: "专用表单与 227 同构（合并转发模式）：是否合并成功以端侧回执为准，不因模式选中就显示合并完成",
-  229: "专用表单：weworkMessageList（每行 receivedContent/fileUrl 至少其一）+nameList（本指令无 titleList）——目录旧 titleList+receivedContent 形态已废弃",
+  229: "专用表单：weworkMessageList（每行 receivedContent/fileUrl 至少其一。注意：仅 fileUrl 的文件类行端侧当前按格记败 fail-closed——文件发送通道待 218 面真机取证接入）+nameList（本指令无 titleList）——目录旧 titleList+receivedContent 形态已废弃",
   230: "专用表单与 229 同构（合并发送模式）：合并范围与顺序以端侧回执为准，不用 messageList 替代",
   238: "专用表单逐行编辑至少 2 条非空文本并自动双层编码为 receivedContent JSON 数组串——不要在高级模式手写转义 JSON；L2 正式执行走独立审批",
   239: "端侧必填 newGroupName（可用 groupName 兼容）；select 模式还需 selectList（去重后至多 5 群）——契约统一前先干跑验证",
@@ -1950,7 +1950,7 @@ function typedBuildRelay(mode) {
     "<div id='send-rows-message'></div>" +
     "<button class='mini' data-addrow='message'>+ 添加一条原消息</button>" +
     typedArray("nameList", "接收方——每行一个") +
-    typedText("extraText", "附言（可选，留空不写入载荷）") +
+    typedText("extraText", "附言（可选，留空不写入载荷。注意：端侧当前版本不执行附言输入——转发照发、附言仅随参数记录）") +
     "<div class='note' id='send-typed-note'></div>";
 }
 function typedBuildWework(mode) {
@@ -1962,7 +1962,7 @@ function typedBuildWework(mode) {
     "<div id='send-rows-wework'></div>" +
     "<button class='mini' data-addrow='wework'>+ 添加一条消息</button>" +
     typedArray("nameList", "接收人——每行一个") +
-    typedText("extraText", "附言（可选，留空不写入载荷）") +
+    typedText("extraText", "附言（可选，留空不写入载荷。注意：端侧当前版本不执行附言输入——转发照发、附言仅随参数记录）") +
     "<div class='note' id='send-typed-note'></div>";
 }
 var TYPED_FORMS = {
@@ -1986,7 +1986,7 @@ var TYPED_FORMS = {
           typedArea("originalContent", "原消息原文（定位键）", 2)) +
         typedSection("转发给谁（接收方）", "nameList 是接收方——不要把来源会话填进来",
           typedArray("nameList", "接收方——每行一个") +
-          typedText("extraText", "附言（可选，留空不写入载荷）"));
+          typedText("extraText", "附言（可选，留空不写入载荷。注意：端侧当前版本不执行附言输入——转发照发、附言仅随参数记录）"));
     }
   },
   218: {
