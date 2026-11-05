@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -26,6 +27,10 @@ type openapiFixture struct {
 	token string
 	robot string
 	now   *time.Time
+	// idemSeq 幂等键计数器：time.Now().UnixNano() 在 Windows 粗时钟粒度下同测试
+	// 内三连 POST 会撞出同键（同键变参 → 409 101007，flake 实证 -count=10 半数失败），
+	// 改用进程内单调计数保证唯一（2026-11-05，TestOpenAPIQueueGroup flaky 修复）。
+	idemSeq int
 }
 
 func newOpenAPIFixture(t *testing.T) *openapiFixture {
@@ -63,7 +68,8 @@ func (f *openapiFixture) post(t *testing.T, body string, hdr map[string]string) 
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+f.token)
-	req.Header.Set("Idempotency-Key", "idem-"+fmt.Sprint(time.Now().UnixNano()))
+	f.idemSeq++
+	req.Header.Set("Idempotency-Key", fmt.Sprintf("idem-%d-%s", f.idemSeq, strconv.FormatInt(time.Now().UnixNano(), 36)))
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
