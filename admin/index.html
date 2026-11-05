@@ -842,21 +842,21 @@ function stateConclusion(c, results) {
 var FIELD_DRIFT_TYPES = {
   202: "目录登记 loop.on（布尔）；端侧当前读取 loopEnabled（字符串 true/false/1/0，IntentNormalizer fail-closed）——正式提交前先干跑，端侧拒收则以端侧为准并等待契约统一",
   203: "目录登记 titleList；端侧当前读取 targetRoom（单会话名称，receivedContent 同读）——单会话发送按名称匹配待设备确认；契约统一前先干跑验证",
-  204: "目录仅登记 titleList/receivedContent；端侧还需 receivedName（引用发送者）与 originalContent（被引用原文）才能定位引用消息——请在高级模式补齐后干跑验证",
-  205: "目录仅登记 titleList；端侧读取 titleList（来源会话）+receivedName+originalContent 定位原消息，nameList 才是接收方——目录示例 originTitle 非已验证别名",
+  204: "专用表单已按冻结契约渲染四必填（titleList/receivedName/originalContent/receivedContent，引用对象与回复内容分区块）——引用定位不唯一时端侧明确失败，不退化为普通发送",
+  205: "专用表单：titleList=来源会话，receivedName+originalContent 定位原消息，nameList=接收方（extraText 可选附言）——originTitle 为两侧均不消费的幻影字段，不提供",
   206: "目录登记 groupName+selectList；端侧读取 groupName（或 targetRoom），成员走 groupMembers 数组、公告走 announcement/extraText——selectList 未被端侧读取",
   207: "目录仅登记 groupName；端侧必填 targetRoom 且公告/备注/加人至少一项（announcement/groupRemark/addMembers）——当前端侧无踢人字段",
   208: "目录登记 fileUrl；端侧未读取 fileUrl——微盘图片按 objectName（微盘内已存图片显示名）查找，请改在高级模式填写 objectName",
   209: "目录登记 fileUrl；端侧未读取 fileUrl——微盘文件按 objectName（微盘内已存文件显示名）查找，请改在高级模式填写 objectName",
-  218: "端侧还需 objectName（文件名）与 fileType（image/audio/video/*）必填，目录未登记——请在高级模式补齐后干跑验证",
+  218: "专用表单按冻结契约补齐 objectName（文件名）与 fileType（image/audio/video/*，只开放冻结值）——资源可达性/域白名单未验证，先干跑预检",
   223: "目录登记 corpName；端侧读取 objectName（企业名称）——契约统一前先干跑验证",
   225: "目录登记 groupName+selectList；端侧读取 targetRoom+memberName（或 friend.name），变更走 markName/tagList 至少一项——selectList 未被端侧读取",
   226: "目录将 originalContent 称为消息 ID；端侧按原文内容定位——ID/原文语义未冻结前结果可能失败，先干跑验证",
-  227: "目录仅登记 titleList；端侧还需 messageList（逐条 originalContent）与 nameList（接收方）——originTitle 非已验证别名",
-  228: "目录仅登记 titleList；端侧还需 messageList（逐条 originalContent）与 nameList（接收方）——合并转发是否成功以端侧回执为准",
-  229: "目录登记 titleList+receivedContent；端侧读取 weworkMessageList（消息对象数组，每项 receivedContent/fileUrl 至少其一）+nameList（接收人）——请在高级模式按结构填写",
-  230: "目录仅登记 titleList；端侧读取 weworkMessageList+nameList——请在高级模式按结构填写，合并范围与顺序以回执为准",
-  238: "端侧要求 receivedContent 为「至少 2 条非空文本」的 JSON 数组字符串（双层编码）——目录示例为单条文本，直接提交会被端侧拒收",
+  227: "专用表单：titleList（来源）+messageList（逐行 originalContent 定位，textType 默认 0）+nameList（接收方）——originTitle 幻影字段不提供",
+  228: "专用表单与 227 同构（合并转发模式）：是否合并成功以端侧回执为准，不因模式选中就显示合并完成",
+  229: "专用表单：weworkMessageList（每行 receivedContent/fileUrl 至少其一）+nameList（本指令无 titleList）——目录旧 titleList+receivedContent 形态已废弃",
+  230: "专用表单与 229 同构（合并发送模式）：合并范围与顺序以端侧回执为准，不用 messageList 替代",
+  238: "专用表单逐行编辑至少 2 条非空文本并自动双层编码为 receivedContent JSON 数组串——不要在高级模式手写转义 JSON；L2 正式执行走独立审批",
   239: "端侧必填 newGroupName（可用 groupName 兼容）；select 模式还需 selectList（去重后至多 5 群）——契约统一前先干跑验证",
   240: "端侧要求 objectName 或 fileUrl 为网页 URL（http/s）且必填——目录示例仅含 fileUrl，请确认目标字段后干跑验证",
   511: "目录示例非有效 JSON（禁止导入）；端侧必填 objectName=yyyy-MM-dd 日期——请在高级模式填写",
@@ -1627,7 +1627,7 @@ function renderDevicesPair() {
  * → ④ 干跑预检（服务端模拟，结果内嵌）→ ⑤ L2 自动进审批流 → ⑥ 提交后直达任务轨迹 */
 var WIZ = { deviceId: "", type: 0, manual: false, dryReport: undefined, approval: null, lastBody: null,
             submitting: false, devices: [], devicesLoaded: false, devicesStale: false, prefillTarget: "",
-            catGroup: "", offlineGo: false, offlineFor: "" };
+            catGroup: "", offlineGo: false, offlineFor: "", typedRows: {} };
 function renderTasksSend() {
   $("view").innerHTML =
     wsTabs("tasks", "tasks-send") +
@@ -1876,9 +1876,11 @@ function currentPayloadFormOnly() {
   forEach("#send-fields [data-param]", function (el) {
     flattenParam(payload, el.getAttribute("data-param"), el.getAttribute("data-kind"), el.value);
   });
+  if (entry && TYPED_FORMS[entry.type]) collectTypedRows(payload); // 专用表单行编辑器 → 结构化数组
   return payload;
 }
 function buildFields(entry) {
+  if (entry && TYPED_FORMS[entry.type]) { buildTypedFields(entry, TYPED_FORMS[entry.type]); return; }
   var req = (entry && entry.required) || [];
   if (!req.length) {
     $("send-fields").innerHTML = "<p class='dim' style='margin:6px 0'>该动作无需必填参数：提交载荷仅含 type。注意「无参数」不等于无副作用——请在 ④ 干跑预检确认计划符合预期。</p>";
@@ -1901,6 +1903,292 @@ function buildFields(entry) {
     el.addEventListener("input", function () { if (!WIZ.manual) regen(); });
     el.addEventListener("change", function () { if (!WIZ.manual) regen(); });
   });
+}
+/* ============ 第二批指令专用表单（规格 §12.2：204/205/218/227/228/229/230/238）============
+ * 字段唯一事实源=protocol/fixtures/admin-command-examples.json（rc2 冻结，与 catalog 同步）。
+ * 平面字段走 data-param（复用既有收集/实时预览/干跑预检链路）；结构化行编辑器
+ * （227/228 messageList、229/230 weworkMessageList、238 逐条文本）行状态存
+ * WIZ.typedRows，收集时序列化为合法载荷——238 双层编码为 JSON 数组串。
+ * 未冻结字段（如 238 的 batchId/childKey 编排合同）不渲染、不伪造；
+ * 227/228 行匹配状态如实标注「提交后由端侧核对」，本页不预判匹配成功。 */
+function typedNote(msg) { return "<div class='note'>" + msg + "</div>"; }
+function typedSection(title, desc, inner) {
+  return "<div style='border:1px solid #d8e0ea;border-radius:8px;padding:8px 10px;margin:8px 0'>" +
+    "<b>" + esc(title) + "</b>" + (desc ? "<div class='dim' style='margin:2px 0 6px'>" + esc(desc) + "</div>" : "") + inner + "</div>";
+}
+function typedArray(key, hint) {
+  return "<label class='param'>" + esc(key) + "<span class='pk'>" + esc(hint) + "</span><textarea data-param='" + esc(key) + "' data-kind='array' rows='2'></textarea></label>";
+}
+function typedText(key, hint) {
+  return "<label class='param'>" + esc(key) + "<span class='pk'>" + esc(hint) + "</span><input data-param='" + esc(key) + "' data-kind='text' size='28'></label>";
+}
+function typedArea(key, hint, rows) {
+  return "<label class='param'>" + esc(key) + "<span class='pk'>" + esc(hint) + "</span><textarea data-param='" + esc(key) + "' data-kind='text' rows='" + (rows || 2) + "'></textarea></label>";
+}
+function typedSelect(key, hint, options) {
+  return "<label class='param'>" + esc(key) + "<span class='pk'>" + esc(hint) + "</span><select data-param='" + esc(key) + "' data-kind='text'>" +
+    "<option value=''>— 选择 —</option>" + options.map(function (o) { return "<option value='" + esc(o) + "'>" + esc(o) + "</option>"; }).join("") + "</select></label>";
+}
+function typedEmptyRow(zone) {
+  if (zone === "message") return { originalContent: "", textType: "" };
+  if (zone === "wework") return { receivedContent: "", fileUrl: "", objectName: "", fileType: "", textType: "" };
+  return { text: "" };
+}
+function initTypedRows(type) {
+  var r = { message: [], wework: [], texts: [typedEmptyRow("texts"), typedEmptyRow("texts")] };
+  if (type === 227 || type === 228) r.message = [typedEmptyRow("message")];
+  if (type === 229 || type === 230) r.wework = [typedEmptyRow("wework")];
+  return r;
+}
+function typedBuildRelay(mode) {
+  var tip = mode === 228
+    ? "合并转发：来源多条消息合并为一条转发给接收方——是否合并成功以端侧回执为准，不因模式选中就显示合并完成。"
+    : "批量转发：来源消息逐条转发给接收方——先核对模式（逐条 ≠ 合并），行匹配状态以端侧回执为准。";
+  return typedNote(tip) +
+    typedArray("titleList", "来源会话——每行一个") +
+    "<label class='param'>messageList<span class='pk'>原消息定位——每行一条：originalContent 必填、textType 留空=端侧默认 0；行可增删/上下移</span></label>" +
+    "<div id='send-rows-message'></div>" +
+    "<button class='mini' data-addrow='message'>+ 添加一条原消息</button>" +
+    typedArray("nameList", "接收方——每行一个") +
+    typedText("extraText", "附言（可选，留空不写入载荷）") +
+    "<div class='note' id='send-typed-note'></div>";
+}
+function typedBuildWework(mode) {
+  var tip = mode === 230
+    ? "合并发送：逐行构建新消息合并发送给接收人（与 229 同构）——合并范围/顺序与端侧行为统一前以回执为准，不用 messageList 替代。"
+    : "批量发送：逐行构建新消息发给接收人——每行 receivedContent 或 fileUrl 至少其一，无内容空行不会通过校验；合并/逐条行为以真实执行器验证为准。";
+  return typedNote(tip) +
+    "<label class='param'>weworkMessageList<span class='pk'>消息编辑表——每行一条：文本填 receivedContent；文件填 fileUrl（+objectName/fileType）；textType 留空=端侧默认 1；行可增删/上下移</span></label>" +
+    "<div id='send-rows-wework'></div>" +
+    "<button class='mini' data-addrow='wework'>+ 添加一条消息</button>" +
+    typedArray("nameList", "接收人——每行一个") +
+    typedText("extraText", "附言（可选，留空不写入载荷）") +
+    "<div class='note' id='send-typed-note'></div>";
+}
+var TYPED_FORMS = {
+  204: {
+    build: function () {
+      return typedNote("引用回复：先定位「引用对象」（会话+发送者+原文），再填回复正文；引用定位不唯一时由端侧明确失败，不退化为普通发送。") +
+        typedSection("引用对象（定位被引用消息）", "titleList 目标会话 · receivedName 被引用发送者 · originalContent 被引用原文",
+          typedArray("titleList", "目标会话——每行一个") +
+          typedText("receivedName", "被引用消息的发送者昵称") +
+          typedArea("originalContent", "被引用消息原文——定位用，不是回复正文（勿混填）", 2)) +
+        typedSection("回复内容", "以「引用回复」形式发送到 titleList 会话",
+          typedArea("receivedContent", "回复正文（必填）", 3));
+    }
+  },
+  205: {
+    build: function () {
+      return typedNote("转发：titleList 是来源会话，receivedName+originalContent 定位原消息，nameList 才是接收方——预览中来源到接收的指向不代表原消息已匹配。") +
+        typedSection("从哪里转发（来源与定位）", "来源为空/重名原文/跨企业/定位失败时端侧明确失败，不偷发新消息代替",
+          typedArray("titleList", "来源会话——每行一个") +
+          typedText("receivedName", "原消息发送者昵称") +
+          typedArea("originalContent", "原消息原文（定位键）", 2)) +
+        typedSection("转发给谁（接收方）", "nameList 是接收方——不要把来源会话填进来",
+          typedArray("nameList", "接收方——每行一个") +
+          typedText("extraText", "附言（可选，留空不写入载荷）"));
+    }
+  },
+  218: {
+    build: function () {
+      return typedNote("URL 直发文件（非微盘上传，不虚构上传 API）：资源大小/下载/域白名单/可达性未验证——提交前先干跑预检；扩展名不能独自决定类型。") +
+        typedSection("接收会话", "", typedArray("titleList", "接收会话——每行一个")) +
+        typedSection("文件", "objectName 显示文件名 · fileUrl http(s) 资源链接 · fileType 只开放已冻结并测过的值",
+          typedText("objectName", "文件名（接收方看到的名字）") +
+          typedText("fileUrl", "资源链接（http/s）") +
+          typedSelect("fileType", "类型（image/audio/video/*）", ["image", "audio", "video", "*"]));
+    }
+  },
+  227: { build: function () { return typedBuildRelay(227); }, deep: deepMessageRows, note: noteRelay },
+  228: { build: function () { return typedBuildRelay(228); }, deep: deepMessageRows, note: noteRelay },
+  229: { build: function () { return typedBuildWework(229); }, deep: deepWeworkRows, note: noteWework },
+  230: { build: function () { return typedBuildWework(230); }, deep: deepWeworkRows, note: noteWework },
+  238: {
+    build: function () {
+      return typedNote("批量发送文本：逐条写至少 2 条非空文本，序列化时自动编码为 receivedContent 的 JSON 数组串（双层编码为当前协议适配，不让用户手写转义 JSON）；正式执行为 L2 独立审批，结果按 会话×文本 二维矩阵回执。batchId/childKey 等编排合同未冻结，不提供。") +
+        typedArray("titleList", "目标会话——每行一个") +
+        "<label class='param'>逐条文本<span class='pk'>每行一条消息文本，至少 2 条非空——每条文本发给每个会话（M 个会话 × N 条文本）</span></label>" +
+        "<div id='send-rows-texts'></div>" +
+        "<button class='mini' data-addrow='texts'>+ 添加一条文本</button>" +
+        "<div class='note' id='send-typed-note'></div>";
+    },
+    deep: deepBatchText,
+    note: noteBatchText
+  }
+};
+function buildTypedFields(entry, tf) {
+  WIZ.typedRows = initTypedRows(entry.type);
+  $("send-fields").innerHTML =
+    "<div data-typed='" + entry.type + "'>" +
+    "<div class='note'>本指令已启用专用表单（规格 §12.2，字段以冻结契约为准）——数组仍一行一个；行编辑器增删/排序后右侧载荷实时更新；干跑预检与提交链路不变。可选参数之外的未登记字段仍会被服务端拒绝（DisallowUnknownFields）。</div>" +
+    tf.build() + "</div>";
+  paintTypedRows(entry.type);
+  bindTypedRowButtons();
+  $("send-fields").oninput = typedRowInput;
+  $("send-fields").onchange = typedRowInput;
+}
+function typedRowInput(e) {
+  var t = e && e.target;
+  if (!t || !t.getAttribute) return;
+  var zone = t.getAttribute("data-trow");
+  if (!zone) return; // data-param 字段由各自监听器处理
+  var rows = WIZ.typedRows[zone];
+  var idx = Number(t.getAttribute("data-tidx"));
+  var field = t.getAttribute("data-tfield");
+  if (!rows || !rows[idx] || !(field in rows[idx])) return;
+  rows[idx][field] = t.value;
+  if (!WIZ.manual) regen();
+}
+function paintTypedRows(type) {
+  var rows = WIZ.typedRows || {};
+  var mz = $("send-rows-message");
+  if (mz) {
+    var ms = rows.message || [];
+    mz.innerHTML = ms.map(function (r, i) {
+      return "<div class='row' style='margin:0 0 6px'>" +
+        "<span class='dim' style='min-width:56px'>原消息" + (i + 1) + "</span>" +
+        "<input data-trow='message' data-tidx='" + i + "' data-tfield='originalContent' size='30' placeholder='originalContent：被转发消息原文（必填）'>" +
+        "<label class='dim'>textType <input data-trow='message' data-tidx='" + i + "' data-tfield='textType' size='3' placeholder='0'></label>" +
+        "<button class='mini' data-mvrow='message:" + i + ":-1'" + (i === 0 ? " disabled" : "") + ">↑</button>" +
+        "<button class='mini' data-mvrow='message:" + i + ":1'" + (i === ms.length - 1 ? " disabled" : "") + ">↓</button>" +
+        "<button class='mini' data-delrow='message:" + i + "'>删</button>" +
+        "<span class='dim'>匹配状态：提交后由端侧核对</span></div>";
+    }).join("");
+  }
+  var wz = $("send-rows-wework");
+  if (wz) {
+    var ws = rows.wework || [];
+    wz.innerHTML = ws.map(function (r, i) {
+      return "<div class='row' style='margin:0 0 6px'>" +
+        "<span class='dim' style='min-width:44px'>消息" + (i + 1) + "</span>" +
+        "<input data-trow='wework' data-tidx='" + i + "' data-tfield='receivedContent' size='16' placeholder='receivedContent：文本内容'>" +
+        "<input data-trow='wework' data-tidx='" + i + "' data-tfield='fileUrl' size='18' placeholder='fileUrl：文件链接 http(s)'>" +
+        "<input data-trow='wework' data-tidx='" + i + "' data-tfield='objectName' size='12' placeholder='objectName：文件名'>" +
+        "<select data-trow='wework' data-tidx='" + i + "' data-tfield='fileType'>" +
+        "<option value=''>fileType</option><option value='image'>image</option><option value='audio'>audio</option><option value='video'>video</option><option value='*'>*</option></select>" +
+        "<label class='dim'>textType <input data-trow='wework' data-tidx='" + i + "' data-tfield='textType' size='3' placeholder='1'></label>" +
+        "<button class='mini' data-mvrow='wework:" + i + ":-1'" + (i === 0 ? " disabled" : "") + ">↑</button>" +
+        "<button class='mini' data-mvrow='wework:" + i + ":1'" + (i === ws.length - 1 ? " disabled" : "") + ">↓</button>" +
+        "<button class='mini' data-delrow='wework:" + i + "'>删</button></div>";
+    }).join("");
+  }
+  var tz = $("send-rows-texts");
+  if (tz) {
+    var ts = rows.texts || [];
+    tz.innerHTML = ts.map(function (r, i) {
+      return "<div class='row' style='margin:0 0 6px'>" +
+        "<span class='dim' style='min-width:44px'>文本" + (i + 1) + "</span>" +
+        "<input data-trow='texts' data-tidx='" + i + "' data-tfield='text' size='40' placeholder='第 " + (i + 1) + " 条文本（非空）'>" +
+        "<button class='mini' data-mvrow='texts:" + i + ":-1'" + (i === 0 ? " disabled" : "") + ">↑</button>" +
+        "<button class='mini' data-mvrow='texts:" + i + ":1'" + (i === ts.length - 1 ? " disabled" : "") + ">↓</button>" +
+        "<button class='mini' data-delrow='texts:" + i + "'>删</button></div>";
+    }).join("");
+  }
+}
+function bindTypedRowButtons() {
+  forEach("#send-fields [data-addrow]", function (b) {
+    b.onclick = function () {
+      var zone = b.getAttribute("data-addrow");
+      if (!WIZ.typedRows[zone]) return;
+      WIZ.typedRows[zone].push(typedEmptyRow(zone));
+      paintTypedRows(WIZ.type);
+      if (!WIZ.manual) regen();
+    };
+  });
+  forEach("#send-fields [data-delrow]", function (b) {
+    b.onclick = function () {
+      var p = b.getAttribute("data-delrow").split(":");
+      var rows = WIZ.typedRows[p[0]];
+      if (rows && rows[Number(p[1])] !== undefined) { rows.splice(Number(p[1]), 1); paintTypedRows(WIZ.type); if (!WIZ.manual) regen(); }
+    };
+  });
+  forEach("#send-fields [data-mvrow]", function (b) {
+    b.onclick = function () {
+      var p = b.getAttribute("data-mvrow").split(":");
+      var rows = WIZ.typedRows[p[0]];
+      var i = Number(p[1]), j = i + Number(p[2]);
+      if (rows && j >= 0 && j < rows.length) { var tmp = rows[i]; rows[i] = rows[j]; rows[j] = tmp; paintTypedRows(WIZ.type); if (!WIZ.manual) regen(); }
+    };
+  });
+}
+// 行编辑器 → 载荷。空行剔除；textType 留空不写入（端侧默认 0/1）；文件行空字段不写入（载荷与夹具形态一致）。
+function collectTypedRows(payload) {
+  var entry = currentEntry();
+  var rows = WIZ.typedRows || {};
+  if (entry.type === 227 || entry.type === 228) {
+    var list = (rows.message || []).map(function (r) {
+      var item = {};
+      var oc = String((r && r.originalContent) || "").trim();
+      if (oc !== "") item.originalContent = oc;
+      var t = String((r && r.textType) == null ? "" : r.textType).trim();
+      if (t !== "" && isFinite(Number(t))) item.textType = Number(t);
+      return (item.originalContent !== undefined || item.textType !== undefined) ? item : null;
+    }).filter(Boolean);
+    if (list.length) payload.messageList = list;
+  } else if (entry.type === 229 || entry.type === 230) {
+    var wl = (rows.wework || []).map(function (r) {
+      var item = {};
+      var t = String((r && r.textType) == null ? "" : r.textType).trim();
+      if (t !== "" && isFinite(Number(t))) item.textType = Number(t);
+      var c = String((r && r.receivedContent) || "").trim();
+      if (c !== "") item.receivedContent = c;
+      var u = String((r && r.fileUrl) || "").trim();
+      if (u !== "") item.fileUrl = u;
+      var o = String((r && r.objectName) || "").trim();
+      if (o !== "") item.objectName = o;
+      var f = String((r && r.fileType) || "").trim();
+      if (f !== "") item.fileType = f;
+      return Object.keys(item).length ? item : null;
+    }).filter(Boolean);
+    if (wl.length) payload.weworkMessageList = wl;
+  } else if (entry.type === 238) {
+    var texts = (rows.texts || []).map(function (r) { return String((r && r.text) || "").trim(); }).filter(Boolean);
+    if (texts.length) payload.receivedContent = JSON.stringify(texts); // 双层编码：文本数组 → JSON 数组串
+  }
+}
+// 专用表单深校验（行级规则），缺失项与 missingRequired 同形（供 wizardGate 拼原因）。
+function deepMessageRows(payload, miss) {
+  (payload.messageList || []).forEach(function (r, i) {
+    if (!r || String(r.originalContent || "").trim() === "") miss.push("messageList[" + (i + 1) + "].originalContent（每行必填）");
+  });
+}
+function deepWeworkRows(payload, miss) {
+  (payload.weworkMessageList || []).forEach(function (r, i) {
+    if (!r || (String(r.receivedContent || "").trim() === "" && String(r.fileUrl || "").trim() === ""))
+      miss.push("weworkMessageList[" + (i + 1) + "].receivedContent/fileUrl（每行至少其一）");
+  });
+}
+function deepBatchText(payload, miss) {
+  if (payload.receivedContent === undefined) return; // 缺字段由目录必填点名
+  var n = 0;
+  try {
+    var arr = JSON.parse(payload.receivedContent);
+    if (Array.isArray(arr)) n = arr.filter(function (x) { return String(x || "").trim() !== ""; }).length;
+  } catch (e) { n = 0; }
+  if (n < 2) miss.push("receivedContent（≥2 条非空文本，当前 " + n + " 条）");
+}
+function typedMissing(entry, payload) {
+  var miss = missingRequired(entry, payload);
+  var tf = TYPED_FORMS[entry.type];
+  if (tf && tf.deep) tf.deep(payload, miss);
+  return miss;
+}
+function noteRelay(payload) {
+  var s = Array.isArray(payload.titleList) ? payload.titleList.length : 0;
+  var m = Array.isArray(payload.messageList) ? payload.messageList.length : 0;
+  var r = Array.isArray(payload.nameList) ? payload.nameList.length : 0;
+  return "当前规模：来源会话 <b>" + s + "</b> · 原消息 <b>" + m + "</b> 条 · 接收对象 <b>" + r + "</b>——原消息匹配状态以端侧回执为准（本页不预判匹配成功）。";
+}
+function noteWework(payload) {
+  var r = Array.isArray(payload.nameList) ? payload.nameList.length : 0;
+  var n = Array.isArray(payload.weworkMessageList) ? payload.weworkMessageList.length : 0;
+  return "当前规模：<b>" + r + "</b> 个接收对象 × <b>" + n + "</b> 条消息（最大 <b>" + (r * n) + "</b> 次端侧操作）——结果按真实对象×消息回执呈现，端侧结果不足时不绘制完整逐格成功表。";
+}
+function noteBatchText(payload) {
+  var m = Array.isArray(payload.titleList) ? payload.titleList.length : 0;
+  var n = 0;
+  try { var arr = JSON.parse(payload.receivedContent || "null"); if (Array.isArray(arr)) n = arr.filter(function (x) { return String(x || "").trim() !== ""; }).length; } catch (e) { n = 0; }
+  return "当前规模：<b>" + m + "</b> 个会话 × <b>" + n + "</b> 条文本" + (n < 2 ? "（至少需要 2 条非空文本）" : "") + "——单条失败是否继续以执行器与正式策略为准。";
 }
 function regen() {
   $("send-json").value = JSON.stringify(currentPayloadFormOnly(), null, 2);
@@ -1964,7 +2252,7 @@ function updateGate() {
   var entry = currentEntry();
   var p = currentPayload();
   var d = currentDevice();
-  var missing = (!WIZ.manual && entry) ? missingRequired(entry, p.v) : [];
+  var missing = (!WIZ.manual && entry) ? (TYPED_FORMS[entry.type] ? typedMissing(entry, p.v) : missingRequired(entry, p.v)) : [];
   var st = {
     device: !!WIZ.deviceId,
     devicePaused: !!(d && d.status === "paused"),
@@ -1992,6 +2280,10 @@ function updateGate() {
   if (imp) imp.textContent = d ? "01" : "—";
   if (impObj) impObj.textContent = p.err ? "!" : (WIZ.type ? objCount(p.v) : "—");
   if ($("send-preview")) $("send-preview").textContent = p.err ? "// " + p.err : JSON.stringify(p.v, null, 2);
+  // 专用表单规模预览（227/228/229/230/238）：对象数/内容数/最大操作量实时更新
+  if (entry && TYPED_FORMS[entry.type] && TYPED_FORMS[entry.type].note && !p.err && $("send-typed-note")) {
+    $("send-typed-note").innerHTML = TYPED_FORMS[entry.type].note(p.v);
+  }
   if ($("send-summary")) {
     var devSt = !d ? ["未选择", "pill"] : (d.status === "paused" ? ["已暂停", "st-paused"] : (d.online ? ["在线", "on"] : ["离线", "off"]));
     var rows =

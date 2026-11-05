@@ -40,6 +40,18 @@ catch (e) { ok(false, "脚本可编译", e.message); }
 const NOW = Date.UTC(2026, 10, 4, 6, 0, 0);
 const CMD_ID = "cmd-aaaabbbbccccdddd";
 let fetchMode = "ok"; // "ok" | "fail"（E 段切到 fail 验证失败状态）
+// 第二批专用表单八指令目录条目（required/example 逐字节复制自冻结夹具
+// protocol/fixtures/admin-command-examples.json，与 server/internal/admin/catalog.go 同步）
+const CATALOG_SECOND_BATCH = [
+  { type: 204, name: "引用回复消息", risk: "L0", required: ["titleList", "receivedName", "originalContent", "receivedContent"], example: '{"type":204,"titleList":["成员甲"],"receivedName":"发送人昵称","originalContent":"被引用消息原文","receivedContent":"收到"}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", receivedName: "string", originalContent: "string", receivedContent: "string" } } },
+  { type: 205, name: "转发消息", risk: "L0", required: ["titleList", "receivedName", "originalContent", "nameList"], example: '{"type":205,"titleList":["来源会话"],"receivedName":"发送人昵称","originalContent":"消息原文","nameList":["成员乙"]}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", receivedName: "string", originalContent: "string", nameList: "array" } } },
+  { type: 218, name: "推送文件", risk: "L0", required: ["titleList", "objectName", "fileUrl", "fileType"], example: '{"type":218,"titleList":["成员甲"],"objectName":"交付文件.bin","fileUrl":"https://example.com/f.bin","fileType":"*"}', group: "文件·推送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", objectName: "string", fileUrl: "string", fileType: "string" } } },
+  { type: 227, name: "批量转发", risk: "L1", required: ["titleList", "messageList", "nameList"], example: '{"type":227,"titleList":["来源会话"],"messageList":[{"originalContent":"消息原文一","textType":1},{"originalContent":"消息原文二","textType":1}],"nameList":["成员甲"]}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", messageList: "array", nameList: "array" } } },
+  { type: 228, name: "合并转发", risk: "L1", required: ["titleList", "messageList", "nameList"], example: '{"type":228,"titleList":["来源会话"],"messageList":[{"originalContent":"消息原文一","textType":1}],"nameList":["成员甲"]}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", messageList: "array", nameList: "array" } } },
+  { type: 229, name: "批量发送", risk: "L1", required: ["weworkMessageList", "nameList"], example: '{"type":229,"weworkMessageList":[{"textType":1,"receivedContent":"通知"}],"nameList":["成员甲","成员乙"]}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { weworkMessageList: "array", nameList: "array" } } },
+  { type: 230, name: "合并发送", risk: "L1", required: ["weworkMessageList", "nameList"], example: '{"type":230,"weworkMessageList":[{"textType":1,"receivedContent":"内容一"}],"nameList":["成员甲"]}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { weworkMessageList: "array", nameList: "array" } } },
+  { type: 238, name: "批量发送文本", risk: "L2", required: ["titleList", "receivedContent"], example: '{"type":238,"titleList":["成员甲"],"receivedContent":"[\\"文本一\\",\\"文本二\\"]"}', group: "消息·发送", status: "implemented", rawMsg: "", schema: { required: { titleList: "array", receivedContent: "string" } } },
+];
 const canned = [
   // 顺序敏感：更具体的路径在前
   [/^\/api\/v1\/admin\/commands\/cmd-aaaabbbbccccdddd$/, () => ({
@@ -72,6 +84,7 @@ const canned = [
       { type: 203, name: "发送文本消息", risk: "L0", required: ["titleList", "receivedContent"], example: '{"type":203,"titleList":["成员甲"],"receivedContent":"你好"}', group: "消息·发送", status: "implemented", rawMsg: "回执 rawMsg=指令原文", schema: { required: { titleList: "array", receivedContent: "string" } } },
       { type: 219, name: "解散群", risk: "L2", required: ["groupName"], example: '{"type":219,"groupName":"交付群"}', group: "群·高风险", status: "implemented", rawMsg: "", schema: { required: { groupName: "string" } } },
       { type: 202, name: "主循环开关", risk: "L0", required: ["loop.on"], example: '{"type":202,"loop":{"on":false}}', group: "会话与循环", status: "implemented", rawMsg: "", schema: { required: { "loop.on": "boolean" } } },
+      ...CATALOG_SECOND_BATCH,
     ],
     statusLegend: {}, riskLegend: { L0: "低风险", L2: "高风险（独立审批）" },
   })],
@@ -530,6 +543,132 @@ ok(!/console\.log/.test(src), "无 console.log（令牌/数据不入浏览器日
   const banned = ["http://cdn", "https://cdn", "googleapis", "jsdelivr", "unpkg", "<img ", "background-image:url(http"];
   const hitB = banned.filter(b => html.includes(b));
   ok(hitB.length === 0, "无外链/图片引用（对齐 TestUIServing banned 表）", hitB);
+}
+
+/* ---------- I. 第二批专用表单（规格 §12.2：204/205/218/227/228/229/230/238） ----------
+ * 字段唯一事实源 = protocol/fixtures/admin-command-examples.json（rc2 冻结）。
+ * 断言专用表单按类型渲染（≥2 条/指令）、行编辑器序列化产出合法载荷、提交门按
+ * 冻结必填拦截、238 双层编码与编排字段不伪造。 */
+section("I. 第二批专用表单（204/205/218/227/228/229/230/238，规格 §12.2）");
+{
+  // I.0 harness 目录夹具与冻结夹具逐字节一致（防 harness 侧漂移）
+  const fixtureCmds = JSON.parse(readFileSync(path.join(root, "protocol", "fixtures", "admin-command-examples.json"), "utf8")).commands;
+  for (const t of [204, 205, 218, 227, 228, 229, 230, 238]) {
+    const fx = fixtureCmds.find(c => c.type === t);
+    const cat = CATALOG_SECOND_BATCH.find(c => c.type === t);
+    ok(!!fx && !!cat && cat.example === fx.example && cat.name === fx.name && JSON.stringify(cat.required) === JSON.stringify(fx.required ?? cat.required),
+      `夹具 type=${t}：harness 目录条目与冻结夹具 example/name 一致`);
+  }
+
+  sandbox.renderTasksSend();
+  await settle();
+  sandbox.$("send-device").value = "dev-aaaabbbbccccdddd";
+  sandbox.WIZ.deviceId = "dev-aaaabbbbccccdddd";
+  const pickType = t => { sandbox.$("send-type").value = String(t); sandbox.onPick(); return els["send-fields"].innerHTML; };
+  const typedAll = [204, 205, 218, 227, 228, 229, 230, 238].every(t => pickType(t).includes("data-typed='" + t + "'"));
+  ok(typedAll, "八指令选中后均启用专用表单（data-typed 标记，而非通用表单）");
+
+  // I.1 204 引用回复：双区块 + 四必填 + 提交门点名引用定位字段
+  {
+    pickType(204);
+    const f = els["send-fields"].innerHTML;
+    ok(f.includes("引用对象") && f.includes("回复内容"), "204 专用表单双区块：引用对象/回复内容（规格 §12.2 分区）");
+    ok(f.includes("receivedName") && f.includes("originalContent") && f.includes("receivedContent") && f.includes("titleList"), "204 四必填在位（夹具 example 字段集，目录旧两项之外补引用定位）");
+    sandbox.updateGate();
+    const gate = els["send-gate"].innerHTML;
+    ok(gate.includes("receivedName") && gate.includes("originalContent"), "204 空表单提交门点名引用定位字段", gate);
+    ok(f.includes("不是回复正文"), "204 原文输入防混填提示（避免把回复填进原文）");
+  }
+
+  // I.2 205 转发：来源/接收方两组对象 + 可选附言 + 无幻影别名
+  {
+    const f = pickType(205);
+    ok(f.includes("从哪里转发") && f.includes("转发给谁"), "205 双对象选择器：来源/接收方分区块标注（规格 §12.2）");
+    ok(f.includes("extraText") && f.includes("可选"), "205 extraText 附言标注可选（留空不写入载荷）");
+    ok(!f.includes("originTitle"), "205 不渲染幻影别名 originTitle（冻结决策：两侧均不消费）");
+  }
+
+  // I.3 218 推送文件：fileType 只开放冻结值
+  {
+    const f = pickType(218);
+    ok(f.includes("objectName") && f.includes("fileUrl"), "218 文件名/资源链接字段在位（夹具）");
+    ok(f.includes("value='image'") && f.includes("value='audio'") && f.includes("value='video'") && f.includes("value='*'"), "218 fileType 下拉只开放冻结值 image/audio/video/*（不承诺任意 MIME）");
+    sandbox.WIZ.type = 218;
+    sandbox.updateGate();
+    ok(els["send-gate"].innerHTML.includes("fileType"), "218 空表单提交门点名 fileType", els["send-gate"].innerHTML);
+  }
+
+  // I.4 227 批量转发：逐行定位器 + 行级序列化 = 夹具 messageList + 行级缺项点名
+  {
+    pickType(227);
+    let f = els["send-fields"].innerHTML, rz = els["send-rows-message"].innerHTML;
+    ok(rz.includes("原消息1") && f.includes("添加一条原消息"), "227 逐行定位器：原消息1 行 + 增行按钮（行号稳定）", rz);
+    ok(rz.includes("匹配状态") && rz.includes("端侧核对"), "227 行匹配状态如实标注「提交后由端侧核对」（不预判匹配成功）");
+    sandbox.WIZ.typedRows.message = [{ originalContent: "消息原文一", textType: "1" }, { originalContent: "消息原文二", textType: "1" }];
+    const p = sandbox.currentPayloadFormOnly();
+    ok(JSON.stringify(p.messageList) === JSON.stringify([{ originalContent: "消息原文一", textType: 1 }, { originalContent: "消息原文二", textType: 1 }]),
+      "227 行编辑器序列化 = 夹具 messageList（originalContent+textType number）", p.messageList);
+    sandbox.WIZ.typedRows.message = [{ originalContent: "消息原文一", textType: "1" }, { originalContent: "", textType: "1" }];
+    sandbox.updateGate();
+    ok(els["send-gate"].innerHTML.includes("messageList[2].originalContent"), "227 行级缺项点名到行（messageList[2].originalContent）", els["send-gate"].innerHTML);
+    sandbox.WIZ.typedRows.message = [{ originalContent: "消息原文一", textType: "" }];
+    sandbox.updateGate();
+    ok(!els["send-gate"].innerHTML.includes("messageList["), "227 textType 留空=端侧默认 0，不误报（规格 §12.3）");
+  }
+
+  // I.5 228 合并转发：与 227 同构 + 合并语义注明回执为准
+  {
+    pickType(228);
+    const f = els["send-fields"].innerHTML, rz = els["send-rows-message"].innerHTML;
+    ok(rz.includes("原消息1") && f.includes("合并转发"), "228 与 227 同构且标注合并转发模式");
+    sandbox.WIZ.typedRows.message = [{ originalContent: "消息原文一", textType: "1" }];
+    sandbox.updateGate();
+    ok((els["send-typed-note"] ? els["send-typed-note"].innerHTML : "").includes("端侧回执"), "228 模式说明：是否合并成功以端侧回执为准（不因选中即显示完成）");
+  }
+
+  // I.6 229 批量发送：weworkMessageList 行编辑器 + 无 titleList + 空内容行不放行
+  {
+    const f = pickType(229);
+    ok(f.includes("weworkMessageList") && f.includes("receivedContent") && f.includes("fileUrl"), "229 行编辑器：receivedContent/fileUrl 每行至少其一");
+    ok(!f.includes("data-param='titleList'"), "229 不渲染 titleList（冻结契约本指令无 titleList）");
+    sandbox.WIZ.typedRows.wework = [{ textType: "1", receivedContent: "通知", fileUrl: "", objectName: "", fileType: "" }];
+    const p = sandbox.currentPayloadFormOnly();
+    ok(JSON.stringify(p.weworkMessageList) === JSON.stringify([{ textType: 1, receivedContent: "通知" }]),
+      "229 行序列化 = 夹具 weworkMessageList 元素形态（空文件字段不写入）", p.weworkMessageList);
+    sandbox.WIZ.typedRows.wework = [{ textType: "1", receivedContent: "", fileUrl: "", objectName: "", fileType: "" }];
+    sandbox.updateGate();
+    ok(els["send-gate"].innerHTML.includes("weworkMessageList[1]"), "229 仅 textType 无内容行不放行（不能给无内容空行通过）", els["send-gate"].innerHTML);
+    sandbox.WIZ.typedRows.wework = [{ textType: "1", receivedContent: "通知", fileUrl: "", objectName: "", fileType: "" }];
+    sandbox.updateGate();
+    ok((els["send-typed-note"] ? els["send-typed-note"].innerHTML : "").includes("最大"), "229 规模预览：对象数×消息数最大操作量（规格 §12.2）");
+  }
+
+  // I.7 230 合并发送：与 229 同构
+  {
+    pickType(230);
+    ok(els["send-fields"].innerHTML.includes("合并发送"), "230 与 229 同构且标注合并发送模式");
+    sandbox.WIZ.typedRows.wework = [{ textType: "1", receivedContent: "内容一", fileUrl: "", objectName: "", fileType: "" }];
+    const p = sandbox.currentPayloadFormOnly();
+    ok(JSON.stringify(p.weworkMessageList) === JSON.stringify([{ textType: 1, receivedContent: "内容一" }]), "230 行序列化 = 夹具形态", p.weworkMessageList);
+  }
+
+  // I.8 238 批量发送文本：逐行编辑 ≥2 条 + 双层编码 + 不伪造编排字段
+  {
+    const f = pickType(238);
+    ok(f.includes("逐条文本") && f.includes("至少 2 条非空"), "238 逐行编辑器标注 ≥2 条非空文本");
+    ok(f.includes("JSON 数组串"), "238 说明双层编码（不让用户手写转义 JSON）");
+    ok(!/data-(param|tfield)='[^']*(batchId|childKey)/.test(f), "238 无绑定未冻结编排字段 batchId/childKey 的输入（不伪造批量合同，仅文档说明）");
+    sandbox.WIZ.typedRows.texts = [{ text: "文本一" }, { text: "文本二" }];
+    const p = sandbox.currentPayloadFormOnly();
+    ok(p.receivedContent === "[\"文本一\",\"文本二\"]", "238 双层编码：receivedContent 与夹具 example 字节一致", p.receivedContent);
+    sandbox.regen();
+    ok((els["send-json"].value || "").includes('[\\"文本一\\",\\"文本二\\"]'), "238 载荷实时预览复用现有 send-json 链路", els["send-json"].value);
+    sandbox.updateGate();
+    ok((els["send-typed-note"] ? els["send-typed-note"].innerHTML : "").includes("2</b> 条文本"), "238 规模预览：M 个会话 × N 条文本", els["send-typed-note"] && els["send-typed-note"].innerHTML);
+    sandbox.WIZ.typedRows.texts = [{ text: "只有一条" }];
+    sandbox.updateGate();
+    ok(els["send-gate"].innerHTML.includes("≥2"), "238 仅 1 条文本 → 提交门拦截并给原因", els["send-gate"].innerHTML);
+  }
 }
 
 console.log(`\n结果：${passed} 过 / ${failed} 败`);
