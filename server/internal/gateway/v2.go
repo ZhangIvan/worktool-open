@@ -218,6 +218,8 @@ func (h *Hub) renegotiate(ctx context.Context, dev sqlite.Device, req createSess
 	if h.renegotiateNonceSeen(p.Nonce, h.Now().UTC()) {
 		return nil, errors.New("renegotiate nonce 重放（证据单次有效）")
 	}
+	// 会话级打点（审计复核收口）：换发证据验签通过，准予轮换。
+	h.logSessionEvent("renegotiate", dev.DeviceID, "", dev.TokenVersion)
 	tokenHex, err := wire.RandomHex(32)
 	if err != nil {
 		return nil, err
@@ -235,7 +237,33 @@ func (h *Hub) renegotiate(ctx context.Context, dev sqlite.Device, req createSess
 	}
 	cred := &LiveCred{DeviceID: dev.DeviceID, TokenHex: tokenHex, TokenVersion: newVersion}
 	h.putCred(cred)
+	// 会话级打点（审计复核收口）：新凭据已签发并登记（版本 +1）。
+	h.logSessionEvent("token_version_rotated", dev.DeviceID, "", newVersion)
 	return cred, nil
+}
+
+// ---- 会话级结构化日志（审计复核收口，2026-11-05）----
+// 审计复核曾因服务端无会话打点，只能以 devices.token_version 间接佐证凭据自愈；
+// 本组日志补齐会话生命周期四点：hello / hello_ack / renegotiate /
+// token_version_rotated。行内仅含 deviceId 短哈希（SHA-256 前 8 hex，原始 ID 与
+// token/签名/nonce/私钥等敏感材料绝不落日志）与事件元数据。
+
+// shortDeviceHash 返回 deviceId 短哈希（SHA-256 前 4 字节 → 8 hex）：日志关联键，
+// 替代原始 ID。
+func shortDeviceHash(deviceID string) string {
+	sum := sha256.Sum256([]byte(deviceID))
+	return hex.EncodeToString(sum[:4])
+}
+
+// logSessionEvent 打一条会话级结构化日志行（sessionID 为空 = 事件发生在会话建立
+// 前，如凭据换发，以 "-" 占位）。
+func (h *Hub) logSessionEvent(event, deviceID, sessionID string, tokenVersion int64) {
+	if sessionID == "" {
+		sessionID = "-"
+	}
+	h.Log.Printf("gateway: session event=%s device=%s session=%s tokenVersion=%d ts=%s",
+		event, shortDeviceHash(deviceID), sessionID, tokenVersion,
+		h.Now().UTC().Format(time.RFC3339))
 }
 
 func sha256Hex(s string) string {
@@ -366,6 +394,8 @@ func (h *Hub) serveV2(ctx context.Context, s *v2Session, conn *websocket.Conn) {
 	if err := h.DB.OpenSession(ctx, s.ID, hello.LastEpoch, hello.LastReceivedSeq, int64(s.EncryptMax), h.Now().UTC()); err != nil {
 		h.Log.Printf("gateway: OpenSession: %v", err)
 	}
+	// 会话级打点（审计复核收口）：hello 校验全通过、会话已登记。
+	h.logSessionEvent("hello", s.DeviceID, s.ID, s.TokenVersion)
 
 	// hello_ack（形状冻结，spec §5.4.1；meta 为服务端签名帧）
 	ack, ackMeta, err := s.buildSignedFrame(h, wire.SocketMessageList, nil, "")
@@ -376,6 +406,8 @@ func (h *Hub) serveV2(ctx context.Context, s *v2Session, conn *websocket.Conn) {
 	if err := writeRaw(&s.writeMu, conn, mustJSON(ackEnvelope(ack, ackMeta, hello.LastReceivedSeq+1))); err != nil {
 		return
 	}
+	// 会话级打点（审计复核收口）：hello_ack 已成功写出（会话就绪）。
+	h.logSessionEvent("hello_ack", s.DeviceID, s.ID, s.TokenVersion)
 
 	// 会话就绪：冲刷积压指令 + 恢复触发对账（UNKNOWN 任务入口之二：重连触发）
 	if _, err := s.flushQueued(ctx, h); err != nil {

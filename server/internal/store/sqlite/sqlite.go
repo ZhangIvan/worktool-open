@@ -760,6 +760,68 @@ func (db *DB) ScrubClosedSessionKeys(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
+// ---- 保留清理（服务端可观测与保留清理车道，2026-11-05）----
+// 终态行按保留期删除（ScanQueuedTTL 同形态的周期扫描删除；调度=启动一轮 +
+// 每小时，cmd/server main.go runRetentionSweeper）。
+
+// OutboxDeliveredRetain delivered 行保留期（7 天）。
+const OutboxDeliveredRetain = 7 * 24 * time.Hour
+
+// OutboxDeadRetain dead 行保留期（30 天）。
+const OutboxDeadRetain = 30 * 24 * time.Hour
+
+// CleanupOutboxRetention 清理终态 outbox 行：delivered 超 [OutboxDeliveredRetain]、
+// dead 超 [OutboxDeadRetain]（均按 updated_at 判龄——终态迁移时刻）。dead 行删除
+// 前同事务落一条 outbox_dead_purged 审计（批量计数，死信消失前留痕）。
+// pending/skipped 行不动。返回 (delivered, dead) 删除行数（幂等：再扫 = 0,0）。
+func (db *DB) CleanupOutboxRetention(ctx context.Context, now time.Time) (delivered, dead int64, err error) {
+	err = db.withTx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM outbox WHERE status='dead' AND updated_at <= ?`,
+			now.Add(-OutboxDeadRetain).UnixMilli()).Scan(&dead); err != nil {
+			return err
+		}
+		if dead > 0 {
+			// 清理前审计（与删除同事务：崩溃间隙不留无痕删除）。
+			if err := db.InsertAudit(ctx, tx, "outbox_dead_purged", "",
+				fmt.Sprintf("count=%d（dead 行保留期 %s，按 updated_at 判龄）", dead, OutboxDeadRetain), now); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM outbox WHERE status='dead' AND updated_at <= ?`,
+				now.Add(-OutboxDeadRetain).UnixMilli()); err != nil {
+				return err
+			}
+		}
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM outbox WHERE status='delivered' AND updated_at <= ?`,
+			now.Add(-OutboxDeliveredRetain).UnixMilli())
+		if err != nil {
+			return err
+		}
+		delivered, _ = res.RowsAffected()
+		return nil
+	})
+	return delivered, dead, err
+}
+
+// ClosedSessionRetain closed 会话整行保留期（30 天；server_x25519_private 关闭即
+// 清零语义已存在（M-4），到期后连元数据一并整行删除）。
+const ClosedSessionRetain = 30 * 24 * time.Hour
+
+// CleanupClosedSessions 清理超期 closed 会话整行（closed_at 超 [ClosedSessionRetain]；
+// closed_at 缺失的历史行按 created_at 兜底判龄）。open/pending 行不动（运行需要）。
+// 返回删除行数（幂等：再扫 = 0）。
+func (db *DB) CleanupClosedSessions(ctx context.Context, now time.Time) (int64, error) {
+	res, err := db.sql.ExecContext(ctx,
+		`DELETE FROM device_sessions WHERE state='closed' AND COALESCE(closed_at, created_at) <= ?`,
+		now.Add(-ClosedSessionRetain).UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ---- 指令 / 事件 / 幂等 / 墓碑 / outbox / 审计 / 入向去重 ----
 
 // InsertCommand 新建指令（E01 enqueue 或 E02 reject 前的载体落库）。

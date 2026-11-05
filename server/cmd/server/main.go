@@ -150,6 +150,9 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	go func() { _ = hub.RunDispatchPump(bgCtx, time.Second) }()
 	go func() { _ = worker.Run(bgCtx) }()
 	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()
+	// 保留清理（服务端可观测与保留清理车道）：启动一轮 + 每小时——outbox
+	// delivered(7d)/dead(30d，删除前审计) 与 device_sessions closed(30d 整行)。
+	go func() { _ = runRetentionSweeper(bgCtx, db, logger, retentionSweepInterval) }()
 
 	// H-2（安全审计 TOP5）：v1 兼容 WS 面默认不挂载，cfg.EnableV1Compat
 	// （flag -enable-v1-compat）显式开启才暴露 /webserver/wework/{robotId}。
@@ -203,4 +206,46 @@ func callbackState(url string) string {
 		return "disabled（默认禁外网）"
 	}
 	return url
+}
+
+// ---- 保留清理（服务端可观测与保留清理车道，2026-11-05；ScanQueuedTTL 同形态
+// 的周期扫描删除，调度=启动即一轮 + 每小时）----
+
+// retentionSweepInterval 保留清理周期（每小时；启动即先扫一轮，不待首个 tick）。
+const retentionSweepInterval = time.Hour
+
+// runRetentionSweeper 保留清理循环：启动即扫一轮，此后每 interval 一轮；
+// ctx 取消后返回 ctx.Err()（main 以 goroutine 挂后台，返回值仅测试断言用）。
+func runRetentionSweeper(ctx context.Context, db *sqlite.DB, logger *log.Logger, interval time.Duration) error {
+	sweepRetention(ctx, db, logger)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			sweepRetention(ctx, db, logger)
+		}
+	}
+}
+
+// sweepRetention 执行一轮保留清理（幂等家务，逐项 best-effort：失败记日志、
+// 下轮重试，不阻断服务）：
+//   - outbox：delivered 留 [sqlite.OutboxDeliveredRetain]（7 天）、dead 留
+//     [sqlite.OutboxDeadRetain]（30 天，删除前由 store 同事务审计批量计数）；
+//   - device_sessions：closed 整行留 [sqlite.ClosedSessionRetain]（30 天）。
+func sweepRetention(ctx context.Context, db *sqlite.DB, logger *log.Logger) {
+	now := time.Now().UTC()
+	if delivered, dead, err := db.CleanupOutboxRetention(ctx, now); err != nil {
+		logger.Printf("retention: outbox 保留清理失败: %v", err)
+	} else if delivered > 0 || dead > 0 {
+		logger.Printf("retention: outbox 已清理 delivered=%d dead=%d（delivered 留 %s / dead 留 %s）",
+			delivered, dead, sqlite.OutboxDeliveredRetain, sqlite.OutboxDeadRetain)
+	}
+	if n, err := db.CleanupClosedSessions(ctx, now); err != nil {
+		logger.Printf("retention: device_sessions 保留清理失败: %v", err)
+	} else if n > 0 {
+		logger.Printf("retention: 已清理 %d 条超期 closed 会话（整行，留 %s）", n, sqlite.ClosedSessionRetain)
+	}
 }

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -121,5 +123,119 @@ func TestRunServesHealthz(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 run 退出超时")
+	}
+}
+
+// TestRunRetentionSweeper（服务端可观测与保留清理车道）：保留清理循环——启动即
+// 扫一轮（不待首个 tick）：outbox delivered>7d / dead>30d 删（dead 删除前审计
+// outbox_dead_purged）、closed 会话>30d 整行删；窗口内行与 pending/open 保留；
+// ctx 取消后干净退出。
+func TestRunRetentionSweeper(t *testing.T) {
+	db, err := sqlite.OpenMem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// 种子：超期终态行（应删）+ 窗口内/活行（应留）。
+	seed := func(commandID, status string, updatedAt time.Time) {
+		tx, err := db.Tx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := db.EnqueueOutbox(ctx, tx, "exec_result", commandID, map[string]any{"commandId": commandID}, updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(ctx, `UPDATE outbox SET status=?, updated_at=? WHERE command_id=?`,
+			status, updatedAt.UnixMilli(), commandID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("cmd-old-delivered", "delivered", now.Add(-8*24*time.Hour))
+	seed("cmd-fresh-delivered", "delivered", now.Add(-1*time.Hour))
+	seed("cmd-old-dead", "dead", now.Add(-31*24*time.Hour))
+	seed("cmd-mid-dead", "dead", now.Add(-8*24*time.Hour))
+	seed("cmd-pending", "pending", now.Add(-40*24*time.Hour))
+	if err := db.CreateSession(ctx, sqlite.Session{
+		SessionID: "sess-sweeper-old", DeviceID: "dev-sweeper",
+		ServerX25519Private: "priv", ServerX25519Public: "pub", DeviceX25519Public: "devpub",
+		CreatedAt: now.Add(-31 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CloseSession(ctx, "sess-sweeper-old", now.Add(-31*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateSession(ctx, sqlite.Session{
+		SessionID: "sess-sweeper-open", DeviceID: "dev-sweeper",
+		ServerX25519Private: "priv", ServerX25519Public: "pub", DeviceX25519Public: "devpub",
+		CreatedAt: now.Add(-40 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.OpenSession(ctx, "sess-sweeper-open", 0, 1, 0, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// 启动轮应立即清理（不待首个 tick）；周期取极小值顺带验证循环可重入。
+	sweepCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runRetentionSweeper(sweepCtx, db, log.New(io.Discard, "", 0), 10*time.Millisecond) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rows, err := db.QueryDump(ctx, `SELECT status, COUNT(*) FROM outbox GROUP BY status`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts := map[string]string{}
+		for _, r := range rows {
+			counts[r[0]] = r[1]
+		}
+		oldClosed, err := db.QueryDump(ctx, `SELECT COUNT(*) FROM device_sessions WHERE session_id='sess-sweeper-old'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counts["delivered"] == "1" && counts["dead"] == "1" && oldClosed[0][0] == "0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("启动轮应清理超期终态行：outbox=%v oldClosed=%v", counts, oldClosed)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// 窗口内/活行保留。
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM outbox WHERE status='delivered' AND command_id='cmd-fresh-delivered'`,
+		`SELECT COUNT(*) FROM outbox WHERE status='dead' AND command_id='cmd-mid-dead'`,
+		`SELECT COUNT(*) FROM outbox WHERE status='pending'`,
+		`SELECT COUNT(*) FROM device_sessions WHERE session_id='sess-sweeper-open'`,
+	} {
+		rows, err := db.QueryDump(ctx, q)
+		if err != nil || rows[0][0] != "1" {
+			t.Fatalf("窗口内/活行应保留：%q → rows=%v err=%v", q, rows, err)
+		}
+	}
+	// dead 清理审计恰一条（启动轮落；后续轮 dead=0 不重复）。
+	audit, err := db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='outbox_dead_purged'`)
+	if err != nil || audit[0][0] != "1" {
+		t.Fatalf("dead 清理审计应恰一条：rows=%v err=%v", audit, err)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ctx 取消后应返回 context.Canceled，got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待清理循环退出超时")
 	}
 }
