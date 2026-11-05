@@ -145,7 +145,12 @@ class FixtureSuiteTest {
         val names = FixtureFiles.allFixtureNames()
         // T3.4（spec v1.2.0 变更记录）新增控制帧夹具：session-hello-ack.go-actual +
         // control-payload.901~904 五件（正例）/ 五件反例
+        // 2026-11-05 契约冻结车道（docs/16 §指令字段契约冻结）登记数据文件：
+        // admin-command-examples.json（管理台目录 52 条 example 跨语言交换夹具，
+        // 单一事实源=server catalog.go；Go TestCatalogExamplesFixtureInSync 锁同步、
+        // Kotlin CatalogExampleContractTest 消费——非 wire 信封夹具，不入 schema 校验）。
         val expected = setOf(
+            "admin-command-examples.json",
             "command-envelope.encrypted.json",
             "command-envelope.exec-result.json",
             "command-envelope.heartbeat.json",

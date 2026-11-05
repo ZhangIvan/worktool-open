@@ -66,15 +66,51 @@ class IntentNormalizerTest {
         assertEquals("您好，WorkTool-Open 协议测试消息", intent.content)
     }
 
-    // ---- 203 载荷校验 ----
+    // ---- 203 载荷校验（2026-11-05 契约冻结：目标字段 canonical=titleList，
+    //      候选名 targetRoom 为迁移期只读别名；多元素 titleList 显式拒绝） ----
 
     @Test
     fun `203-缺目标会话或缺正文均Invalid`() {
         val noTarget = bean(203, extras = mapOf("receivedContent" to JsonPrimitive("hi")))
         assertTrue(normalizer.normalize(noTarget) is NormalizedIntent.Invalid)
 
-        val noContent = bean(203, extras = mapOf("targetRoom" to JsonPrimitive("群")))
+        val noContent = bean(203, extras = mapOf("titleList" to JsonArray(listOf(JsonPrimitive("群")))))
         assertTrue(normalizer.normalize(noContent) is NormalizedIntent.Invalid)
+    }
+
+    @Test
+    fun `203-titleList主读且多元素显式拒绝`() {
+        val ok = normalizer.normalize(
+            bean(
+                203,
+                extras = mapOf(
+                    "titleList" to JsonArray(listOf(JsonPrimitive("外部群测试群"))),
+                    "receivedContent" to JsonPrimitive("通知"),
+                ),
+            ),
+        ) as NormalizedIntent.Valid
+        assertEquals("外部群测试群", (ok.intent as CommandIntent.SendText).targetRoom)
+
+        val alias = normalizer.normalize(
+            bean(
+                203,
+                extras = mapOf(
+                    "targetRoom" to JsonPrimitive("外部群测试群"),
+                    "receivedContent" to JsonPrimitive("通知"),
+                ),
+            ),
+        ) as NormalizedIntent.Valid
+        assertEquals("候选别名 targetRoom 迁移期可读", "外部群测试群", (alias.intent as CommandIntent.SendText).targetRoom)
+
+        val multi = bean(
+            203,
+            extras = mapOf(
+                "titleList" to JsonArray(listOf(JsonPrimitive("群一"), JsonPrimitive("群二"))),
+                "receivedContent" to JsonPrimitive("通知"),
+            ),
+        )
+        val invalid = normalizer.normalize(multi)
+        assertTrue("多元素 titleList 应 Invalid（203 单目标语义）", invalid is NormalizedIntent.Invalid)
     }
 
     @Test
@@ -82,7 +118,7 @@ class IntentNormalizerTest {
         val b = bean(
             203,
             extras = mapOf(
-                "targetRoom" to JsonPrimitive("外部群测试群"),
+                "titleList" to JsonArray(listOf(JsonPrimitive("外部群测试群"))),
                 "receivedContent" to JsonPrimitive("通知"),
             ),
             atList = listOf("张三", "李四"),
@@ -97,12 +133,12 @@ class IntentNormalizerTest {
     // ---- 206/207/225 ----
 
     @Test
-    fun `206-群名必填成员可选`() {
+    fun `206-群名必填成员可选（名单冻结selectList）`() {
         val ok = bean(
             206,
             extras = mapOf(
                 "groupName" to JsonPrimitive("客户交付群"),
-                "groupMembers" to JsonArray(listOf(JsonPrimitive("张三"))),
+                "selectList" to JsonArray(listOf(JsonPrimitive("张三"))),
                 "announcement" to JsonPrimitive("公告"),
             ),
         )
@@ -116,34 +152,36 @@ class IntentNormalizerTest {
     }
 
     @Test
-    fun `207-至少一项变更否则Invalid`() {
+    fun `207-至少一项变更否则Invalid（目标冻结groupName）`() {
         val ok = bean(
             207,
             extras = mapOf(
-                "targetRoom" to JsonPrimitive("外部群测试群"),
+                "groupName" to JsonPrimitive("外部群测试群"),
                 "announcement" to JsonPrimitive("新公告"),
                 "addMembers" to JsonArray(listOf(JsonPrimitive("张三"))),
             ),
         )
         val intent = (normalizer.normalize(ok) as NormalizedIntent.Valid).intent as CommandIntent.UpdateGroup
+        assertEquals("外部群测试群", intent.targetGroup)
         assertEquals("新公告", intent.announcement)
         assertEquals(listOf("张三"), intent.addMembers)
 
-        val noChange = bean(207, extras = mapOf("targetRoom" to JsonPrimitive("外部群测试群")))
+        val noChange = bean(207, extras = mapOf("groupName" to JsonPrimitive("外部群测试群")))
         val invalid = normalizer.normalize(noChange)
         assertTrue(invalid is NormalizedIntent.Invalid)
         assertTrue((invalid as NormalizedIntent.Invalid).field.contains("announcement"))
     }
 
     @Test
-    fun `225-成员与备注可取Friend已还原子结构`() {
+    fun `225-目标冻结groupName且成员可取Friend已还原子结构`() {
         val b = bean(
             225,
-            extras = mapOf("targetRoom" to JsonPrimitive("外部群测试群")),
+            extras = mapOf("groupName" to JsonPrimitive("外部群测试群")),
             friend = Friend(name = "王五", markName = "重点客户", tagList = listOf("VIP")),
         )
         val intent =
             (normalizer.normalize(b) as NormalizedIntent.Valid).intent as CommandIntent.ModifyGroupMemberInfo
+        assertEquals("外部群测试群", intent.targetGroup)
         assertEquals("王五", intent.memberName)
         assertEquals("重点客户", intent.markName)
         assertEquals(listOf("VIP"), intent.tagList)

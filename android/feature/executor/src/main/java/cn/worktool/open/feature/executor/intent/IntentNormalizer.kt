@@ -617,9 +617,20 @@ class IntentNormalizer(
     }
 
     private fun normalizeSendText(bean: WeworkMessageBean): NormalizedIntent {
-        val target = bean.extraString(PayloadFields.TARGET_ROOM)
-        if (target.isNullOrBlank()) {
-            return invalid(bean.type, PayloadFields.TARGET_ROOM, "必填且非空")
+        // 203 目标字段冻结（2026-11-05 契约冻结车道）：canonical=titleList
+        // （upstream api-23520034「titleList:string[]，建议单目标」= compat/prevalidate
+        // 必填表 = 管理台 catalog example 同名）；候选名 targetRoom 降级为迁移期
+        // 只读别名（protocol 金标夹具 hmac-vector 仍携候选名，重算金标向量不在本
+        // 车道；T3.2 apifox 冒烟后撤别名）。多元素 titleList 显式拒绝不静默截断：
+        // 203=单目标语义（上游建议单目标防重试重发），批量走 229/238。
+        val targets = bean.stringListExtra(PayloadFields.TITLE_LIST)
+            .filter { it.isNotBlank() }
+            .ifEmpty { bean.extraString(PayloadFields.TARGET_ROOM)?.takeIf { it.isNotBlank() }?.let { listOf(it) } ?: emptyList() }
+        if (targets.isEmpty()) {
+            return invalid(bean.type, PayloadFields.TITLE_LIST, "必填且非空（候选别名 targetRoom 迁移期兼容）")
+        }
+        if (targets.size > 1) {
+            return invalid(bean.type, PayloadFields.TITLE_LIST, "203 为单目标语义（上游建议单目标防重试重发），多目标请用 229/238")
         }
         val content = bean.extraString(PayloadFields.RECEIVED_CONTENT)
         if (content.isNullOrBlank()) {
@@ -627,7 +638,7 @@ class IntentNormalizer(
         }
         return NormalizedIntent.Valid(
             CommandIntent.SendText(
-                targetRoom = target,
+                targetRoom = targets.single(),
                 content = content,
                 atList = (bean.atList ?: bean.at ?: emptyList()).filter { it.isNotBlank() },
             ),
@@ -645,16 +656,24 @@ class IntentNormalizer(
         return NormalizedIntent.Valid(
             CommandIntent.InitGroup(
                 groupName = name,
-                members = bean.stringListExtra(PayloadFields.GROUP_MEMBERS),
+                // 206 成员名单字段冻结（2026-11-05）：canonical=selectList
+                // （upstream initGroup「selectList 添加群成员名称列表」= catalog/prevalidate
+                // 同名）。此前读候选名 groupMembers 与目录漂移——目录表单按 selectList
+                // 提交被端侧静默忽略（拉人名单丢失），本迁移即修该消费缺口。
+                members = bean.stringListExtra(PayloadFields.SELECT_LIST),
                 announcement = announcement?.takeIf { it.isNotBlank() },
             ),
         )
     }
 
     private fun normalizeUpdateGroup(bean: WeworkMessageBean): NormalizedIntent {
-        val target = bean.extraString(PayloadFields.TARGET_ROOM)
+        // 207 目标字段冻结（2026-11-05）：canonical=groupName（upstream updateGroup
+        // 「groupName 待修改的群」= catalog/其余群指令执行器同名；候选名 targetRoom
+        // 降级为迁移期只读别名，与 206 同型）。
+        val target = bean.extraString(PayloadFields.GROUP_NAME)
+            ?: bean.extraString(PayloadFields.TARGET_ROOM)
         if (target.isNullOrBlank()) {
-            return invalid(bean.type, PayloadFields.TARGET_ROOM, "必填且非空")
+            return invalid(bean.type, PayloadFields.GROUP_NAME, "必填且非空（候选别名 targetRoom 迁移期兼容）")
         }
         val announcement = bean.extraString(PayloadFields.ANNOUNCEMENT)?.takeIf { it.isNotBlank() }
         val remark = bean.extraString(PayloadFields.GROUP_REMARK)?.takeIf { it.isNotBlank() }
@@ -673,9 +692,13 @@ class IntentNormalizer(
     }
 
     private fun normalizeModifyMember(bean: WeworkMessageBean): NormalizedIntent {
-        val target = bean.extraString(PayloadFields.TARGET_ROOM)
+        // 225 目标字段冻结（2026-11-05）：canonical=groupName（upstream
+        // modifyGroupMemberInfo「groupName 外部群」= catalog 同名；候选名 targetRoom
+        // 降级为迁移期只读别名，与 206/207 同型）。
+        val target = bean.extraString(PayloadFields.GROUP_NAME)
+            ?: bean.extraString(PayloadFields.TARGET_ROOM)
         if (target.isNullOrBlank()) {
-            return invalid(bean.type, PayloadFields.TARGET_ROOM, "必填且非空")
+            return invalid(bean.type, PayloadFields.GROUP_NAME, "必填且非空（候选别名 targetRoom 迁移期兼容）")
         }
         val member = bean.extraString(PayloadFields.MEMBER_NAME)
             ?: bean.friend?.name

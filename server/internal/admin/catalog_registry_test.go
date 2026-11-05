@@ -209,8 +209,9 @@ func TestCatalogRawMsgAnnotations(t *testing.T) {
 // 与 example 值形态一致（string/array/object/boolean/number；空串 = 示例缺字段
 // 即注册表缺陷）。
 func TestCatalogSchemaMatrix(t *testing.T) {
-	// 类型词表 = example 值形态全集（string/array/object/boolean/number；202
-	// loop.on=false 即 boolean——能力矩阵如实导出，不折损为 string）。
+	// 类型词表 = example 值形态全集（string/array/object/boolean/number——
+	// 能力矩阵如实导出，不折损为 string；2026-11-05 契约冻结后现表内形态仅
+	// string/array，boolean/number 保留为合法形态防词表收窄误伤后续条目）。
 	okKinds := map[string]bool{"string": true, "array": true, "object": true, "boolean": true, "number": true}
 	for _, c := range adminCommandCatalog {
 		var ex map[string]json.RawMessage

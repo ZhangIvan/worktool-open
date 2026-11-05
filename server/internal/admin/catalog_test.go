@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -39,5 +40,57 @@ func TestAdminCommandCatalogData(t *testing.T) {
 	}
 	if len(adminCommandCatalog) != 52 {
 		t.Fatalf("目录应与 openapi 注册表同面 52 条，实际 %d", len(adminCommandCatalog))
+	}
+}
+
+// TestCatalogExamplesFixtureInSync（2026-11-05 契约冻结车道）：目录 52 条 example
+// 与跨语言交换夹具 protocol/fixtures/admin-command-examples.json 逐字节一致。
+// 夹具是 Kotlin 侧 CatalogExampleContractTest（每条 example 经端侧执行器载荷解析
+// 路径 IntentNormalizer 断言可消费）的唯一数据源——本测试锁「catalog 即夹具」，
+// 防两端各改一份后目录示例再次漂移出端侧可消费面。type 集合相等 + example 字节
+// 级相等 + name 一致（夹具仅承载展示名，防目录改名未同步）。
+func TestCatalogExamplesFixtureInSync(t *testing.T) {
+	raw, err := os.ReadFile("../../../protocol/fixtures/admin-command-examples.json")
+	if err != nil {
+		t.Fatalf("读取跨语言交换夹具失败（admin-command-examples.json 须与 catalog 同步维护）: %v", err)
+	}
+	var fixture struct {
+		Commands []struct {
+			Type    int    `json:"type"`
+			Name    string `json:"name"`
+			Example string `json:"example"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("夹具非法 JSON: %v", err)
+	}
+	if len(fixture.Commands) != len(adminCommandCatalog) {
+		t.Fatalf("夹具条数 %d ≠ 目录 %d", len(fixture.Commands), len(adminCommandCatalog))
+	}
+	byType := map[int]adminCommandEntry{}
+	for _, c := range adminCommandCatalog {
+		byType[c.Type] = c
+	}
+	seen := map[int]bool{}
+	for _, fc := range fixture.Commands {
+		c, ok := byType[fc.Type]
+		if !ok {
+			t.Fatalf("夹具 type=%d 不在目录", fc.Type)
+		}
+		if seen[fc.Type] {
+			t.Fatalf("夹具 type=%d 重复", fc.Type)
+		}
+		seen[fc.Type] = true
+		if fc.Example != c.Example {
+			t.Fatalf("type=%d 夹具 example 与目录漂移：\n夹具=%s\n目录=%s", fc.Type, fc.Example, c.Example)
+		}
+		if fc.Name != c.Name {
+			t.Fatalf("type=%d 夹具 name=%q ≠ 目录 %q", fc.Type, fc.Name, c.Name)
+		}
+	}
+	for _, c := range adminCommandCatalog {
+		if !seen[c.Type] {
+			t.Fatalf("目录 type=%d 未入夹具（Kotlin 侧消费断言缺该条）", c.Type)
+		}
 	}
 }

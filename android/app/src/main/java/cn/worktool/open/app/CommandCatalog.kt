@@ -58,7 +58,7 @@ object CommandCatalog {
             primary = MessageTypes.SEND_MESSAGE,
             all = listOf(MessageTypes.SEND_MESSAGE),
             risk = RiskLevels.of(MessageTypes.SEND_MESSAGE),
-            note = "targetRoom（目标会话名，必填）· receivedContent（正文，必填）· atList（@名单，可空）",
+            note = "titleList（目标会话名单，单元素必填；候选别名 targetRoom 迁移期兼容）· receivedContent（正文，必填）· atList（@名单，可空）",
             lastOutcomeByType = lastOutcomeByType,
         ),
         row(
@@ -66,7 +66,7 @@ object CommandCatalog {
             primary = MessageTypes.INIT_GROUP,
             all = listOf(MessageTypes.INIT_GROUP),
             risk = RiskLevels.of(MessageTypes.INIT_GROUP),
-            note = "groupName（新群名，必填）· groupMembers（拉人名单，可空）· announcement（群公告，可空）",
+            note = "groupName（新群名，必填）· selectList（拉人名单，可空）· announcement（群公告，可空）",
             lastOutcomeByType = lastOutcomeByType,
         ),
         row(
@@ -74,7 +74,7 @@ object CommandCatalog {
             primary = MessageTypes.UPDATE_GROUP,
             all = listOf(MessageTypes.UPDATE_GROUP),
             risk = RiskLevels.of(MessageTypes.UPDATE_GROUP),
-            note = "targetRoom（目标群名）· announcement（公告）· groupRemark（备注）· addMembers（拉人名单；拉人=L1）",
+            note = "groupName（目标群名；候选别名 targetRoom 迁移期兼容）· announcement（公告）· groupRemark（备注）· addMembers（拉人名单；拉人=L1）",
             lastOutcomeByType = lastOutcomeByType,
         ),
         row(
@@ -82,7 +82,7 @@ object CommandCatalog {
             primary = MessageTypes.MODIFY_GROUP_MEMBER_INFO,
             all = listOf(MessageTypes.MODIFY_GROUP_MEMBER_INFO),
             risk = RiskLevels.of(MessageTypes.MODIFY_GROUP_MEMBER_INFO),
-            note = "targetRoom（目标群名，必填）· memberName（成员名，必填）· markName（备注）· tagList（标签）",
+            note = "groupName（目标群名，必填；候选别名 targetRoom 迁移期兼容）· memberName（成员名，必填）· markName（备注）· tagList（标签）",
             lastOutcomeByType = lastOutcomeByType,
         ),
         row(

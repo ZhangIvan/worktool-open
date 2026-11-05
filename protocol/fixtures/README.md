@@ -24,6 +24,7 @@
 | `control-payload.904-replay.json` | 同上 | 904 端→云 journal 补报（entries 形状 = Go scheduler.JournalEntry） |
 | `control-payload.904-request.json` | 同上 | 904 云→端补报请求（Go sendJournalRequest 现产形态基准） |
 | `hmac-vector.json` | —（数据文件） | **金标准向量**：deviceTokenTest（伪造）+ 每帧 seq/inputString/payloadDigest/期望 hmac（输入式 `commandId\|eventId\|seq\|ts\|nonce\|payloadDigest`，AUD-03 C-9）；`negative[]` 为篡改 seq 必败反例。L1/L2 实现须逐字节复算一致 |
+| `admin-command-examples.json` | —（数据文件） | 管理台指令目录 52 条 example 的**跨语言交换夹具**（2026-11-05 契约冻结车道，docs/16 §指令字段契约冻结）：单一事实源=server/internal/admin/catalog.go（字节级同源，同步由 Go TestCatalogExamplesFixtureInSync 锁定）；消费=Kotlin CatalogExampleContractTest（每条 example 经端侧 IntentNormalizer 断言可消费）。全部为测试合成值 |
 
 ## 反例清单（必须被拒绝）
 
@@ -42,5 +43,5 @@
 
 ## 冻结状态标注
 
-- `targetRoom` / `receivedContent` 为**候选字段名**（spec §4.4 待 T3.2 apifox 冒烟冻结），冻结前不得作为 v1 互通依据；夹具中用于载荷示例。
+- `targetRoom` / `receivedContent` 为**候选字段名**（spec §4.4 待 T3.2 apifox 冒烟冻结），冻结前不得作为 v1 互通依据；夹具中用于载荷示例。2026-11-05 契约冻结车道：管理台提交面与端侧主读字段已冻结为 upstream 契约名（203=titleList、206 名单=selectList、207/225 目标=groupName，见 docs/16 与 catalog.go 决策注释）；本目录两个 203 金标夹具（HMAC 向量字节）仍保留候选名 `targetRoom` 作为 transport 层载荷示例，端侧以迁移期只读别名兼容，别名撤销随 T3.2。
 - 所有密钥类值（deviceTokenTest、ed25519PublicKey、x25519EphemeralPublicKey、encryptedList 密文）均为**伪造测试值**，非任何真实系统凭据。

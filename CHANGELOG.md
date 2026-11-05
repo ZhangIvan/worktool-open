@@ -5,6 +5,28 @@
 
 ## [Unreleased]
 
+### 指令字段契约冻结（2026-11-05 契约冻结车道）
+
+- **管理台目录 52 条 example × 端侧执行器载荷解析路径契约冻结**：逐条审计出 22 条
+  漂移并全部处置（决策理由逐条登记 catalog.go 注释）——
+  - catalog example/required 修 19 条：202（loop.on→loopEnabled）、204/205（补
+    receivedName/originalContent 引用定位键）、205/227/228（弃 originTitle 幻影字段，
+    upstream 契约=titleList 源会话+messageList 原文定位键+nameList 接收人）、
+    208/209（fileUrl→objectName，微盘推送不下载）、218（补 objectName+fileType）、
+    210/211/224（补执行器必填 objectName/extraText）、223（corpName→objectName）、
+    229/230（titleList/receivedContent 错位→weworkMessageList+nameList）、
+    238（receivedContent=JSON 数组字符串值形态）、511/514（补 objectName 必填标注，
+    514 弃 messageId 幻影字段）；
+  - 端侧执行器迁移 4 指令（catalog/upstream 同名优先）：203 目标 targetRoom→
+    **titleList 主读**（多元素显式拒绝，单目标语义；候选别名迁移期兼容）、206 成员
+    groupMembers→**selectList 主读**（修复目录 selectList 提交被端侧静默忽略的
+    拉人名单丢失缺陷）、207/225 目标 targetRoom→**groupName 主读**；
+  - 机器锁定：跨语言交换夹具 protocol/fixtures/admin-command-examples.json
+    （与 catalog 字节级同源，`TestCatalogExamplesFixtureInSync` 锁同步）+ Kotlin
+    `CatalogExampleContractTest`（52 条 example 经 `IntentNormalizer` 全量可消费 +
+    第二批表单八指令逐字段深断言）。**管理台批量表单第二批（204/205/218/227/228/
+    229/230/238）自此可按 catalog 消费**（docs/16 §指令字段契约冻结）。
+
 ### v0.1.0-rc2（2026-11-04，发布候选——选择器真机校准批 + 管理台 v3 设计稿对齐整改）
 
 > 候选版内容汇总（未打 tag）。端侧执行面口径不变：支持矩阵仅 501/502 真机翻格 ✅；

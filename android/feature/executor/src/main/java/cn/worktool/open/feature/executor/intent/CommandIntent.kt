@@ -670,9 +670,17 @@ sealed interface CommandIntent {
  * 冒烟确认，冻结前不得作为 v1 互通依据）；`at`/`atList`/`extraText`/`friend` 为已还原
  * 字段（spec §4.4「已还原」行）。206/207/225 的正文/名单字段同样未冻结（spec §9 Q1），
  * 本对象中的候选名 = WorkTool-Open 端侧暂定，冻结后如需改名仅调整 [IntentNormalizer]。
+ *
+ * 2026-11-05 契约冻结车道（docs/16 §指令字段契约冻结）：203/206/207/225 主读字段
+ * 已冻结为 upstream openapi 契约名（203=titleList、206 名单=selectList、207/225
+ * 目标=groupName）——见 [IntentNormalizer] 各 normalize* 决策注释；
+ * [TARGET_ROOM]/[GROUP_MEMBERS] 降级为迁移期只读别名/退役候选名。
  */
 object PayloadFields {
-    /** 目标会话/群名（候选，203/207/225 复用）。 */
+    /**
+     * 目标会话/群名（203/207/225 曾用候选名；2026-11-05 起三指令主读
+     * titleList/groupName，本名降级为迁移期只读别名，T3.2 冒烟后撤）。
+     */
     const val TARGET_ROOM = "targetRoom"
 
     /** 指令正文（候选，203）。 */
@@ -681,7 +689,7 @@ object PayloadFields {
     /** 新群名（候选，206）。 */
     const val GROUP_NAME = "groupName"
 
-    /** 建群拉人名单（候选，206；元素为成员展示名）。 */
+    /** 建群拉人名单（206 曾用候选名；2026-11-05 起主读 [SELECT_LIST]，本名退役不再读取）。 */
     const val GROUP_MEMBERS = "groupMembers"
 
     /** 群公告（候选，206/207；与已还原 extraText 二选一，见 [IntentNormalizer]）。 */
@@ -707,7 +715,7 @@ object PayloadFields {
 
     // ---- 对等计划扩展批（docs/10 §B）候选字段名（同样待冻结口径） ----
 
-    /** 目标会话/接收人数组（204/205/208/209/218/221/224/226/227/229/230/235/238/210/211 通例）。 */
+    /** 目标会话/接收人数组（203/204/205/208/209/218/221/224/226/227/229/230/235/238/210/211 通例；203 于 2026-11-05 冻结入列）。 */
     const val TITLE_LIST = "titleList"
 
     /** 接收人数组（205/227/228/229/230；无 titleList 的批次指令由本字段承担目标）。 */
