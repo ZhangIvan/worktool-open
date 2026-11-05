@@ -810,6 +810,51 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     return InstallReceipt(metadata, public, private)
 
 
+def preflight_field_diagnostics(result, expected):
+    """Fixed categories only, derived from the already-returned first result.
+
+    This is deliberately NOT an acceptance predicate. The existing result ==
+    expected comparison below remains the sole pristine-value decision. No SQL,
+    observed values, names, counts, unexpected keys or exception text escapes.
+    """
+    keys = ("version", "session_user", "current_user", "database_absent",
+            "roles_absent", "other_clients", "bootstrap_superuser", "event_triggers")
+    checks = {key: "INVALID_SHAPE" for key in keys}
+    shape = {key: "INVALID_SHAPE" for key in ("root", "row_count", "row", "fields")}
+    if type(result) is list:
+        shape["root"] = "MATCH"
+        if len(result) == 1:
+            shape["row_count"] = "MATCH"
+            if type(result[0]) is dict:
+                shape["row"] = "MATCH"
+                row = result[0]
+                if set(row) == set(keys):
+                    shape["fields"] = "MATCH"
+                for key in keys:
+                    if key in row and type(row[key]) is type(expected[0][key]):
+                        checks[key] = "MATCH" if row[key] == expected[0][key] else "MISMATCH"
+    if "INVALID_SHAPE" in shape.values() or "INVALID_SHAPE" in checks.values():
+        classification = "INVALID_SHAPE"
+    elif "MISMATCH" in checks.values():
+        classification = "VALUE_MISMATCH"
+    else:
+        classification = "VALUE_MATCH"
+    return {"format": "worktool-registration-preflight-fields-v1",
+            "authority": "DIAGNOSTIC_ONLY", "classification": classification,
+            "shape": shape, "checks": checks}
+
+
+def _record_preflight_diagnostics(executor, result, expected):
+    # An absent/unavailable diagnostic sink must never change the old decision,
+    # add a call to PostgreSQL, retry an action, or expose an exception message.
+    try:
+        recorder = getattr(executor, "record_preflight_diagnostics", None)
+        if callable(recorder):
+            recorder(preflight_field_diagnostics(result, expected))
+    except Exception:
+        pass
+
+
 def provision(executor, bundle, database, bootstrap_role, role_passwords):
     """One attempt, no retries/fallback or autonomous process/role discovery.
 
@@ -827,6 +872,7 @@ def provision(executor, bundle, database, bootstrap_role, role_passwords):
             raise ProvisionError("PROVISION_EXECUTION_FAILED_STOP_NO_RETRY") from None
         if step.phase == "bootstrap_preflight":
             expected = [{"version":VERSION,"session_user":bootstrap_role,"current_user":bootstrap_role,"database_absent":True,"roles_absent":True,"other_clients":0,"bootstrap_superuser":True,"event_triggers":0}]
+            _record_preflight_diagnostics(executor, result, expected)
             require(result == expected, "BOOTSTRAP_NOT_PRISTINE")
         elif step.query:
             catalog = result

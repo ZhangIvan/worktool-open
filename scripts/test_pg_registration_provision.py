@@ -263,5 +263,118 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn('CHECK (unverified_deparser_text)',json.dumps(receipt.private_catalog_receipt))
 
 
+class PreflightDiagnosticTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.expected = [dict(version=P.VERSION, session_user=ADMIN, current_user=ADMIN,
+            database_absent=True, roles_absent=True, other_clients=0,
+            bootstrap_superuser=True, event_triggers=0)]
+        cls.bundle = P.load_and_verify_sources(ROOT)
+
+    def test_exact_match_is_fixed_category_only(self):
+        d = P.preflight_field_diagnostics(copy.deepcopy(self.expected), self.expected)
+        self.assertEqual(set(d), {'format', 'authority', 'classification', 'shape', 'checks'})
+        self.assertEqual(d['format'], 'worktool-registration-preflight-fields-v1')
+        self.assertEqual(d['authority'], 'DIAGNOSTIC_ONLY')
+        self.assertEqual(d['classification'], 'VALUE_MATCH')
+        self.assertEqual(set(d['checks']), set(self.expected[0]))
+        self.assertEqual(set(d['shape']), {'root','row_count','row','fields'})
+        self.assertEqual(set(d['checks'].values()), {'MATCH'})
+        self.assertNotIn(ADMIN, json.dumps(d))
+        self.assertNotIn(str(P.VERSION), json.dumps(d))
+
+    def test_every_known_field_mismatch_has_only_its_fixed_key(self):
+        for key, value in self.expected[0].items():
+            raw = copy.deepcopy(self.expected)
+            raw[0][key] = (not value if type(value) is bool else value + 1
+                          if type(value) is int else 'postgresql://secret-user:private-password@private-host')
+            d = P.preflight_field_diagnostics(raw, self.expected)
+            with self.subTest(field=key):
+                self.assertEqual(d['classification'], 'VALUE_MISMATCH')
+                self.assertEqual(d['checks'][key], 'MISMATCH')
+                self.assertTrue(all(status == 'MATCH' for name,status in d['checks'].items() if name != key))
+                for secret in ('secret-user', 'private-password', 'private-host', ADMIN):
+                    self.assertNotIn(secret, json.dumps(d))
+
+    def test_malformed_shapes_and_unknown_keys_are_never_echoed(self):
+        secret = 'UNREVIEWED_SQL_PASSWORD_DSN'
+        cases = [None, False, 1, secret, {}, [], [None], [secret], [[], {}],
+                 [self.expected[0], self.expected[0]],
+                 [{**self.expected[0], secret: secret}],
+                 [{k:v for k,v in self.expected[0].items() if k != 'version'}]]
+        for raw in cases:
+            d = P.preflight_field_diagnostics(raw, self.expected)
+            self.assertEqual(d['classification'], 'INVALID_SHAPE')
+            self.assertNotIn(secret, json.dumps(d))
+            self.assertNotIn(ADMIN, json.dumps(d))
+            self.assertLess(len(json.dumps(d)), 1024)
+
+    def test_all_field_type_errors_are_redacted(self):
+        for key in self.expected[0]:
+            for value in (None, [], {}, 'private-password' if type(self.expected[0][key]) is not str else 7):
+                raw = copy.deepcopy(self.expected)
+                raw[0][key] = value
+                d = P.preflight_field_diagnostics(raw, self.expected)
+                with self.subTest(key=key, value_type=type(value).__name__):
+                    self.assertEqual(d['classification'], 'INVALID_SHAPE')
+                    self.assertEqual(d['checks'][key], 'INVALID_SHAPE')
+                    self.assertNotIn('private-password', json.dumps(d))
+
+    def test_diagnostic_does_not_replace_python_equality_acceptance(self):
+        # Preserve the existing predicate exactly, including its Python equality
+        # semantics. A diagnostic type warning cannot revoke an existing match.
+        raw = copy.deepcopy(self.expected)
+        raw[0]['other_clients'] = False
+        self.assertTrue(raw == self.expected)
+        self.assertEqual(P.preflight_field_diagnostics(raw, self.expected)['classification'], 'INVALID_SHAPE')
+
+    def test_sink_failure_cannot_change_existing_success_or_error(self):
+        expected = self.expected
+        class Sink(FakeExecutor):
+            def __init__(self, bundle, result):
+                super().__init__(bundle)
+                self.result = result
+                self.diagnostics = []
+            def execute(self, step):
+                if step.phase == 'bootstrap_preflight':
+                    self.calls.append(step)
+                    return self.result
+                return super().execute(step)
+            def record_preflight_diagnostics(self, diagnostic):
+                self.diagnostics.append(diagnostic)
+                raise RuntimeError('private password SQL error must not escape')
+        good = Sink(self.bundle, copy.deepcopy(expected))
+        receipt = P.provision(good, self.bundle, DB, ADMIN, PASSWORDS)
+        self.assertEqual(receipt.public_evidence['acceptance_tests'], 'NOT_RUN')
+        self.assertEqual(len(good.calls), 18)
+        self.assertEqual(len(good.diagnostics), 1)
+        bad_result = copy.deepcopy(expected)
+        bad_result[0]['other_clients'] = 1
+        bad = Sink(self.bundle, bad_result)
+        with self.assertRaisesRegex(P.ProvisionError, '^BOOTSTRAP_NOT_PRISTINE$'):
+            P.provision(bad, self.bundle, DB, ADMIN, PASSWORDS)
+        self.assertEqual(len(bad.calls), 1)
+        self.assertEqual(bad.diagnostics[0]['checks']['other_clients'], 'MISMATCH')
+
+    def test_executor_failure_retains_original_fixed_error_and_no_extra_call(self):
+        class Sink(FakeExecutor):
+            def record_preflight_diagnostics(self, diagnostic):
+                raise AssertionError('No value diagnostic without returned result')
+        executor = Sink(self.bundle, fail_phase='bootstrap_preflight')
+        with self.assertRaisesRegex(P.ProvisionError, '^PROVISION_EXECUTION_FAILED_STOP_NO_RETRY$'):
+            P.provision(executor, self.bundle, DB, ADMIN, PASSWORDS)
+        self.assertEqual(len(executor.calls), 1)
+
+    def test_existing_acceptance_expression_is_unchanged(self):
+        import ast
+        tree = ast.parse(Path(SPEC.origin).read_text())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'provision')
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                 and n.func.id == 'require' and len(n.args) == 2
+                 and isinstance(n.args[1], ast.Constant) and n.args[1].value == 'BOOTSTRAP_NOT_PRISTINE']
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(ast.dump(calls[0].args[0]), ast.dump(ast.parse('result == expected', mode='eval').body))
+
+
 if __name__ == '__main__':
     unittest.main()

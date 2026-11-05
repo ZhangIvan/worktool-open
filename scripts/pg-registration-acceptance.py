@@ -38,6 +38,14 @@ ROLE_NAMES = ('wt_registration_lab_owner', 'wt_registration_lab_issuer',
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 ENV_ALLOW = 'one-reviewed-synthetic-pending-only-run-no-retry'
 MAX_OUTPUT = 2 << 20
+PROVISION_PHASES = ('bootstrap_preflight', 'bootstrap_roles', 'bootstrap_database', 'owner_schema') + tuple(
+    'migration_%04d' % number for number in range(1, 11)) + ('registry', 'boundary', 'synthetic_seed', 'catalog_readback')
+PROVISION_DIAGNOSTIC_CLASSES = frozenset(('SQL_PROCESS_PENDING', 'SQL_PROCESS_ACKNOWLEDGED',
+    'SQL_PROCESS_FAILED', 'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_OUTPUT_LIMIT',
+    'INTERRUPTED', 'JSON_DECODE_FAILED', 'JSON_SHAPE_INVALID', 'QUERY_RESULT_RETURNED',
+    'UNEXPECTED_NONQUERY_OUTPUT', 'EMPTY_RESULT_ACKNOWLEDGED'))
+PREFLIGHT_CHECKS = ('version', 'session_user', 'current_user', 'database_absent', 'roles_absent',
+                    'other_clients', 'bootstrap_superuser', 'event_triggers')
 PUBLIC_CODES = frozenset(('OK', 'NOT_RUN', 'HOSTED_CI_ONLY', 'INVALID_IDENTITY',
     'IDENTITY_MISMATCH', 'RUN_ATTEMPT_REFUSED', 'UNSAFE_PATH', 'UNSAFE_FILE',
     'SOURCE_PIN_MISMATCH', 'TOOLCHAIN_PIN_MISMATCH', 'INVALID_PIN',
@@ -619,6 +627,8 @@ class Supervisor:
         self.operation_deadline = None
         self.container_verified = False
         self.resource_diagnostics = {}
+        self.provision_diagnostics = {}
+        self.preflight_diagnostics = None
         self.server_settings_verified = False
         self.folder = Path(config.runner_temp) / self.identity.name
         self.marker = None
@@ -784,15 +794,67 @@ class Supervisor:
             hba_snapshot_sha256=sha(canonical(before)), successful_admin_identity_reads=2,
             proof_model='FILE_RULES_PLUS_TCP_PASSWORD_DENIAL_TRUSTED_NEW_SERVER_LIFECYCLE')
 
+    def record_execution_diagnostic(self, phase, classification):
+        # This sink is observational only. Never copy arbitrary phase names or
+        # exception text, and never let a diagnostic failure alter execution.
+        if type(phase) is str and phase in PROVISION_PHASES and type(classification) is str and classification in PROVISION_DIAGNOSTIC_CLASSES:
+            self.provision_diagnostics[phase] = classification
+
+    def record_preflight_diagnostics(self, diagnostic):
+        # Independently validate the helper's entire small schema. Invalid
+        # diagnostic payloads are ignored; they cannot authorize or reject SQL.
+        try:
+            if type(diagnostic) is not dict or set(diagnostic) != {'format', 'authority', 'classification', 'shape', 'checks'}:
+                return
+            if diagnostic['format'] != 'worktool-registration-preflight-fields-v1' or diagnostic['authority'] != 'DIAGNOSTIC_ONLY':
+                return
+            if type(diagnostic['classification']) is not str or diagnostic['classification'] not in ('VALUE_MATCH', 'VALUE_MISMATCH', 'INVALID_SHAPE'):
+                return
+            shape, checks = diagnostic['shape'], diagnostic['checks']
+            if type(shape) is not dict or set(shape) != {'root', 'row_count', 'row', 'fields'} or type(checks) is not dict or set(checks) != set(PREFLIGHT_CHECKS):
+                return
+            if not all(type(value) is str and value in ('MATCH', 'INVALID_SHAPE') for value in shape.values()):
+                return
+            if not all(type(value) is str and value in ('MATCH', 'MISMATCH', 'INVALID_SHAPE') for value in checks.values()):
+                return
+            self.preflight_diagnostics = {'format': 'worktool-registration-preflight-fields-v1',
+                'authority': 'DIAGNOSTIC_ONLY', 'classification': diagnostic['classification'],
+                'shape': {key: shape[key] for key in ('root', 'row_count', 'row', 'fields')},
+                'checks': {key: checks[key] for key in PREFLIGHT_CHECKS}}
+        except Exception:
+            return
+
     def execute(self, step):
         require(isinstance(step.phase, str) and bool(re.fullmatch('[a-z0-9_]{1,48}', step.phase)), 'INVALID_ARGUMENTS')
         self.stage = 'provision_' + step.phase
-        result = self.sql_call(step.login_role, step.database, step.sql, timeout=step.timeout_seconds)
+        self.record_execution_diagnostic(step.phase, 'SQL_PROCESS_PENDING')
+        try:
+            result = self.sql_call(step.login_role, step.database, step.sql, timeout=step.timeout_seconds)
+        except BaseException as error:
+            classification = {'SUBPROCESS_NONZERO': 'SQL_PROCESS_NONZERO', 'SUBPROCESS_TIMEOUT': 'SQL_PROCESS_TIMEOUT',
+                'OUTPUT_LIMIT': 'SQL_PROCESS_OUTPUT_LIMIT', 'INTERRUPTED': 'INTERRUPTED'}.get(safe_code(error), 'SQL_PROCESS_FAILED')
+            self.record_execution_diagnostic(step.phase, classification)
+            raise
+        self.record_execution_diagnostic(step.phase, 'SQL_PROCESS_ACKNOWLEDGED')
         if step.query:
-            rows = parse_json(result)
-            require(isinstance(rows, list) and len(rows) <= 4096 and all(isinstance(row, dict) for row in rows), 'INVALID_OUTPUT')
+            try:
+                rows = parse_json(result)
+            except BaseException as error:
+                self.record_execution_diagnostic(step.phase, 'INTERRUPTED' if safe_code(error) == 'INTERRUPTED' else 'JSON_DECODE_FAILED')
+                raise
+            try:
+                require(isinstance(rows, list) and len(rows) <= 4096 and all(isinstance(row, dict) for row in rows), 'INVALID_OUTPUT')
+            except BaseException as error:
+                self.record_execution_diagnostic(step.phase, 'INTERRUPTED' if safe_code(error) == 'INTERRUPTED' else 'JSON_SHAPE_INVALID')
+                raise
+            self.record_execution_diagnostic(step.phase, 'QUERY_RESULT_RETURNED')
             return rows
-        require(result in (b'',), 'INVALID_OUTPUT')
+        try:
+            require(result in (b'',), 'INVALID_OUTPUT')
+        except BaseException as error:
+            self.record_execution_diagnostic(step.phase, 'INTERRUPTED' if safe_code(error) == 'INTERRUPTED' else 'UNEXPECTED_NONQUERY_OUTPUT')
+            raise
+        self.record_execution_diagnostic(step.phase, 'EMPTY_RESULT_ACKNOWLEDGED')
         return []
 
     def retain_install_receipt(self):
@@ -1105,6 +1167,11 @@ class Supervisor:
                     outcome['catalog_proof_sha256'] = self.catalog_proof_sha256
                 if self.resource_diagnostics:
                     outcome['resource_diagnostics'] = self.resource_diagnostics
+                if self.provision_diagnostics:
+                    outcome['provision_diagnostics'] = {'format': 'worktool-registration-provision-phases-v1',
+                        'authority': 'DIAGNOSTIC_ONLY', 'phases': dict(self.provision_diagnostics)}
+                if self.preflight_diagnostics is not None:
+                    outcome['preflight_diagnostics'] = self.preflight_diagnostics
                 if hasattr(self, 'image_id'):
                     outcome['resource_policy'] = {'image': IMAGE, 'image_id': self.image_id, 'cpus': 2,
                         'memory_bytes': 1 << 30, 'memory_swap_bytes': 1 << 30, 'shm_bytes': 64 << 20,

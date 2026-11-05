@@ -289,6 +289,9 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE', result)
         self.assertEqual(result['evidence']['leaves'], manifest['leaves'])
         self.assertEqual(len(result['installation']['execution']), 18)
+        self.assertEqual(set(result['provision_diagnostics']['phases']), set(m.PROVISION_PHASES))
+        self.assertEqual(result['preflight_diagnostics']['classification'], 'VALUE_MATCH')
+        self.assertEqual(set(result['preflight_diagnostics']['checks'].values()), {'MATCH'})
         proof_bytes = (supervisor.folder / 'catalog-proof.json').read_bytes()
         self.assertEqual(m.sha(proof_bytes), result['catalog_proof_sha256'])
         self.assertGreater(len(json.loads(proof_bytes)['objects']), 1000)
@@ -938,6 +941,121 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result['resource_diagnostics']['pre_fixture']['checks']['port_unchanged'], 'MISMATCH')
         self.assertEqual(result['cleanup'], 'CONFIRMED')
         self.assertEqual(self.executor.invocations, 0)
+
+    def test_execute_diagnostics_preserve_process_json_shape_and_output_failures(self):
+        step = types.SimpleNamespace(phase='bootstrap_preflight', login_role='unused', database='unused',
+                                     sql='OFFLINE_NO_EXECUTION', timeout_seconds=30, query=True)
+        cases = [(m.Fault('SUBPROCESS_NONZERO'), 'SQL_PROCESS_NONZERO', 'SUBPROCESS_NONZERO'),
+                 (m.Fault('SUBPROCESS_TIMEOUT', True), 'SQL_PROCESS_TIMEOUT', 'SUBPROCESS_TIMEOUT'),
+                 (m.Fault('OUTPUT_LIMIT'), 'SQL_PROCESS_OUTPUT_LIMIT', 'OUTPUT_LIMIT'),
+                 (m.Fault('INTERRUPTED'), 'INTERRUPTED', 'INTERRUPTED'),
+                 (m.Fault('SUBPROCESS_FAILED'), 'SQL_PROCESS_FAILED', 'SUBPROCESS_FAILED'),
+                 (b'PRIVATE_NON_JSON', 'JSON_DECODE_FAILED', 'INVALID_OUTPUT'),
+                 (b'{}', 'JSON_SHAPE_INVALID', 'INVALID_OUTPUT'),
+                 (b'[null]', 'JSON_SHAPE_INVALID', 'INVALID_OUTPUT'),
+                 (m.canonical([{}] * 4097), 'JSON_SHAPE_INVALID', 'INVALID_OUTPUT')]
+        for result, classification, code in cases:
+            with self.subTest(classification=classification):
+                with patch.object(self.s, 'sql_call', side_effect=result if isinstance(result, BaseException) else None,
+                                  return_value=result):
+                    with self.assertRaises(m.Fault) as caught:
+                        self.s.execute(step)
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(self.s.provision_diagnostics, {'bootstrap_preflight': classification})
+                self.assertEqual(self.s.stage, 'provision_bootstrap_preflight')
+        step.phase, step.query = 'owner_schema', False
+        with patch.object(self.s, 'sql_call', return_value=b'PRIVATE_UNEXPECTED_OUTPUT'):
+            with self.assertRaises(m.Fault) as caught:
+                self.s.execute(step)
+        self.assertEqual(caught.exception.code, 'INVALID_OUTPUT')
+        self.assertEqual(self.s.provision_diagnostics['owner_schema'], 'UNEXPECTED_NONQUERY_OUTPUT')
+        self.assertNotIn('PRIVATE', json.dumps(self.s.provision_diagnostics))
+        self.assertEqual(self.executor.calls, [])
+
+    def test_preflight_diagnostic_sink_rejects_nonallowlisted_content_without_effect(self):
+        valid = {'format': 'worktool-registration-preflight-fields-v1', 'authority': 'DIAGNOSTIC_ONLY',
+            'classification': 'VALUE_MISMATCH', 'shape': {key: 'MATCH' for key in ('root', 'row_count', 'row', 'fields')},
+            'checks': {key: 'MATCH' for key in m.PREFLIGHT_CHECKS}}
+        valid['checks']['other_clients'] = 'MISMATCH'
+        mutations = [None, [], 'PRIVATE_VALUE', {}, valid | {'raw': 'PRIVATE_VALUE'},
+            valid | {'classification': 'PRIVATE_VALUE'}, valid | {'checks': valid['checks'] | {'session_user': 'PRIVATE_VALUE'}},
+            valid | {'shape': valid['shape'] | {'row_count': 1}}, valid | {'authority': 'ACCEPTANCE'},
+            valid | {'checks': {'version': 'MATCH'}}, valid | {'checks': []}, valid | {'shape': None}]
+        for diagnostic in mutations:
+            self.s.record_preflight_diagnostics(diagnostic)
+            self.assertIsNone(self.s.preflight_diagnostics)
+        self.s.record_preflight_diagnostics(valid)
+        snapshot = copy.deepcopy(self.s.preflight_diagnostics)
+        valid['checks']['other_clients'] = 'PRIVATE_MUTATION_AFTER_CALLBACK'
+        self.assertEqual(self.s.preflight_diagnostics, snapshot)
+        self.assertLess(len(m.canonical(snapshot)), 1024)
+        self.assertEqual(self.executor.calls, [])
+        self.s.record_execution_diagnostic('PRIVATE_ROLE_OR_PHASE', 'SQL_PROCESS_FAILED')
+        self.s.record_execution_diagnostic('bootstrap_preflight', 'PRIVATE_ERROR')
+        self.assertEqual(self.s.provision_diagnostics, {})
+
+    def test_real_helper_preflight_failures_retain_exact_redacted_class_and_cleanup(self):
+        actual_root = path.resolve().parents[1]
+        provision = m.load_helper('pg-registration-provision.py')
+        for variant, classification, field_class in (
+                ('process', 'SQL_PROCESS_NONZERO', None), ('json', 'JSON_DECODE_FAILED', None),
+                ('shape', 'JSON_SHAPE_INVALID', None), ('fields', 'QUERY_RESULT_RETURNED', 'INVALID_SHAPE'),
+                ('pristine', 'QUERY_RESULT_RETURNED', 'VALUE_MISMATCH')):
+            with self.subTest(variant=variant):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    class PreflightExecutor(FakeExecutor):
+                        def phase(self, args):
+                            if args[0] == m.DOCKER and args[1] == 'exec' and '-i' in args and self.supervisor.stage.startswith('provision_'):
+                                return 'sql_' + self.supervisor.stage.removeprefix('provision_')
+                            return super().phase(args)
+                        def call(self, args, **kwargs):
+                            result = super().call(args, **kwargs)
+                            if self.phase(args) != 'sql_bootstrap_preflight':
+                                return result
+                            row = dict(version=180006, session_user=self.supervisor.admin, current_user=self.supervisor.admin,
+                                database_absent=True, roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)
+                            if variant == 'process':
+                                return m.Result(2, b'', b'PRIVATE_SQL_ERROR_WITH_CREDENTIALS')
+                            if variant == 'json':
+                                return m.Result(0, b'PRIVATE_UNPARSEABLE_RESULT')
+                            if variant == 'shape':
+                                return m.Result(0, m.canonical(row))
+                            if variant == 'fields':
+                                row['PRIVATE_EXTRA_FIELD'] = 'PRIVATE_VALUE'
+                            else:
+                                row['other_clients'] = 1
+                            return m.Result(0, m.canonical([row]))
+                    source_bytes = m.make_pin(actual_root)
+                    case.source_pin.write_bytes(source_bytes)
+                    case.config.source_root, case.config.source_pin_sha256 = actual_root, m.sha(source_bytes)
+                    executor = PreflightExecutor()
+                    supervisor = m.Supervisor(case.config, executor, provision, FakeEvidence(), sleep=lambda _: None)
+                    executor.supervisor = supervisor
+                    with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+                        result = supervisor.run(handle_signals=False)
+                    self.assertEqual(result['failure_code'], 'PROVISION_FAILED')
+                    self.assertEqual(result['failure_stage'], 'provision_bootstrap_preflight')
+                    self.assertEqual(result['provision_diagnostics']['phases'], {'bootstrap_preflight': classification})
+                    if field_class is None:
+                        self.assertNotIn('preflight_diagnostics', result)
+                    else:
+                        self.assertEqual(result['preflight_diagnostics']['classification'], field_class)
+                        if variant == 'pristine':
+                            self.assertEqual(result['preflight_diagnostics']['checks']['other_clients'], 'MISMATCH')
+                    self.assertEqual(result['cleanup'], 'CONFIRMED')
+                    self.assertEqual(executor.invocations, 0)
+                    self.assertEqual(executor.removals, 1)
+                    sql_calls = [call for call in executor.calls if call[0][:3] == [m.DOCKER, 'exec', '-i'] and b'json_build_array' in call[1]]
+                    self.assertEqual(len(sql_calls), 1)
+                    self.assertFalse(any(b'CREATE ROLE' in call[1] for call in executor.calls))
+                    retained = json.loads((supervisor.folder / 'outcome.json').read_bytes())
+                    self.assertEqual(retained['provision_diagnostics'], result['provision_diagnostics'])
+                    self.assertNotIn('PRIVATE_', json.dumps(result))
+                    self.assertNotIn(supervisor.admin, json.dumps(result.get('preflight_diagnostics')))
+                finally:
+                    case.tearDown()
 
     def test_popen_failure_is_redacted(self):
         with patch.object(m.subprocess, 'Popen', side_effect=OSError('secret-should-not-escape')):
