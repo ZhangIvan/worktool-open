@@ -120,6 +120,11 @@ object ProtocolClient {
          * builder 经 `activeCredentials` 属性引用读取即见新值；spec §5.5.1）。
          */
         private var activeCredentials = credentials
+
+        // 会话 21b：最近一次 WS 关闭码（4404 tokenVersion 校验失败 → 下轮 rebuild
+        // 预携重协商材料；重协商自愈此前只挂 HTTP 401，凭据轮换场景 POST 仍 201
+        // 而拒绝发生在帧层——真机 09:41-09:51 六连 4404 死循环实证）。
+        private var lastWsCloseCode: Int? = null
         private var activeCrypto: SessionCrypto? = sessionCrypto
         private var verifier = FrameVerifier(
             codec = codec,
@@ -231,7 +236,11 @@ object ProtocolClient {
             onEvent = { event ->
                 when (event) {
                     is ReconnectingWsClient.Event.Connected -> onTransportEvent?.invoke("WS 已连接")
-                    is ReconnectingWsClient.Event.Disconnected -> onTransportEvent?.invoke("WS 断开: ${event.cause}")
+                    is ReconnectingWsClient.Event.Disconnected -> {
+                        onTransportEvent?.invoke("WS 断开: ${event.cause}")
+                        Regex("""closed: (\d+)""").find(event.cause)?.groupValues?.get(1)
+                            ?.toIntOrNull()?.let { lastWsCloseCode = it }
+                    }
                     is ReconnectingWsClient.Event.ReconnectScheduled ->
                         onTransportEvent?.invoke("重连已排程（${event.delayMillis}ms 后）")
                     is ReconnectingWsClient.Event.InactivityTimeout ->
@@ -276,11 +285,19 @@ object ProtocolClient {
                 } else {
                     null
                 }
-                val response = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = null)
+                // 会话 21b：4404 关闭码 → 本轮 POST 直接预携重协商材料（复用 401
+                // 同机制；服务端凭据仍在但版本不匹配，401 路径不会触发）。
+                val preProof = if (lastWsCloseCode == 4404 && renegotiationSigner != null) {
+                    onTransportEvent?.invoke("上轮 WS 4404（tokenVersion 校验失败）→ 预携重协商材料（spec §5.5.1）")
+                    buildRenegotiateProof()
+                } else null
+                lastWsCloseCode = null
+                val response = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = preProof)
                 val respBody = response.body?.string() ?: "{}"
                 val status = response.code
                 response.close()
                 var json = kotlinx.serialization.json.Json.parseToJsonElement(respBody).jsonObject
+                if (status == 201 && preProof != null) applyCredentialRotation(json)
                 // 会话 21 自愈：服务端凭据失忆（重启/撤销）→ 401 RENEGOTIATION_REQUIRED
                 // → Ed25519 重协商换发（spec §5.5.1），换用新凭据继续建连。
                 if (status == 401 &&
@@ -288,18 +305,9 @@ object ProtocolClient {
                     renegotiationSigner != null
                 ) {
                     onTransportEvent?.invoke("会话重建 401（服务端凭据失忆）→ Ed25519 重协商（spec §5.5.1）")
-                    val ts = clock()
-                    val nonce = cn.worktool.open.core.protocol.crypto.Hex.encode(
-                        ByteArray(16).also { java.security.SecureRandom().nextBytes(it) },
-                    )
-                    val signature = try {
-                        renegotiationSigner?.invoke(activeCredentials.deviceId, ts, nonce)
-                    } catch (e: Exception) {
-                        onTransportEvent?.invoke("重协商签名失败: ${e.message}")
-                        null
-                    }
-                    if (signature != null) {
-                        val retry = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = Triple(ts, nonce, signature))
+                    val proof = buildRenegotiateProof()
+                    if (proof != null) {
+                        val retry = postCreateSession(base, activeCredentials.deviceId, ephemeralPubHex, renegotiateProof = proof)
                         val retryBody = retry.body?.string() ?: "{}"
                         val retryStatus = retry.code
                         retry.close()
@@ -308,12 +316,7 @@ object ProtocolClient {
                             // 凭据换发：原位换新 token/tokenVersion（verifier/builder 经
                             // 属性引用读取即见新值；deviceId 不变）。换发 token 未持久化
                             // ——下进程重启再次重协商自愈（TokenVersion 服务端单调递增）。
-                            val rotatedToken = json["deviceToken"]?.jsonPrimitive?.content
-                            val rotatedVersion = json["tokenVersion"]?.jsonPrimitive?.longOrNull?.toInt()
-                            if (rotatedToken != null && rotatedVersion != null) {
-                                activeCredentials = activeCredentials.copy(deviceTokenHex = rotatedToken, tokenVersion = rotatedVersion)
-                                onTransportEvent?.invoke("重协商成功 → tokenVersion=$rotatedVersion（凭据已换发，内存生效）")
-                            }
+                            applyCredentialRotation(json)
                         } else {
                             onTransportEvent?.invoke("重协商被拒（HTTP $retryStatus）→ fallback 重试")
                         }
@@ -382,6 +385,32 @@ object ProtocolClient {
                 .post(okhttp3.RequestBody.create(null, body))
                 .build()
             return httpClient.newCall(request).execute()
+        }
+
+        /** 会话 21b：构造 §5.5.1 重协商材料（ts/nonce/Ed25519 签名）；签名器缺失或签名异常 → null。 */
+        private fun buildRenegotiateProof(): Triple<Long, String, String>? {
+            val signer = renegotiationSigner ?: return null
+            val ts = clock()
+            val nonce = cn.worktool.open.core.protocol.crypto.Hex.encode(
+                ByteArray(16).also { java.security.SecureRandom().nextBytes(it) },
+            )
+            val signature = try {
+                signer.invoke(activeCredentials.deviceId, ts, nonce)
+            } catch (e: Exception) {
+                onTransportEvent?.invoke("重协商签名失败: ${e.message}")
+                return null
+            }
+            return Triple(ts, nonce, signature)
+        }
+
+        /** 会话 21b：重协商 201 → 原位换新 token/tokenVersion（内存生效；换发不落盘，重启再自愈）。 */
+        private fun applyCredentialRotation(json: kotlinx.serialization.json.JsonObject) {
+            val rotatedToken = json["deviceToken"]?.jsonPrimitive?.content
+            val rotatedVersion = json["tokenVersion"]?.jsonPrimitive?.longOrNull?.toInt()
+            if (rotatedToken != null && rotatedVersion != null) {
+                activeCredentials = activeCredentials.copy(deviceTokenHex = rotatedToken, tokenVersion = rotatedVersion)
+                onTransportEvent?.invoke("重协商成功 → tokenVersion=$rotatedVersion（凭据已换发，内存生效）")
+            }
         }
 
         /**

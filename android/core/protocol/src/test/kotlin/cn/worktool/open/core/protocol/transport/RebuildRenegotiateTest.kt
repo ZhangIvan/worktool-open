@@ -195,6 +195,130 @@ class RebuildRenegotiateTest {
     }
 
     @Test
+    fun `WS 4404 关闭后-重建 POST 预携重协商材料并换发凭据（21b 自愈）`() {
+        val server = MockWebServer()
+        server.start()
+        // 首轮：plain 201（tokenVersion 校验发生在 WS 帧层，POST 本身成功）
+        server.enqueue(
+            MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(
+                """{"sessionId":"11111111-2222-4333-8444-555555555555",""" +
+                    """"wsPath":"/api/v2/device-sessions/11111111-2222-4333-8444-555555555555",""" +
+                    """"serverX25519PublicKey":"$serverPubHex",""" +
+                    """"deviceToken":"$oldTokenHex","tokenVersion":1}""",
+            ),
+        )
+        // 4404 之后的重建：201 + 换发凭据
+        server.enqueue(
+            MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(
+                """{"sessionId":"9f8e7d6c-5b4a-4938-8271-0fedcba98765",""" +
+                    """"wsPath":"/api/v2/device-sessions/9f8e7d6c-5b4a-4938-8271-0fedcba98765",""" +
+                    """"serverX25519PublicKey":"$serverPubHex",""" +
+                    """"credentialRotated":true,"deviceToken":"$newTokenHex","tokenVersion":2}""",
+            ),
+        )
+        val scheduler = ManualScheduler()
+        val transport = UrlRecordingTransport()
+        val transportEvents = mutableListOf<String>()
+        val credentials = DeviceCredentials(
+            deviceId = "device-9f2c7b41",
+            deviceTokenHex = oldTokenHex,
+            tokenVersion = 1,
+            sessionId = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            wsPath = null,
+        )
+        val session = ProtocolClient.V2Session(
+            credentials = credentials,
+            baseUrl = server.url("/").toString(),
+            sessionCrypto = null,
+            journal = null,
+            scheduler = scheduler,
+            clock = { 1_793_664_000_000L },
+            capabilities = ProtocolClient.Capabilities("0.1.0", 2, listOf(203)),
+            onCommand = { _, _, _ -> },
+            onRejected = { },
+            httpClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS).build(),
+            transportFactory = UrlRecordingTransport.Factory(transport),
+            renegotiationSigner = { _, _, _ -> "cd".repeat(32) },
+            onTransportEvent = { transportEvents.add(it) },
+        )
+        try {
+            session.start()
+            assertEquals("首轮 plain POST", 1, server.requestCount)
+            assertTrue(
+                "首轮 POST 无重协商材料",
+                !server.takeRequest().body.readUtf8().contains("renegotiate"),
+            )
+            // 模拟 WS 帧层 tokenVersion 校验失败：4404 关闭
+            transport.close(4404, "tokenVersion 校验失败")
+            scheduler.advance(120_000)
+
+            assertEquals("4404 后重建 POST 触发", 2, server.requestCount)
+            val second = server.takeRequest()
+            val body = Json.parseToJsonElement(second.body.readUtf8()).jsonObject
+            val proof = body["renegotiate"]!!.jsonObject
+            assertEquals("服务端冻结形状 ts", 1_793_664_000_000L, proof["ts"]!!.jsonPrimitive.longOrNull)
+            assertEquals("nonce 32 hex", 32, proof["nonce"]!!.jsonPrimitive.content.length)
+            assertEquals("签名 64 hex", 64, proof["signature"]!!.jsonPrimitive.content.length)
+            assertTrue("4404 自愈留痕", transportEvents.any { it.contains("4404") })
+            assertTrue("换新 wsPath 建连", transport.urls.last().endsWith("/api/v2/device-sessions/9f8e7d6c-5b4a-4938-8271-0fedcba98765"))
+            val hello = Json.parseToJsonElement(transport.sent.last()).jsonObject
+            assertEquals("hello 携换发 tokenVersion=2", 2, hello["meta"]!!.jsonObject["tokenVersion"]!!.jsonPrimitive.intOrNull)
+        } finally {
+            session.stop()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `WS 4404 关闭后-无签名器-保持 fallback 重试（历史行为不变）`() {
+        val server = MockWebServer()
+        server.start()
+        server.enqueue(
+            MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(
+                """{"sessionId":"11111111-2222-4333-8444-555555555555",""" +
+                    """"wsPath":"/api/v2/device-sessions/11111111-2222-4333-8444-555555555555",""" +
+                    """"serverX25519PublicKey":"$serverPubHex","deviceToken":"$oldTokenHex","tokenVersion":1}""" ,
+            ),
+        )
+        // 无签名器 → 4404 后重建 POST 仍 plain 201；响应无 wsPath → fallback-retry 分支
+        server.enqueue(MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody("{}"))
+        val scheduler = ManualScheduler()
+        val transport = UrlRecordingTransport()
+        val credentials = DeviceCredentials(
+            deviceId = "device-9f2c7b41",
+            deviceTokenHex = oldTokenHex,
+            tokenVersion = 1,
+            sessionId = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            wsPath = null,
+        )
+        val session = ProtocolClient.V2Session(
+            credentials = credentials,
+            baseUrl = server.url("/").toString(),
+            sessionCrypto = null,
+            journal = null,
+            scheduler = scheduler,
+            clock = { 1_793_664_000_000L },
+            capabilities = ProtocolClient.Capabilities("0.1.0", 2, listOf(203)),
+            onCommand = { _, _, _ -> },
+            onRejected = { },
+            httpClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS).build(),
+            transportFactory = UrlRecordingTransport.Factory(transport),
+            renegotiationSigner = null,
+        )
+        try {
+            session.start()
+            server.takeRequest()
+            transport.close(4404, "tokenVersion 校验失败")
+            scheduler.advance(120_000)
+            assertEquals(2, server.requestCount)
+            assertTrue("无签名器 → fallback-retry 分支", transport.urls.last().endsWith("/fallback-retry"))
+        } finally {
+            session.stop()
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `占位-签名器缺省 null-编译面`() {
         // 参数缺省 null（null = 不启用自愈，历史行为）；无断言仅守面。
         val x: ((String, Long, String) -> String)? = null
