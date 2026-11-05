@@ -22,7 +22,10 @@ internal object CommonSteps {
      * 会话列表定位目标会话（203/207/225/501 入口）：
      * 首屏未命中 → **滚动搜索兜底**（对齐原版 intoRoom 列表扫描；W-M6 会话 10b
      * 实证：列表滚动位置致目标行不可见时 201001——findByText 只扫活动根可见节点）。
-     * 滚动 N 页仍无 → NODE_NOT_FOUND。
+     * rc1 遗留硬化收口（2026-11-05）：①方向双向——正向下滚 [maxScrolls] 页耗尽后
+     * 反向上滚再搜 [maxScrolls] 页（残留屏态：目标行在视口上方，真机会话 10 首发
+     * 201002 即此类环境性失败）；②容器定向——优先取「可滚动且含会话项」的容器，
+     * 防先序更前的横幅/页签等可滚动容器劫持。正反向均耗尽 → NODE_NOT_FOUND。
      */
     fun openConversation(
         rules: WeworkScreenRules,
@@ -31,7 +34,7 @@ internal object CommonSteps {
         maxScrolls: Int = 8,
     ): PlanStep = PlanStep(
         id = stepId,
-        description = "在会话列表定位会话「$conversationName」并点击进入聊天页（含滚动搜索）",
+        description = "在会话列表定位会话「$conversationName」并点击进入聊天页（含正反向滚动搜索）",
     ) { driver ->
         val root = driver.currentRoot()
             ?: return@PlanStep StepOutcome.Failure(
@@ -47,24 +50,30 @@ internal object CommonSteps {
 
         var node = findTarget(root)
         if (node == null) {
-            // 滚动搜索兜底：逐页下滚重查（容器=首个可滚动节点；无容器=不滚）
-            val container = findScrollable(root)
+            val container = findConversationListContainer(root, rules)
             if (container != null) {
-                var scrolls = 0
-                while (node == null && scrolls < maxScrolls) {
-                    if (!driver.scroll(container, cn.worktool.open.core.accessibility.tree.ScrollDirection.FORWARD)) break
-                    scrolls += 1
-                    node = findTarget(driver.currentRoot())
+                fun scrollSearch(direction: cn.worktool.open.core.accessibility.tree.ScrollDirection) {
+                    var scrolls = 0
+                    while (node == null && scrolls < maxScrolls) {
+                        if (!driver.scroll(container, direction)) break
+                        scrolls += 1
+                        node = findTarget(driver.currentRoot())
+                    }
+                }
+                // 先下滚（对齐原版 intoRoom 列表扫描），耗尽后上滚兜底（视口上方目标行）
+                scrollSearch(cn.worktool.open.core.accessibility.tree.ScrollDirection.FORWARD)
+                if (node == null) {
+                    scrollSearch(cn.worktool.open.core.accessibility.tree.ScrollDirection.BACKWARD)
                 }
             }
             if (node == null) {
                 return@PlanStep StepOutcome.Failure(
                     ExecutorErrorCodes.NODE_NOT_FOUND,
-                    "会话列表未找到目标会话「$conversationName」（含 ${maxScrolls} 页滚动搜索）",
+                    "会话列表未找到目标会话「$conversationName」（含正反向各 ${maxScrolls} 页滚动搜索）",
                 )
             }
         }
-        if (!driver.click(node)) {
+        if (!driver.click(requireNotNull(node))) {
             return@PlanStep StepOutcome.Failure(
                 ExecutorErrorCodes.ACTION_REJECTED,
                 "点击会话项「$conversationName」被界面拒绝",
@@ -73,15 +82,24 @@ internal object CommonSteps {
         StepOutcome.Success
     }
 
-    /** 全树先序找首个可滚动容器（会话/群列表定位用）。 */
-    private fun findScrollable(node: UiNode): UiNode? {
-        if (node.isScrollable) return node
-        for (i in 0 until node.childCount) {
-            node.childAt(i)?.let { child ->
-                findScrollable(child)?.let { return it }
+    /**
+     * 会话列表容器选择（rc1 遗留硬化收口）：先序找首个「可滚动**且含会话项**」的
+     * 容器（rules.find 按 CONVERSATION_ITEM_NAME 探测子树）；无会话项命中时退回
+     * 首个可滚动节点（旧口径兜底）。防先序更前的横幅/页签等无关可滚动容器劫持。
+     */
+    private fun findConversationListContainer(node: UiNode, rules: WeworkScreenRules): UiNode? {
+        var firstScrollable: UiNode? = null
+        fun visit(current: UiNode): UiNode? {
+            if (current.isScrollable) {
+                if (firstScrollable == null) firstScrollable = current
+                if (rules.find(current, WeworkSelectorIds.CONVERSATION_ITEM_NAME) != null) return current
             }
+            for (i in 0 until current.childCount) {
+                current.childAt(i)?.let { child -> visit(child)?.let { return it } }
+            }
+            return null
         }
-        return null
+        return visit(node) ?: firstScrollable
     }
 
     /** 等待聊天页就绪（输入框出现）；超时 → STEP_TIMEOUT。 */

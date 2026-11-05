@@ -147,14 +147,15 @@ class CommandRunner(
             )
         }
 
-        // 目标前置门（2026-11-03 会话 9 补位）：企微不在前台时先拉起（对齐原 APK
-        // 行为）；无法达成（服务未连/未安装/超时）以 201010 失败——不再让计划
-        // 首步盲跑出 NODE_NOT_FOUND。dryRun 不经过本门（零副作用）。
+        // 目标前置门（2026-11-03 会话 9 补位；2026-11-04 44a16bb 改 detect-only）：
+        // 只检测企微是否在前台，**不自动拉起**（所有者安全指令，消除企微风控面）；
+        // 前台不可得（服务未连/企微未装/用户未手动切前台）以 201010 如实失败——
+        // 不再让计划首步盲跑出 NODE_NOT_FOUND。dryRun 不经过本门（零副作用）。
         if (!driver.ensureTargetForeground()) {
             return report(
                 ExecutionStatus.FAILED,
                 ExecutorErrorCodes.TARGET_APP_LAUNCH_FAILED,
-                driver.lastTargetForegroundFailure ?: "企微未能拉起到前台（无障碍未连接/企微未安装/超时未就绪）",
+                driver.lastTargetForegroundFailure ?: "企微前台不可得（自动拉起已禁用，请手动将企微切到前台；无障碍未连接或企微未安装亦报此门）",
                 "ensure-target-foreground",
                 plan,
                 emptyList(),

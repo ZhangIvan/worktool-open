@@ -9,7 +9,7 @@
 
 > 候选版内容汇总（未打 tag）。端侧执行面口径不变：支持矩阵仅 501/502 真机翻格 ✅；
 > 本批新增 detect-only 指令前置条件（企微须人工前台）与 NOT_CALIBRATED 选择器现状
-> 补记，见 docs/05 v1.7。
+> 补记，见 docs/05 v1.9。
 
 #### 新增
 
@@ -34,6 +34,13 @@
   `ensureTargetForeground` 只检测不操作（rootInActiveWindow/isActive 窗口判定），
   企微不在前台时指令如实失败（201010）并提示「请手动将企微切到前台」；全部
   startActivity 拉起逻辑移除，消除自动拉起触发企微风控的风险（44a16bb）。
+- **501 会话定位滚动兜底硬化（rc1 遗留项核查车道收口）**：`CommonSteps.openConversation`
+  滚动搜索补**正反向双向**（正向 8 页耗尽后反向上滚再搜 8 页——残留屏态下目标行在
+  视口上方，正向滚永不命中；真机会话 10 首发 201002 即此类环境性失败）与**列表容器
+  定向**（优先取「可滚动且含会话项」容器，防先序更前的横幅/页签等无关容器劫持滚动，
+  无会话项时退回旧口径）；原版「搜索框兜底」仍未实现——正反向滚尽后如实
+  NODE_NOT_FOUND（继续登记）；TDD 3 场景红→绿（CommonStepsOpenConversationTest），
+  501/502 既有执行器测试零回归。
 - **rc 门禁两阻断项（rc 评审发现，均实证）**：①管理台 CSP 此前 default-src 'none'
   未配 connect-src，同源 fetch 全被浏览器拦截（v3 数据面真实浏览器不可用，FETCH_BLOCKED
   对照 401 控制页验证）——补 `connect-src 'self'` 一行（script/style 锁紧不变）；
@@ -45,7 +52,7 @@
 - 设备日志 zip 出库：运行期产物 zip 曾被误入 git 跟踪，已 untrack（历史不重写），
   .gitignore 防回流（c802312）。
 
-#### NOT_RUN 与已知边界（如实登记）
+#### NOT_RUN 与已知边界（如实登记；2026-11-05 rc1 遗留核查车道逐项刷新）
 
 - **设备链路修复（linkfix 车道）= 已交付并真机验收**（初稿误登 NOT_RUN，2026-11-05
   滚动补记更正）：客户端三处根因修复——①EndpointPolicy 裸 IP 例外进程内易失（新进程
@@ -56,16 +63,37 @@
   queued→succeeded（errorCode=0）、服务端重启后 401→重协商自愈实测走通；
   JVM/Go 门禁全绿（InboundGateEpochTest 5、RebuildRenegotiateTest 5、
   DeviceSessionLoopGateTest 15、Go 12 包 ok）。
-- **PairingClient.renegotiate 形状不匹配（adjacent，无生产调用方）**：客户端发平铺
-  `{deviceId,ts,nonce,ed25519Signature}`，服务端要求嵌套 `renegotiate{ts,nonce,signature}`；
-  生产自愈走 V2Session 内联（服务端形状，真机实证 tokenVersion=2）——独立 API 修正为本
-  条目同步提交，生产代码零调用不受影响。
+- **PairingClient.renegotiate 形状不匹配 = 已修复**（face47f）：平铺
+  `{deviceId,ts,nonce,ed25519Signature}` 改嵌套 `renegotiate{ts,nonce,signature}`
+  对齐服务端冻结契约（spec §5.5.1），双 JVM 断言更新绿；生产自愈走 V2Session 内联
+  （真机实证 tokenVersion=2），独立 API 零生产调用方，不受影响。
 - **511 会议详情族选择器仍 NOT_CALIBRATED**：日历会议列表滚动容器、详情预定时间/
   实际时间/组织人值文本共 4 项占位（`WeworkScreenRules.kt` 逐项标注），真机未命中
-  如实 NODE_NOT_FOUND；515「搜索到已退出群聊」分支 JVM 绿仅为分支证据——均待 D1
-  真机 dump 校准（docs/05 v1.7 同步补记）。
-- rc1 条目「NOT_RUN 与已知边界」全部继续有效（501 openConversation 滚动兜底硬化项、
-  MIUI BAL 201010、Ed25519 装配/取证 deferred 等）。
+  如实 NODE_NOT_FOUND；515「搜索到已退出群聊」分支 JVM 绿仅为分支证据——均待
+  具日历入口的企业形态真机 dump 校准（docs/05 v1.7 补记 + v1.8 入口形态差异：
+  当前测试企业工作台无「日历」入口，该形态下 511 首步 NODE_NOT_FOUND 属
+  fail-closed 预期）。
+- **rc1 遗留项逐项现状（2026-11-05 核查，能力面零变化）**：
+  - **501 openConversation 滚动兜底硬化 = 本批补齐双向+容器定向**：W-M6 会话 10b
+    已交付正向 8 页滚动搜索；本批补正反向双向（8+8 页）与列表容器定向（先序无关
+    可滚动容器不劫持，`CommonStepsOpenConversationTest` 3 场景红→绿）；**仍开放**=
+    原版「搜索框兜底」未实现（正反向滚尽后如实 NODE_NOT_FOUND）+ 真机复验未做
+    （本轮纯代码+测试，不宣称真机闭环）。
+  - **MIUI BAL 201010 = 口径已更正（改文案不改行为）**：44a16bb detect-only 后
+    「拉起失败/服务上下文被 BAL 拦」路径已不存在——rc1 条目与 docs/05 501/502 行
+    行内表述统一为「**前台不可得如实失败**（须人工将企微切到前台）」。
+  - **Ed25519 装配/真机取证 deferred = 已实质闭环（升级登记）**：产品调用方已落地
+    ——配对面 `PairingActivity`（三级解析 + Keystore 加密种子持久化）、会话面
+    `SessionRuntime` 重协商签名器（同源解析）；真机取证完成——D1（Android 12
+    JCA 无 Ed25519）即走纯 JVM 回退路径，session 21 实证配对 tokenVersion=2 +
+    服务端重启 401→重协商自愈（5ac3781，独立复核员）。注：取证经 lab 配对面
+    （与产品面同解析函数、种子店镜像同源），产品 PairingActivity 面未单独真机复验。
+  - **端侧执行面 NOT_RUN = 仍有效**：矩阵仍仅 501/502 真机 ✅（docs/05 v1.9），
+    本批零能力变化，其余指令行维持 ⬜ 不宣称。
+  - **目录/矩阵口径差异 = 仍有效**：`server/internal/admin/catalog.go` 仍标
+    501/502/513=verified（513=查询设备资源），矩阵侧仍无 513 行——对外以矩阵为准。
+  - **已知 flaky `TestOpenAPIQueueGroup` = 仍有效**（Windows 时钟粒度幂等键碰撞，
+    先于 rc1 存在）。
 
 ### v0.1.0-rc1（2026-11-04，发布候选——六车道交付批 + 审计修复批收口）
 
@@ -140,6 +168,11 @@
 - **501 已知边界**：openConversation 仅扫可视树，列表滚动位置致目标行不可见时
   201001（原版有滚动+搜索双兜底——硬化项待办）；应用后台时 Activity 上下文失活→
   服务上下文被 MIUI BAL 拦（201010），产品 SP-2 前台服务归位后消解。
+  【2026-11-05 rc1 遗留核查滚动更正】①滚动兜底已交付（W-M6 会话 10b 正向 8 页；
+  本批补正反向双向 8+8 页 + 列表容器定向，`CommonStepsOpenConversationTest` 红→绿），
+  仅剩搜索框兜底未实现（滚尽后如实 NODE_NOT_FOUND，继续登记）；②2010 现口径 =
+  detect-only 前台不可得如实失败（44a16bb 已移除全部自动拉起逻辑，本条原
+  「BAL 拦截/SP-2 消解」表述作废——企微须人工切前台后指令才可执行）。
 - **Ed25519 产品级回退**：装配与真机取证 deferred（见上文 W-M4 条目登记，rc1 不
   宣称闭环）。
 - **已知 flaky**：`TestOpenAPIQueueGroup`（Windows 时钟粒度幂等键碰撞，先于本批

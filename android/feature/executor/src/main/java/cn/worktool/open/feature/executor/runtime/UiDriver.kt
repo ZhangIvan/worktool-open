@@ -55,9 +55,10 @@ interface UiDriver {
     fun click(node: UiNode): Boolean
 
     /**
-     * 确保目标应用（企微）在前台且界面树可得（2026-11-03 会话 9 补位）：
-     * 已在前台→true；否则拉起并轮询至就绪。返回 false=无法达成（服务未连接/
-     * 企微未安装/超时）。JVM 默认 true（Fake 企微界面夹具假定就绪），真机由
+     * 确保目标应用（企微）在前台且界面树可得（2026-11-03 会话 9 补位；
+     * 2026-11-04 44a16bb 改 detect-only：只检测不拉起）。已在前台→true；
+     * 否则 false=前台不可得（服务未连接/企微未安装/用户未手动切前台）——
+     * 指令如实失败不盲跑。JVM 默认 true（Fake 企微界面夹具假定就绪），真机由
      * [cn.worktool.open.app.AccessibilityUiDriver] 覆写——执行计划首步由此
      * 保障，不再隐含「企微已在前台」假设。
      */

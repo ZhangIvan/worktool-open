@@ -80,9 +80,9 @@ class AccessibilityUiDriver(
 
     /**
      * 目标**前台**判定（会话 10 系列收口）：只认活动窗口——服务 windows 列表
-     * 包含**后台**企微窗（会话 10d 实证：后台窗命中导致跳过拉起 → 对后台窗
+     * 包含**后台**企微窗（会话 10d 实证：后台窗命中导致误判前台 → 对后台窗
      * 点击无效 → 首发群头超时）。活动窗=rootInActiveWindow 包名命中或 windows
-     * 中 isActive 的企微窗；后台企微窗不算（须拉起）。
+     * 中 isActive 的企微窗；后台企微窗不算（detect-only：须用户手动切前台）。
      */
     private fun hasTargetRoot(): Boolean {
         val s = service ?: return false
@@ -124,7 +124,5 @@ internal object AccessibilityServiceHelper {
     const val GLOBAL_ACTION_BACK: Int = android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
 }
 
-/** 企微目标包名 + 拉起等待参数（ensureTargetForeground 用，集中一处防散落）。 */
+/** 企微目标包名（前台检测用，集中一处防散落；自动拉起已移除——44a16bb detect-only）。 */
 internal const val WETARGET_PACKAGE: String = "com.tencent.wework"
-internal const val LAUNCH_WAIT_MS: Long = 10_000
-internal const val LAUNCH_POLL_MS: Long = 400
