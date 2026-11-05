@@ -470,7 +470,7 @@ def verify_container(v, identity, owner, *, resources=True, container_id=None):
             v.get('cpus') == 2_000_000_000 and v.get('shm') == 64 << 20 and
             v.get('privileged') is False and v.get('network') == 'bridge' and
             v.get('pid') == '' and v.get('ipc') == 'private' and not v.get('cap_add') and
-            v.get('cap_drop') == ['NET_RAW'] and v.get('running') is True, 'RESOURCE_MISMATCH')
+            v.get('cap_drop') in (['NET_RAW'], ['CAP_NET_RAW']) and v.get('running') is True, 'RESOURCE_MISMATCH')
     require(v.get('tmpfs') == {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'} and
             isinstance(v.get('mounts'), list) and all(m.get('Type') == 'tmpfs' and
                 m.get('Destination') == '/var/lib/postgresql' for m in v['mounts']), 'RESOURCE_MISMATCH')
@@ -481,6 +481,56 @@ def verify_container(v, identity, owner, *, resources=True, container_id=None):
     require(port.get('HostIp') == '127.0.0.1' and bool(re.fullmatch('[0-9]{4,5}', port.get('HostPort', ''))) and
             1024 <= int(port['HostPort']) <= 65535, 'RESOURCE_MISMATCH')
     return int(port['HostPort'])
+
+
+def container_diagnostics(view, identity, owner, container_id, image_id, expected_port=None):
+    """Fixed categories only, never observed values or acceptance authority.
+
+    Observe the existing whitelist response without additional Docker calls.
+    Each check is independent, so an early mismatch cannot hide later ones.
+    The verifier remains authoritative, including its malformed-input behavior.
+    """
+    def observe(check):
+        try:
+            return 'MATCH' if check() else 'MISMATCH'
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
+            return 'INVALID_SHAPE'
+
+    def identity_matches():
+        try:
+            verify_container(view, identity, owner, resources=False, container_id=container_id)
+            return True
+        except Fault:
+            return False
+
+    checks = {
+        'owned_identity': observe(identity_matches),
+        'image_id_matches': observe(lambda: view.get('image_id') == image_id),
+        'memory_limit': observe(lambda: view.get('memory') == 1 << 30),
+        'memory_swap_limit': observe(lambda: view.get('swap') == 1 << 30),
+        'cpu_limit': observe(lambda: view.get('cpus') == 2_000_000_000),
+        'shm_limit': observe(lambda: view.get('shm') == 64 << 20),
+        'unprivileged': observe(lambda: view.get('privileged') is False),
+        'bridge_network': observe(lambda: view.get('network') == 'bridge'),
+        'private_pid': observe(lambda: view.get('pid') == ''),
+        'private_ipc': observe(lambda: view.get('ipc') == 'private'),
+        'no_added_capabilities': observe(lambda: not view.get('cap_add')),
+        'drop_net_raw_literal': observe(lambda: view.get('cap_drop') == ['NET_RAW']),
+        'drop_net_raw_canonical': observe(lambda: view.get('cap_drop') == ['CAP_NET_RAW']),
+        'drop_net_raw_only': observe(lambda: view.get('cap_drop') in (['NET_RAW'], ['CAP_NET_RAW'])),
+        'running': observe(lambda: view.get('running') is True),
+        'tmpfs_exact': observe(lambda: view.get('tmpfs') == {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'}),
+        'mounts_tmpfs_only': observe(lambda: isinstance(view.get('mounts'), list) and all(
+            mount.get('Type') == 'tmpfs' and mount.get('Destination') == '/var/lib/postgresql' for mount in view['mounts'])),
+        'port_keys': observe(lambda: set(view.get('ports', {})) == {'5432/tcp'}),
+        'port_single_binding': observe(lambda: isinstance(view['ports']['5432/tcp'], list) and len(view['ports']['5432/tcp']) == 1),
+        'port_loopback': observe(lambda: view['ports']['5432/tcp'][0].get('HostIp') == '127.0.0.1'),
+        'port_range': observe(lambda: bool(re.fullmatch('[0-9]{4,5}', view['ports']['5432/tcp'][0].get('HostPort', ''))) and
+            1024 <= int(view['ports']['5432/tcp'][0]['HostPort']) <= 65535),
+        'port_unchanged': 'NOT_APPLICABLE' if expected_port is None else observe(
+            lambda: int(view['ports']['5432/tcp'][0]['HostPort']) == expected_port),
+    }
+    return {'format': 'worktool-registration-container-diagnostics-v1', 'authority': 'DIAGNOSTIC_ONLY', 'checks': checks}
 
 
 HBA_PATH = '/var/lib/postgresql/18/docker/pg_hba.conf'
@@ -568,6 +618,7 @@ class Supervisor:
         self.sleep, self.random_hex, self.monotonic = sleep, random_hex, monotonic
         self.operation_deadline = None
         self.container_verified = False
+        self.resource_diagnostics = {}
         self.server_settings_verified = False
         self.folder = Path(config.runner_temp) / self.identity.name
         self.marker = None
@@ -682,6 +733,8 @@ class Supervisor:
         self.save_marker()
         self.call([DOCKER, 'start', cid], timeout=30)
         view = self.inspect()
+        self.resource_diagnostics['post_start'] = container_diagnostics(
+            view, self.identity, self.marker['owner'], cid, self.image_id)
         self.port = verify_container(view, self.identity, self.marker['owner'], container_id=cid)
         require(view['image_id'] == self.image_id, 'RESOURCE_MISMATCH')
         self.container_verified = True
@@ -890,6 +943,8 @@ class Supervisor:
         self.verify_sources()
         require(sha(read_regular(self.artifact, 128 << 20)) == self.executable_sha256, 'EXECUTABLE_MISMATCH')
         view = self.inspect()
+        self.resource_diagnostics['pre_fixture'] = container_diagnostics(
+            view, self.identity, self.marker['owner'], self.marker['container_id'], self.image_id, self.port)
         require(verify_container(view, self.identity, self.marker['owner'], container_id=self.marker['container_id']) == self.port and
                 view['image_id'] == self.image_id, 'RESOURCE_MISMATCH')
         require(self.marker['run_invocations'] == 0, 'RUN_ALREADY_STARTED')
@@ -1048,6 +1103,8 @@ class Supervisor:
                     outcome['installation'] = self.install_summary
                 if hasattr(self, 'catalog_proof_sha256'):
                     outcome['catalog_proof_sha256'] = self.catalog_proof_sha256
+                if self.resource_diagnostics:
+                    outcome['resource_diagnostics'] = self.resource_diagnostics
                 if hasattr(self, 'image_id'):
                     outcome['resource_policy'] = {'image': IMAGE, 'image_id': self.image_id, 'cpus': 2,
                         'memory_bytes': 1 << 30, 'memory_swap_bytes': 1 << 30, 'shm_bytes': 64 << 20,

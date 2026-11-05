@@ -167,11 +167,12 @@ class FakeExecutor:
                 'tmpfs': {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'},
                 'memory': 1 << 30, 'swap': 1 << 30, 'cpus': 2_000_000_000, 'shm': 64 << 20,
                 'privileged': False, 'network': 'bridge', 'pid': '', 'ipc': 'private',
-                'cap_add': None, 'cap_drop': ['NET_RAW'], 'ports': {'5432/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '54321'}]},
+                'cap_add': None, 'cap_drop': ['CAP_NET_RAW'], 'ports': {'5432/tcp': None},
                 'running': False}
             output = (self.container['id'] + '\n').encode()
         elif phase == 'start':
             self.container['running'] = True
+            self.container['ports'] = {'5432/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '54321'}]}
         elif phase == 'inspect':
             value = dict(self.container)
             if self.inspect_mutation:
@@ -803,6 +804,140 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result['resource_policy']['container_inspection'], 'NOT_VERIFIED')
         self.assertEqual(result['resource_policy']['server_settings'], 'NOT_VERIFIED')
         self.assertNotIn('container_observation', result)
+
+    def test_capability_singleton_equivalence_only(self):
+        for spelling in ('NET_RAW', 'CAP_NET_RAW'):
+            with self.subTest(spelling=spelling):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.inspect_mutation = {'cap_drop': [spelling]}
+                    result = case.run_fake()
+                    self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE')
+                    checks = result['resource_diagnostics']['post_start']['checks']
+                    self.assertEqual(checks['drop_net_raw_only'], 'MATCH')
+                    self.assertEqual(checks['drop_net_raw_literal'], 'MATCH' if spelling == 'NET_RAW' else 'MISMATCH')
+                    self.assertEqual(checks['drop_net_raw_canonical'], 'MATCH' if spelling == 'CAP_NET_RAW' else 'MISMATCH')
+                    create = next(args for args, *_ in case.executor.calls if args[:2] == [m.DOCKER, 'create'])
+                    self.assertEqual(create[create.index('--cap-drop') + 1], 'NET_RAW')
+                    self.assertEqual(case.executor.invocations, 1)
+                finally:
+                    case.tearDown()
+
+    def test_capability_missing_duplicate_extra_other_rejected(self):
+        for value in (None, [], ['NET_RAW', 'NET_RAW'], ['CAP_NET_RAW', 'CAP_NET_RAW'],
+                      ['NET_RAW', 'CAP_NET_RAW'], ['CAP_NET_RAW', 'SYS_ADMIN'], ['ALL'],
+                      ['NET_ADMIN'], ['cap_net_raw'], [' CAP_NET_RAW '], 'CAP_NET_RAW', [None]):
+            with self.subTest(value=value):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.inspect_mutation = {'cap_drop': value}
+                    result = case.run_fake()
+                    self.assertEqual(result['failure_code'], 'RESOURCE_MISMATCH')
+                    self.assertEqual(result['resource_diagnostics']['post_start']['checks']['drop_net_raw_only'], 'MISMATCH')
+                    self.assertEqual(result['cleanup'], 'CONFIRMED')
+                    self.assertEqual(case.executor.invocations, 0)
+                    self.assertFalse(any(args[:2] == [m.DOCKER, 'exec'] for args, *_ in case.executor.calls))
+                finally:
+                    case.tearDown()
+
+    def test_resource_diagnostics_capture_all_fixed_checks_before_rejection(self):
+        self.executor.inspect_mutation = {'memory': 2 << 30, 'cpus': 3_000_000_000,
+            'cap_drop': ['CAP_NET_RAW'], 'image_id': 'sha256:' + 'e' * 64,
+            'ports': {'5432/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '54321'}]}}
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'RESOURCE_MISMATCH')
+        self.assertEqual(result['resource_policy']['container_inspection'], 'NOT_VERIFIED')
+        self.assertEqual(set(result['resource_diagnostics']), {'post_start'})
+        checks = result['resource_diagnostics']['post_start']['checks']
+        for key in ('memory_limit', 'cpu_limit', 'image_id_matches', 'port_loopback'):
+            self.assertEqual(checks[key], 'MISMATCH')
+        for key in ('owned_identity', 'drop_net_raw_canonical', 'drop_net_raw_only', 'running', 'memory_swap_limit'):
+            self.assertEqual(checks[key], 'MATCH')
+        self.assertEqual(checks['port_unchanged'], 'NOT_APPLICABLE')
+        retained = json.loads((self.s.folder / 'outcome.json').read_bytes())
+        self.assertEqual(retained['resource_diagnostics'], result['resource_diagnostics'])
+
+    def test_diagnostics_preserve_null_and_lifecycle_rejection_decisions(self):
+        for change, code, key, category in (
+            ({'running': False}, 'RESOURCE_MISMATCH', 'running', 'MISMATCH'),
+            ({'ports': None}, 'INTERNAL_FAILURE', 'port_keys', 'INVALID_SHAPE'),
+            ({'ports': {}}, 'RESOURCE_MISMATCH', 'port_keys', 'MISMATCH'),
+            ({'ports': {'5432/tcp': None}}, 'RESOURCE_MISMATCH', 'port_single_binding', 'MISMATCH'),
+            ({'ports': {'5432/tcp': []}}, 'RESOURCE_MISMATCH', 'port_single_binding', 'MISMATCH'),
+            ({'mounts': None}, 'RESOURCE_MISMATCH', 'mounts_tmpfs_only', 'MISMATCH')):
+            with self.subTest(change=change):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.inspect_mutation = change
+                    result = case.run_fake()
+                    self.assertEqual(result['failure_code'], code)
+                    self.assertEqual(result['resource_diagnostics']['post_start']['checks'][key], category)
+                    if change == {'ports': {'5432/tcp': []}}:
+                        for empty_key in ('port_loopback', 'port_range'):
+                            self.assertEqual(result['resource_diagnostics']['post_start']['checks'][empty_key], 'INVALID_SHAPE')
+                    self.assertEqual(result['cleanup'], 'CONFIRMED')
+                    self.assertEqual(case.executor.invocations, 0)
+                finally:
+                    case.tearDown()
+
+    def test_resource_diagnostics_are_fixed_categories_without_observed_values(self):
+        sentinel = 'NEVER_RETAIN_PRIVATE_DIAGNOSTIC_VALUE'
+        self.executor.inspect_mutation = {'cap_drop': [sentinel], 'cap_add': [sentinel],
+            'tmpfs': {sentinel: sentinel}, 'mounts': [{'Type': 'bind', 'Destination': sentinel, 'Source': sentinel}],
+            'ports': {sentinel: [{'HostIp': sentinel, 'HostPort': sentinel}]}, 'env': [sentinel],
+            'raw_error': sentinel, 'other': {'secret': sentinel}}
+        result = self.run_fake()
+        rendered = json.dumps(result)
+        self.assertNotIn(sentinel, rendered)
+        self.assertNotIn(self.s.marker['owner'], rendered)
+        self.assertNotIn(self.s.identity.key, rendered)
+        self.assertNotIn('container_observation', result)
+        record = result['resource_diagnostics']['post_start']
+        self.assertEqual(set(record), {'format', 'authority', 'checks'})
+        self.assertEqual(record['authority'], 'DIAGNOSTIC_ONLY')
+        self.assertEqual(set(record['checks']), {
+            'owned_identity', 'image_id_matches', 'memory_limit', 'memory_swap_limit', 'cpu_limit', 'shm_limit',
+            'unprivileged', 'bridge_network', 'private_pid', 'private_ipc', 'no_added_capabilities',
+            'drop_net_raw_literal', 'drop_net_raw_canonical', 'drop_net_raw_only', 'running', 'tmpfs_exact',
+            'mounts_tmpfs_only', 'port_keys', 'port_single_binding', 'port_loopback', 'port_range', 'port_unchanged'})
+        self.assertLess(len(m.canonical(record)), 2048)
+        self.assertLessEqual(set(record['checks'].values()), {'MATCH', 'MISMATCH', 'INVALID_SHAPE', 'NOT_APPLICABLE'})
+
+    def test_diagnostics_add_no_docker_operations(self):
+        result = self.run_fake()
+        self.assertEqual(set(result['resource_diagnostics']), {'post_start', 'pre_fixture'})
+        self.assertEqual(result['resource_diagnostics']['pre_fixture']['checks']['port_unchanged'], 'MATCH')
+        actions = [args[1] for args, *_ in self.executor.calls if args[0] == m.DOCKER]
+        self.assertEqual(actions.count('inspect'), 3)  # post-start, pre-fixture, owned cleanup
+        for action in ('pull', 'image', 'create', 'start', 'rm'):
+            self.assertEqual(actions.count(action), 1)
+        before = len(self.executor.calls)
+        with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            for view in (None, {}, [], 0, 'untrusted', {'ports': {'5432/tcp': []}}, {'id': None}):
+                record = m.container_diagnostics(view, self.s.identity, 'b' * 64, 'c' * 64, 'sha256:' + 'd' * 64)
+                self.assertLessEqual(set(record['checks'].values()), {'MATCH', 'MISMATCH', 'INVALID_SHAPE', 'NOT_APPLICABLE'})
+        self.assertEqual(len(self.executor.calls), before)
+
+    def test_pre_fixture_diagnostics_do_not_overwrite_post_start(self):
+        original = self.executor.call
+        def mutate_pre_fixture(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[:2] == [m.DOCKER, 'inspect'] and self.s.stage == 'fixture':
+                view = json.loads(result.stdout)
+                view['ports']['5432/tcp'][0]['HostPort'] = '54322'
+                return m.Result(0, m.canonical(view))
+            return result
+        self.executor.call = mutate_pre_fixture
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'RESOURCE_MISMATCH')
+        self.assertEqual(result['failure_stage'], 'fixture')
+        self.assertEqual(result['resource_diagnostics']['post_start']['checks']['port_unchanged'], 'NOT_APPLICABLE')
+        self.assertEqual(result['resource_diagnostics']['pre_fixture']['checks']['port_unchanged'], 'MISMATCH')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertEqual(self.executor.invocations, 0)
 
     def test_popen_failure_is_redacted(self):
         with patch.object(m.subprocess, 'Popen', side_effect=OSError('secret-should-not-escape')):
