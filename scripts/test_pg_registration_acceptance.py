@@ -1,0 +1,742 @@
+"""Offline tests only: every would-be process is an injected fake executor."""
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import time
+import types
+import unittest
+from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+path = Path(__file__).with_name('pg-registration-acceptance.py')
+spec = importlib.util.spec_from_file_location('registration_acceptance_test_module', path)
+m = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = m
+spec.loader.exec_module(m)
+
+
+def environment():
+    return {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_OS': 'Linux',
+            'RUNNER_ARCH': 'X64', 'GITHUB_REPOSITORY': 'ZhangIvan/worktool-open', 'GITHUB_SHA': 'a' * 40,
+            'GITHUB_REF': 'refs/heads/worktool/synthetic-prototype', 'GITHUB_RUN_ID': '12345',
+            'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push',
+            'GITHUB_WORKFLOW_REF': 'ZhangIvan/worktool-open/.github/workflows/go-registration-acceptance.yml@refs/heads/worktool/synthetic-prototype'}
+
+
+def identity(env=None):
+    return m.Identity.checked('ZhangIvan/worktool-open', 'a' * 40, 'refs/heads/worktool/synthetic-prototype',
+                              '12345', '1', env or environment())
+
+
+def fake_hba(admin):
+    rules = []
+    for typ, db, address, netmask, method in [
+            ('local', ['all'], None, None, 'trust'),
+            ('host', ['all'], '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
+            ('host', ['all'], '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
+            ('local', ['replication'], None, None, 'trust'),
+            ('host', ['replication'], '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
+            ('host', ['replication'], '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
+            ('host', ['all'], 'all', None, 'scram-sha-256')]:
+        n = len(rules) + 1
+        rules.append({'rule_number': n, 'file_name': m.HBA_PATH, 'line_number': n + 100, 'type': typ,
+                      'database': db, 'users': ['all'], 'address': address, 'netmask': netmask,
+                      'auth_method': method, 'options': None, 'error': None})
+    return {'session_user': admin, 'current_user': admin, 'database': 'postgres', 'hba_file': m.HBA_PATH,
+        'config_load_epoch_us': 1793876402000000, 'postmaster_start_epoch_us': 1793876401000000,
+        'checked_at_epoch_us': 1793876403000000, 'file_mtime_epoch_us': 1793876400000000,
+        'file_size': 5800, 'file_is_directory': False, 'rule_count': len(rules), 'rules': rules}
+
+
+class FakeEvidence:
+    def load_manifest(self, path):
+        return {}
+
+    def source_digest(self, root, manifest):
+        return m.tree_digest(m.tree_files(root))
+
+    def validate_events(self, raw, manifest):
+        if raw != b'SYNTHETIC_OFFLINE_EVENTS':
+            raise ValueError('hidden raw failure')
+
+    def validate_run(self, raw, manifest, binding, expected):
+        self.validate_events(raw, manifest)
+        if (binding['cleanup'] != 'CONFIRMED' or binding['exit_code'] != 0 or
+                binding['source_manifest_sha256'] != expected or binding['go_invocations'] != 1):
+            raise ValueError('bad synthetic binding')
+        return {'status': 'FAKE_EXECUTOR_PROTOCOL_ONLY', 'go_invocations': 1}
+
+
+class FakeProvision:
+    SOURCE_PINS = {'source.sql': 'a' * 64}
+    canonical = staticmethod(m.canonical)
+    def sanitized_catalog_proof(self, receipt):
+        public = receipt.public_evidence
+        return {'format': 'worktool-registration-catalog-proof-v1', 'proof_model': 'OFFLINE_FAKE_ONLY',
+            'constraint_semantic_normalization': 'NOT_PROVEN', 'objects': [{'kind': 'identity'}],
+            **{key: public[key] for key in ('sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution')}}
+
+    def load_and_verify_sources(self, root):
+        return None
+
+    def provision(self, executor, bundle, database, bootstrap, passwords):
+        for phase, role, db in [('roles', bootstrap, 'postgres'), ('database', bootstrap, 'postgres'),
+                                 ('install', m.ROLE_NAMES[0], database), ('catalog', m.ROLE_NAMES[0], database)]:
+            step = types.SimpleNamespace(phase=phase, login_role=role, database=db,
+                                         sql='SELECT synthetic_' + phase + ';', query=False, timeout_seconds=30)
+            executor.execute(step)
+        private = {'format': 'FAKE_CATALOG_FOR_OFFLINE_PROTOCOL_ONLY'}
+        public = {'format': 'worktool-registration-install-summary-v1', 'status': 'VERIFIED_TRUSTED_INSTALLATION_PROVENANCE',
+            'sql_manifest_sha256': 'a' * 64, 'catalog_observation_sha256': 'b' * 64, 'install_receipt_sha256': m.sha(m.canonical(private)),
+            'table_count': 37, 'function_count': 20, 'trigger_count': 24, 'constraint_count': 354,
+            'constraint_semantic_normalization': 'NOT_PROVEN', 'acceptance_tests': 'NOT_RUN',
+            'execution': [{'phase': 'catalog', 'login_role': m.ROLE_NAMES[0], 'database': database, 'sql_sha256': 'c' * 64, 'acknowledged': True}],
+            'sql_sources': dict(self.SOURCE_PINS)}
+        return types.SimpleNamespace(private_metadata={'database_oid': 100, 'schema_oid': 101, 'consumer_oid': 102,
+            'issuer_oid': 103, 'boundary_sha256': 'b' * 64, 'registry_sha256': 'c' * 64,
+            'routine_definition_sha256': 'd' * 64}, public_evidence=public, private_catalog_receipt=private)
+
+
+class FakeExecutor:
+    def __init__(self):
+        self.calls = []
+        self.container = None
+        self.supervisor = None
+        self.fail = None
+        self.fail_after = False
+        self.output = b'SYNTHETIC_OFFLINE_EVENTS'
+        self.removals = 0
+        self.invocations = 0
+        self.inspect_mutation = None
+        self.hba_mutation = None
+        self.hba_after_mutation = None
+        self.bad_password_result = None
+        self.hba_canonical_path = m.HBA_PATH
+
+    def phase(self, args):
+        if args[0] != m.DOCKER:
+            return 'fixture' if 'test2json' in args else ('modules' if 'verify' in args else 'build')
+        if args[1] == 'exec':
+            if args[3] == 'pg_isready':
+                return 'ready'
+            if args[3] == 'readlink':
+                return 'hba_path' if args[-1] == m.HBA_PATH else 'wal'
+            data = self.last_data
+            if b'pg_hba_file_rules' in data:
+                return 'hba_before' if self.supervisor.stage == 'auth_hba_before' else 'hba_after'
+            if self.supervisor.stage == 'auth_wrong_password':
+                return 'bad_password'
+            if b'json_build_object' in data:
+                return 'settings'
+            if b'pg_stat_activity' in data:
+                return 'activity'
+            return 'sql_' + self.supervisor.stage.removeprefix('provision_')
+        if args[1] == 'image':
+            return 'image'
+        return args[1]
+
+    def call(self, args, *, data=b'', env=None, cwd=None, timeout=30):
+        self.last_data = data
+        self.calls.append((list(args), data, env, cwd, timeout))
+        phase = self.phase(args)
+        if self.fail == phase and not self.fail_after:
+            raise m.Fault('SUBPROCESS_TIMEOUT', True)
+        output = b''
+        if phase == 'modules':
+            output = b'all modules verified\n'
+        elif phase == 'build':
+            m.private_file(Path(args[args.index('-o') + 1]), b'OFFLINE_NOT_EXECUTABLE')
+        elif phase == 'fixture':
+            self.invocations += 1
+            output = self.output
+        elif phase == 'ps':
+            output = (self.container['id'] + '\n').encode() if self.container else b''
+        elif phase == 'image':
+            output = m.canonical({'id': 'sha256:' + 'd' * 64, 'digests': [m.IMAGE], 'architecture': 'amd64', 'os': 'linux'})
+        elif phase == 'create':
+            self.container = {'id': 'c' * 64, 'name': '/' + self.supervisor.identity.name,
+                'owner': self.supervisor.marker['owner'], 'identity': self.supervisor.identity.key,
+                'image': m.IMAGE, 'image_id': 'sha256:' + 'd' * 64, 'mounts': [],
+                'tmpfs': {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'},
+                'memory': 1 << 30, 'swap': 1 << 30, 'cpus': 2_000_000_000, 'shm': 64 << 20,
+                'privileged': False, 'network': 'bridge', 'pid': '', 'ipc': 'private',
+                'cap_add': None, 'cap_drop': ['NET_RAW'], 'ports': {'5432/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '54321'}]},
+                'running': False}
+            output = (self.container['id'] + '\n').encode()
+        elif phase == 'start':
+            self.container['running'] = True
+        elif phase == 'inspect':
+            value = dict(self.container)
+            if self.inspect_mutation:
+                value.update(self.inspect_mutation)
+            output = m.canonical(value)
+        elif phase in ('hba_before', 'hba_after'):
+            snapshot = fake_hba(self.supervisor.admin)
+            if self.hba_mutation:
+                self.hba_mutation(snapshot)
+            if phase == 'hba_after' and self.hba_after_mutation:
+                self.hba_after_mutation(snapshot)
+            output = m.canonical(snapshot)
+        elif phase == 'bad_password':
+            if self.bad_password_result is not None:
+                return self.bad_password_result
+            message = ('psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "' + self.supervisor.admin + '"\n').encode()
+            return m.Result(2, b'', message)
+        elif phase == 'settings':
+            output = m.canonical({'version': '180006', 'version_string': 'PostgreSQL 18.6 synthetic', 'connections': '10',
+                'reserved': '0', 'super_reserved': '3', 'messages': 'C', 'statement': '5s', 'lock': '1s', 'idle': '5s',
+                'data': '/var/lib/postgresql/18/docker'})
+        elif phase == 'hba_path':
+            output = self.hba_canonical_path.encode() + b'\n'
+        elif phase == 'wal':
+            output = b'/var/lib/postgresql/18/docker/pg_wal\n'
+        elif phase == 'activity':
+            output = b'0\n'
+        elif phase == 'rm':
+            self.removals += 1
+            self.container = None
+        if self.fail == phase and self.fail_after:
+            raise m.Fault('SUBPROCESS_TIMEOUT', True)
+        return m.Result(0, output)
+
+
+class SupervisorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='registration-supervisor-offline-')
+        self.root = Path(self.tmp.name)
+        self.source = self.root / 'source'
+        self.source.mkdir(mode=0o700)
+        (self.source / 'scripts').mkdir(mode=0o700)
+        (self.source / 'backend-go/internal/store/pg').mkdir(parents=True, mode=0o700)
+        m.private_file(self.source / 'scripts/pg-registration-cases.json', b'{}')
+        m.private_file(self.source / 'scripts/pg-registration-acceptance.py', b'OFFLINE_MODULE_LOCATION_BINDING')
+        m.private_file(self.source / 'frozen-source.txt', b'FROZEN_SYNTHETIC_SOURCE')
+        self.go_root = self.root / 'go'
+        (self.go_root / 'bin').mkdir(parents=True, mode=0o700)
+        m.private_file(self.go_root / 'bin/go', b'OFFLINE_FAKE_GO_NO_EXECUTE')
+        m.private_file(self.go_root / 'VERSION', b'go1.27.3\ntime 2026-11-05\n')
+        self.cache = self.root / 'module-cache'
+        self.cache.mkdir(mode=0o700)
+        self.source_pin = self.root / 'source-pin.json'
+        self.toolchain_pin = self.root / 'toolchain-pin.json'
+        source_bytes = m.make_pin(self.source)
+        toolchain_bytes = m.make_pin(self.go_root, toolchain=True)
+        m.private_file(self.source_pin, source_bytes)
+        m.private_file(self.toolchain_pin, toolchain_bytes)
+        self.config = m.RunConfig(identity(), self.root, self.source, self.source_pin, m.sha(source_bytes),
+            self.go_root / 'bin/go', self.toolchain_pin, m.sha(toolchain_bytes), self.cache, time.monotonic_ns() + 839_000_000_000)
+        self.executor = FakeExecutor()
+        self.s = m.Supervisor(self.config, self.executor, FakeProvision(), FakeEvidence(), sleep=lambda _: None)
+        self.executor.supervisor = self.s
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_fake(self):
+        with patch.object(m, '__file__', str(self.source / 'scripts/pg-registration-acceptance.py')):
+            return self.s.run(handle_signals=False)
+
+    def test_cross_module_real_plan_receipt_envelope_events_and_cleanup(self):
+        # Real implementation helpers, source contract and 37-leaf parser;
+        # every external operation, catalog row and event is fabricated here.
+        actual_root = path.resolve().parents[1]
+        provision_tests = m.load_helper('test_pg_registration_provision.py')
+        evidence_tests = m.load_helper('test_pg_registration_evidence.py')
+        provision = m.load_helper('pg-registration-provision.py')
+        evidence = m.load_helper('pg-registration-evidence.py')
+        class IntegratedExecutor(FakeExecutor):
+            def phase(self, args):
+                if args[0] == m.DOCKER and args[1] == 'exec' and '-i' in args and self.supervisor.stage.startswith('provision_'):
+                    return 'sql_' + self.supervisor.stage.removeprefix('provision_')
+                return super().phase(args)
+            def call(self, args, **kwargs):
+                result = super().call(args, **kwargs)
+                current = self.phase(args)
+                if current == 'sql_bootstrap_preflight':
+                    rows = [dict(version=180006, session_user=self.supervisor.admin, current_user=self.supervisor.admin,
+                                 database_absent=True, roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)]
+                    return m.Result(0, m.canonical(rows))
+                if current == 'sql_catalog_readback':
+                    rows = provision_tests.fake_catalog(self.supervisor.bundle)
+                    next(row for row in rows if row['kind'] == 'identity')['database'] = self.supervisor.database
+                    return m.Result(0, m.canonical(rows))
+                return result
+        source_bytes = m.make_pin(actual_root)
+        self.source_pin.write_bytes(source_bytes)
+        self.config.source_root = actual_root
+        self.config.source_pin_sha256 = m.sha(source_bytes)
+        executor = IntegratedExecutor()
+        supervisor = m.Supervisor(self.config, executor, provision, evidence, sleep=lambda _: None)
+        executor.supervisor = supervisor
+        manifest = evidence.load_manifest(actual_root / 'scripts/pg-registration-cases.json')
+        executor.output = evidence_tests.encode(evidence_tests.complete(manifest))
+        envelope_seen = []
+        original_write = supervisor.write_envelope
+        def capture_envelope():
+            original_write()
+            envelope_seen.append(json.loads(m.read_regular(supervisor.folder / 'envelope.json', 32768, private=True)))
+        supervisor.write_envelope = capture_envelope
+        with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            result = supervisor.run(handle_signals=False)
+        self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE', result)
+        self.assertEqual(result['evidence']['leaves'], manifest['leaves'])
+        self.assertEqual(len(result['installation']['execution']), 18)
+        proof_bytes = (supervisor.folder / 'catalog-proof.json').read_bytes()
+        self.assertEqual(m.sha(proof_bytes), result['catalog_proof_sha256'])
+        self.assertGreater(len(json.loads(proof_bytes)['objects']), 1000)
+        self.assertEqual(executor.invocations, 1)
+        self.assertEqual(executor.removals, 1)
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        supervisor.verify_standalone_cleanup_source()
+        self.assertEqual(envelope_seen[0]['source_manifest_sha256'], result['source_sha256'])
+        self.assertEqual(envelope_seen[0]['executable_sha256'], result['executable_sha256'])
+        self.assertNotIn('owner_dsn', json.dumps(result))
+        self.assertFalse((supervisor.folder / 'envelope.json').exists())
+
+    def test_default_and_noop_never_launch(self):
+        for argv in ([], ['noop']):
+            with self.subTest(argv=argv), contextlib.redirect_stdout(io.StringIO()), patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+                self.assertEqual(m.main(argv, executor=self.executor, environ={}), 0)
+                self.assertEqual(self.executor.calls, [])
+
+    def test_import_never_launches(self):
+        with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            other_spec = importlib.util.spec_from_file_location('inert_supervisor_import', path)
+            other = importlib.util.module_from_spec(other_spec)
+            sys.modules[other_spec.name] = other
+            other_spec.loader.exec_module(other)
+
+    def test_malformed_identity_no_launch(self):
+        for key, bad in [('GITHUB_ACTIONS', 'false'), ('RUNNER_ENVIRONMENT', 'self-hosted'), ('RUNNER_ARCH', 'ARM64'),
+                         ('GITHUB_REPOSITORY', 'other/repo'), ('GITHUB_SHA', 'b' * 40), ('GITHUB_RUN_ATTEMPT', '2'), ('GITHUB_EVENT_NAME', 'workflow_dispatch'), ('GITHUB_WORKFLOW_REF', 'foreign')]:
+            env = environment()
+            env[key] = bad
+            with self.subTest(key=key), self.assertRaises(m.Fault):
+                identity(env)
+        self.assertEqual(self.executor.calls, [])
+
+    def test_rerun_attempt_and_bad_ref_refused(self):
+        for ref, attempt in [('refs/heads/main', '1'), ('refs/heads/worktool/synthetic-prototype', '2')]:
+            with self.assertRaises(m.Fault):
+                m.Identity.checked('ZhangIvan/worktool-open', 'a' * 40, ref, '12345', attempt, environment())
+        self.assertEqual(self.executor.calls, [])
+
+    def test_frozen_source_mutation_prevents_any_process(self):
+        (self.source / 'frozen-source.txt').write_bytes(b'CHANGED')
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'SOURCE_PIN_MISMATCH')
+        self.assertEqual(self.executor.calls, [])
+
+    def test_toolchain_mutation_prevents_any_process(self):
+        (self.go_root / 'bin/go').write_bytes(b'CHANGED')
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'TOOLCHAIN_PIN_MISMATCH')
+        self.assertEqual(self.executor.calls, [])
+
+    def test_foreign_directory_is_not_adopted_or_deleted(self):
+        self.s.folder.mkdir(mode=0o700)
+        m.private_file(self.s.folder / 'foreign', b'KEEP')
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'RUN_ALREADY_STARTED')
+        self.assertEqual((self.s.folder / 'foreign').read_bytes(), b'KEEP')
+        self.assertEqual(self.executor.calls, [])
+
+    def test_foreign_container_preflight_is_not_removed(self):
+        self.executor.container = {'id': 'f' * 64}
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'FOREIGN_CONTAINER_PRESENT')
+        self.assertEqual(self.executor.removals, 0)
+        self.assertFalse(self.s.folder.exists())
+
+    def test_complete_fake_lifecycle_is_one_run_and_idempotent_cleanup(self):
+        result = self.run_fake()
+        self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE')
+        self.assertEqual(self.executor.invocations, 1)
+        self.assertEqual(self.executor.removals, 1)
+        self.assertEqual(self.s.cleanup(), 'CONFIRMED')
+        self.assertEqual(self.executor.removals, 1)
+        self.assertEqual(sorted(p.name for p in self.s.folder.iterdir()), ['catalog-proof.json', 'outcome.json', 'private-install-receipt.json', 'run-marker.json'])
+        self.assertEqual(self.s.folder.stat().st_mode & 0o777, 0o700)
+        for p in self.s.folder.iterdir():
+            self.assertEqual(p.stat().st_mode & 0o777, 0o600)
+        second = self.run_fake()
+        self.assertEqual(second['failure_code'], 'RUN_ALREADY_STARTED')
+        self.assertEqual(self.executor.invocations, 1)
+
+    def test_all_process_stages_fail_closed_no_fixture_retry(self):
+        stages = ['modules', 'build', 'pull', 'image', 'create', 'start', 'inspect', 'ready', 'settings', 'wal', 'hba_path', 'hba_before', 'bad_password', 'hba_after',
+                  'sql_roles', 'sql_database', 'sql_install', 'sql_catalog', 'activity', 'fixture']
+        for stage in stages:
+            with self.subTest(stage=stage):
+                # A distinct isolated test fixture for every fault, not a retry.
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.fail = stage
+                    result = case.run_fake()
+                    self.assertEqual(result['status'], 'FAIL')
+                    self.assertNotEqual(result['run'], 'PASS')
+                    self.assertLessEqual(case.executor.invocations, 1)
+                    self.assertLessEqual(case.executor.removals, 1)
+                    self.assertIn(result['cleanup'], ('CONFIRMED', 'UNCONFIRMED'))
+                finally:
+                    case.tearDown()
+
+    def test_uncertain_create_absence_is_not_cleanup_proof(self):
+        self.executor.fail = 'create'
+        result = self.run_fake()
+        self.assertEqual(result['cleanup'], 'UNCONFIRMED')
+        self.assertEqual(self.executor.removals, 0)
+        marker = self.s.authenticated_marker()
+        self.assertEqual(marker['create_state'], 'SENT')
+        with self.assertRaises(m.Fault):
+            self.s.cleanup()
+
+    def test_uncertain_create_observed_owned_resource_can_be_removed(self):
+        self.executor.fail, self.executor.fail_after = 'create', True
+        result = self.run_fake()
+        self.assertEqual(result['run'], 'FAIL')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertEqual(self.executor.removals, 1)
+        self.assertEqual(self.s.authenticated_marker()['create_state'], 'OBSERVED')
+
+    def test_remove_timeout_requires_post_operation_inspection(self):
+        self.executor.fail, self.executor.fail_after = 'rm', True
+        result = self.run_fake()
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        phases = [x[0][1] for x in self.executor.calls if x[0][0] == m.DOCKER]
+        self.assertEqual(phases[-2:], ['rm', 'ps'])
+        self.assertEqual(self.executor.removals, 1)
+
+    def test_cleanup_denied_preserves_run_and_cleanup_separately(self):
+        self.executor.fail = 'rm'
+        result = self.run_fake()
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['run'], 'CANDIDATE_PASS')
+        self.assertEqual(result['cleanup'], 'UNCONFIRMED')
+        self.assertIsNotNone(self.executor.container)
+        self.executor.fail = None
+        self.assertEqual(self.s.cleanup(), 'CONFIRMED')
+        self.assertEqual(self.executor.removals, 1)
+        self.assertEqual(self.executor.invocations, 1)
+
+    def test_standalone_cleanup_source_drift_refused_before_docker(self):
+        self.assertEqual(self.run_fake()['status'], 'PASS_FOCUSED_ISOLATED_SCOPE')
+        before = len(self.executor.calls)
+        with patch.object(m, '__file__', str(self.source / 'scripts/pg-registration-acceptance.py')):
+            self.s.verify_standalone_cleanup_source()
+            (self.source / 'frozen-source.txt').write_bytes(b'CHANGED_AFTER_RUN')
+            with self.assertRaises(m.Fault):
+                self.s.verify_standalone_cleanup_source()
+        self.assertEqual(len(self.executor.calls), before)
+        # The already loaded finally-cleanup path remains available on drift.
+        self.assertEqual(self.s.cleanup(), 'CONFIRMED')
+
+    def test_cleanup_owner_mismatch_never_deletes_container(self):
+        self.executor.inspect_mutation = {'owner': 'f' * 64}
+        result = self.run_fake()
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['cleanup'], 'UNCONFIRMED')
+        self.assertEqual(self.executor.removals, 0)
+
+    def test_each_resource_mismatch_stops_before_sql(self):
+        for key, bad in [('memory', 2 << 30), ('swap', 2 << 30), ('cpus', 3_000_000_000),
+                         ('shm', 128 << 20), ('privileged', True), ('network', 'host'), ('pid', 'host'),
+                         ('ipc', 'host'), ('cap_add', ['SYS_ADMIN']), ('cap_drop', []),
+                         ('tmpfs', {}), ('mounts', [{'Type': 'bind', 'Destination': '/var/lib/postgresql'}]),
+                         ('ports', {'5432/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '54321'}]})]:
+            with self.subTest(key=key):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.inspect_mutation = {key: bad}
+                    result = case.run_fake()
+                    self.assertEqual(result['failure_code'], 'RESOURCE_MISMATCH')
+                    self.assertEqual(case.executor.invocations, 0)
+                    self.assertFalse(any(b'json_build_object' in call[1] for call in case.executor.calls))
+                finally:
+                    case.tearDown()
+
+    def test_no_secrets_in_arguments_or_child_environment_or_evidence(self):
+        result = self.run_fake()
+        secrets_used = set()
+        for args, data, env, cwd, timeout in self.executor.calls:
+            self.assertLessEqual(timeout, 300)
+            if data:
+                first = data.split(b'\n', 1)[0].decode()
+                if m.HEX.fullmatch(first):
+                    secrets_used.add(first)
+            self.assertNotIn('Config.Env', ' '.join(args))
+            self.assertFalse(env and any(k.startswith('PG') for k in env))
+        for secret in secrets_used:
+            self.assertNotIn(secret, json.dumps(result))
+            self.assertNotIn(secret, (self.s.folder / 'outcome.json').read_text())
+            for args, data, env, cwd, timeout in self.executor.calls:
+                self.assertNotIn(secret, json.dumps(args))
+                self.assertNotIn(secret, json.dumps(env))
+        self.assertEqual(len(secrets_used), 3)  # bootstrap, one wrong-password probe, actual owner
+
+    def test_rejected_catalog_proof_never_invokes_fixture_or_passes(self):
+        self.s.provision_helper.sanitized_catalog_proof = lambda receipt: (_ for _ in ()).throw(ValueError('private-catalog-content'))
+        result = self.run_fake()
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['failure_code'], 'PROVISION_FAILED')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertEqual(self.executor.invocations, 0)
+        self.assertFalse((self.s.folder / 'catalog-proof.json').exists())
+        self.assertNotIn('private-catalog-content', json.dumps(result))
+
+    def test_host_authentication_trust_md5_errors_includes_and_drift_refused(self):
+        mutations = [
+            lambda v: v['rules'][1].update(auth_method='trust'),
+            lambda v: v['rules'][1].update(auth_method='md5'),
+            lambda v: v['rules'][1].update(auth_method='password'),
+            lambda v: v['rules'][1].update(error='unreviewed parse error'),
+            lambda v: v['rules'][1].update(file_name='/foreign/hba.conf'),
+            lambda v: v['rules'][1].update(type='include'),
+            lambda v: v['rules'][1].update(options=['map=unreviewed']),
+            lambda v: v.update(hba_file='/foreign/hba.conf'),
+            lambda v: v.update(file_is_directory=True),
+            lambda v: v.update(file_mtime_epoch_us=v['config_load_epoch_us'] + 1),
+            lambda v: v.update(rule_count=33),
+            lambda v: v.update(session_user='different_admin'),
+            lambda v: v['rules'][-1].update(address='127.0.0.1', netmask='255.255.255.255'),
+        ]
+        for change in mutations:
+            with self.subTest(change=mutations.index(change)):
+                value = fake_hba('wt_admin_' + 'a' * 32)
+                change(value)
+                with self.assertRaises(m.Fault):
+                    m.verify_hba_snapshot(value, 'wt_admin_' + 'a' * 32)
+        self.executor.hba_mutation = mutations[0]
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'PG_AUTHENTICATION_MISMATCH')
+        self.assertEqual(self.executor.invocations, 0)
+        self.assertFalse(any(b'CREATE ROLE' in data for _, data, *_ in self.executor.calls))
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+
+    def test_wrong_password_success_and_non_auth_failure_refused(self):
+        for response in (m.Result(0, b'1\n'), m.Result(2, b'', b'connection refused'),
+                         m.Result(2, b'', b'password authentication failed for a different user')):
+            case = SupervisorTests('runTest')
+            case.setUp()
+            try:
+                case.executor.bad_password_result = response
+                result = case.run_fake()
+                self.assertEqual(result['failure_code'], 'PG_AUTHENTICATION_MISMATCH')
+                self.assertEqual(result['authentication']['status'], 'NOT_VERIFIED')
+                self.assertEqual(case.executor.invocations, 0)
+                self.assertEqual(result['cleanup'], 'CONFIRMED')
+            finally:
+                case.tearDown()
+
+    def test_authentication_probe_bracket_and_safe_retained_facts(self):
+        result = self.run_fake()
+        auth = result['authentication']
+        self.assertEqual(auth['status'], 'VERIFIED_IN_ISOLATED_SCOPE')
+        self.assertEqual(auth['wrong_password_probe'], 'AUTH_DENIAL_OBSERVED')
+        self.assertEqual(auth['successful_admin_identity_reads'], 2)
+        self.assertEqual(auth['loaded_hba_cache'], 'NOT_DIRECTLY_EXPOSED_BY_POSTGRESQL')
+        hba = [(args, data) for args, data, *_ in self.executor.calls if b'pg_hba_file_rules' in data]
+        self.assertEqual(len(hba), 2)
+        self.assertTrue(all('psql -w' in ' '.join(args) for args, _ in hba))
+        self.assertTrue(all('LC_ALL=C' in ' '.join(args) for args, _ in hba))
+        bad = [(args, data) for args, data, *_ in self.executor.calls if data.endswith(b'SELECT 1;\n')]
+        self.assertEqual(len(bad), 1)
+        self.assertNotEqual(bad[0][1].splitlines()[0], hba[0][1].splitlines()[0])
+        self.assertNotIn('password authentication failed', json.dumps(result))
+        self.assertNotIn('28P01', json.dumps(result))
+
+    def test_hba_load_time_need_not_follow_postmaster_start(self):
+        value = fake_hba('wt_admin_' + 'a' * 32)
+        value['config_load_epoch_us'] = value['postmaster_start_epoch_us'] - 1
+        fixed, rules = m.verify_hba_snapshot(value, 'wt_admin_' + 'a' * 32)
+        self.assertEqual(fixed['config_load_epoch_us'], value['config_load_epoch_us'])
+        self.assertTrue(rules)
+
+    def test_hba_file_symlink_outside_owned_data_is_refused(self):
+        self.executor.hba_canonical_path = '/foreign/pg_hba.conf'
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'PG_AUTHENTICATION_MISMATCH')
+        self.assertEqual(result['authentication']['wrong_password_probe'], 'NOT_RUN')
+        self.assertEqual(self.executor.invocations, 0)
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+
+    def test_hba_snapshot_change_between_identity_reads_refused(self):
+        self.executor.hba_after_mutation = lambda v: v.update(config_load_epoch_us=v['config_load_epoch_us'] + 1)
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'PG_AUTHENTICATION_MISMATCH')
+        self.assertEqual(result['authentication']['wrong_password_probe'], 'AUTH_DENIAL_OBSERVED')
+        self.assertEqual(result['authentication']['status'], 'NOT_VERIFIED')
+        self.assertEqual(self.executor.invocations, 0)
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+
+    def test_bad_event_stream_never_becomes_pass(self):
+        self.executor.output = b'PASS-looking-secret-that-must-not-be-printed'
+        result = self.run_fake()
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertNotIn('PASS-looking', json.dumps(result))
+        self.assertEqual(self.executor.invocations, 1)
+
+    def test_signal_failure_is_not_success_and_cleanup_runs(self):
+        original = self.s.run_fixture
+        def interrupted():
+            self.s.interrupted = True
+            raise m.Fault('INTERRUPTED', True)
+        self.s.run_fixture = interrupted
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'INTERRUPTED')
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+        self.assertEqual(self.executor.removals, 1)
+
+    def test_expired_or_expanded_job_deadline_never_launches(self):
+        for deadline in (time.monotonic_ns() - 1, time.monotonic_ns() + 900_000_000_000):
+            self.config.job_deadline_ns = deadline
+            result = self.run_fake()
+            self.assertEqual(result['status'], 'FAIL')
+            self.assertEqual(self.executor.calls, [])
+
+    def test_insufficient_create_budget_does_not_send_create(self):
+        self.config.job_deadline_ns = time.monotonic_ns() + 140_000_000_000
+        result = self.run_fake()
+        self.assertEqual(result['failure_code'], 'SUBPROCESS_TIMEOUT')
+        self.assertFalse(any(args[0] == m.DOCKER and args[1] == 'create' for args, *_ in self.executor.calls))
+        self.assertEqual(result['cleanup'], 'CONFIRMED')
+
+    def test_cleanup_deadline_cannot_be_extended_by_new_config(self):
+        self.assertEqual(self.run_fake()['status'], 'PASS_FOCUSED_ISOLATED_SCOPE')
+        self.config.job_deadline_ns += 1_000_000_000
+        before = len(self.executor.calls)
+        with self.assertRaises(m.Fault):
+            self.s.cleanup()
+        self.assertEqual(len(self.executor.calls), before)
+
+    def test_failed_settings_are_not_reported_verified(self):
+        self.executor.fail = 'settings'
+        result = self.run_fake()
+        self.assertEqual(result['resource_policy']['container_inspection'], 'VERIFIED')
+        self.assertEqual(result['resource_policy']['server_settings'], 'NOT_VERIFIED')
+        self.assertEqual(result['status'], 'FAIL')
+
+    def test_wrong_image_never_marks_container_verified(self):
+        self.executor.inspect_mutation = {'image_id': 'sha256:' + 'e' * 64}
+        result = self.run_fake()
+        self.assertEqual(result['resource_policy']['container_inspection'], 'NOT_VERIFIED')
+        self.assertEqual(result['resource_policy']['server_settings'], 'NOT_VERIFIED')
+        self.assertNotIn('container_observation', result)
+
+    def test_popen_failure_is_redacted(self):
+        with patch.object(m.subprocess, 'Popen', side_effect=OSError('secret-should-not-escape')):
+            with self.assertRaises(m.Fault) as caught:
+                m.Executor().call(['/fake/never-executed'])
+        self.assertEqual(str(caught.exception), 'SUBPROCESS_FAILED')
+        self.assertNotIn('secret', str(caught.exception))
+
+    def test_executor_timeout_kills_fake_process_group(self):
+        class Stream:
+            closed = False
+            def __init__(self, fd): self.fd = fd
+            def fileno(self): return self.fd
+            def close(self): self.closed = True
+        class Select:
+            def __init__(self): self.entries = {}
+            def register(self, stream, event, data): self.entries[stream.fd] = stream
+            def get_map(self): return self.entries
+            def close(self): pass
+        process = types.SimpleNamespace(stdin=Stream(100), stdout=Stream(101), stderr=Stream(102), pid=12345,
+                                        wait=lambda timeout: 0)
+        with patch.object(m.subprocess, 'Popen', return_value=process), patch.object(m.os, 'set_blocking'), \
+             patch.object(m.selectors, 'DefaultSelector', Select), patch.object(m.time, 'monotonic', side_effect=[0, 2]), \
+             patch.object(m.os, 'killpg') as kill:
+            with self.assertRaises(m.Fault) as caught:
+                m.Executor().call(['/fake/never-executed'], timeout=1)
+        self.assertEqual(caught.exception.code, 'SUBPROCESS_TIMEOUT')
+        self.assertTrue(caught.exception.uncertain)
+        kill.assert_called_once_with(12345, signal.SIGKILL)
+        self.assertTrue(process.stdin.closed and process.stdout.closed and process.stderr.closed)
+
+    def test_only_toolchain_can_allow_trusted_root_owned_directory(self):
+        original = m.Path.lstat
+        owner, mode = [0], [0o755]
+        target = self.go_root
+        def fake_lstat(path):
+            info = original(path)
+            if path == target:
+                values = list(info)
+                values[0] = (info.st_mode & ~0o777) | mode[0]
+                values[4] = owner[0]
+                return os.stat_result(values)
+            return info
+        with patch.object(m.Path, 'lstat', fake_lstat), patch.object(m.os, 'getuid', return_value=1000):
+            self.assertEqual(m.checked_directory(target, allow_root_owner=True), target)
+            with self.assertRaises(m.Fault):
+                m.checked_directory(target)
+            owner[0] = 2000
+            with self.assertRaises(m.Fault):
+                m.checked_directory(target, allow_root_owner=True)
+            owner[0], mode[0] = 0, 0o775
+            with self.assertRaises(m.Fault):
+                m.checked_directory(target, allow_root_owner=True)
+
+    def test_executing_module_must_match_pinned_source_root(self):
+        result = self.s.run(handle_signals=False)
+        self.assertEqual(result['failure_code'], 'SOURCE_PIN_MISMATCH')
+        self.assertEqual(self.executor.calls, [])
+
+    def test_absolute_deadline_refuses_more_work_but_reserves_cleanup(self):
+        clock = [100.0]
+        self.s.monotonic = lambda: clock[0]
+        self.s.operation_deadline = 110.0
+        self.s.call([m.DOCKER, 'ps', '-aq'], timeout=30)
+        self.assertEqual(self.executor.calls[-1][-1], 10.0)
+        clock[0] = 111.0
+        before = len(self.executor.calls)
+        with self.assertRaises(m.Fault):
+            self.s.call([m.DOCKER, 'ps', '-aq'])
+        self.assertEqual(len(self.executor.calls), before)
+
+    def test_catalog_row_bound_accepts_reviewed_size_and_rejects_excess(self):
+        self.s.credentials = {m.ROLE_NAMES[0]: 'a' * 64}
+        self.s.database = 'wt_test_12345678'
+        step = types.SimpleNamespace(phase='catalog', login_role=m.ROLE_NAMES[0], database=self.s.database,
+                                     sql='SELECT inert;', query=True, timeout_seconds=30)
+        self.s.sql_call = lambda *a, **kw: m.canonical([{'kind': 'catalog'}] * 2048)
+        self.assertEqual(len(self.s.execute(step)), 2048)
+        self.s.sql_call = lambda *a, **kw: m.canonical([{'kind': 'catalog'}] * 4097)
+        with self.assertRaises(m.Fault):
+            self.s.execute(step)
+        self.assertEqual(self.executor.calls, [])
+
+    def test_unbounded_executor_inputs_refused_without_popen(self):
+        with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
+            for args, data, timeout in [([], b'', 1), (['x'], b'', 301), (['x'], b'x' * ((2 << 20) + 1), 1),
+                                       (['x\x00bad'], b'', 1)]:
+                with self.assertRaises(m.Fault):
+                    m.Executor().call(args, data=data, timeout=timeout)
+
+    def test_cleanup_does_not_adopt_unmarked_directory(self):
+        self.s.folder.mkdir(mode=0o700)
+        m.private_file(self.s.folder / 'foreign', b'KEEP')
+        with self.assertRaises((m.Fault, OSError)):
+            self.s.cleanup()
+        self.assertEqual((self.s.folder / 'foreign').read_bytes(), b'KEEP')
+        self.assertEqual(self.executor.calls, [])
+
+    def test_symlink_and_duplicate_pin_refused(self):
+        (self.source / 'redirect').symlink_to(self.root / 'source-pin.json')
+        with self.assertRaises(m.Fault):
+            m.make_pin(self.source)
+        self.assertEqual(self.executor.calls, [])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

@@ -1,0 +1,216 @@
+name: Go controlled registration acceptance
+on:
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths:
+      - '.github/workflows/go-registration-acceptance.yml'
+      - 'scripts/pg-registration-*.py'
+      - 'scripts/pg-registration-cases.json'
+      - 'scripts/test_pg_registration_*.py'
+      - 'backend-go/migrations/**'
+      - 'backend-go/internal/callback/registration/**'
+      - 'backend-go/internal/callback/security/**'
+      - 'backend-go/internal/protocol/**'
+      - 'backend-go/internal/store/pg/fresh_registration*'
+      - 'backend-go/internal/store/pg/registration_authority_fixture*'
+      - 'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql'
+      - 'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql'
+      - 'backend-go/internal/store/pg/runner*.go'
+      - 'backend-go/go.mod'
+      - 'backend-go/go.sum'
+permissions:
+  contents: read
+concurrency:
+  group: go-registration-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  controlled-registration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOTELEMETRY: 'off'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Establish the job-wide deadline before setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_REPOSITORY" = ZhangIvan/worktool-open
+          test "$GITHUB_REF" = refs/heads/worktool/synthetic-prototype
+          test "$GITHUB_EVENT_NAME" = push
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          printf 'WORKTOOL_REGISTRATION_JOB_DEADLINE_NS=%s\n' "$(python3 -B -c 'import time; print(time.monotonic_ns() + 840_000_000_000)')" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Refuse a rerun and allocate isolated cache paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_REPOSITORY" = ZhangIvan/worktool-open
+          test "$GITHUB_REF" = refs/heads/worktool/synthetic-prototype
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf 'GOPATH=%s/wt-registration-go-path-%s-%s\nGOCACHE=%s/wt-registration-go-cache-%s-%s\nGOMODCACHE=%s/wt-registration-go-modules-%s-%s\n' \
+            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+          cache: false
+          token: ''
+      - name: Verify official toolchain and pinned modules
+        working-directory: backend-go
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = go1.27.3
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Stage the exact commit without Git metadata or symlinks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - <<'PY'
+          import io, os, pathlib, re, subprocess, tarfile
+          sha = os.environ['GITHUB_SHA']
+          run, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+          if not re.fullmatch('[a-f0-9]{40}', sha) or not re.fullmatch('[1-9][0-9]{0,19}', run) or attempt != '1':
+              raise SystemExit('INVALID_STAGING_IDENTITY')
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          if not root.is_absolute() or root.resolve() != root:
+              raise SystemExit('INVALID_STAGING_ROOT')
+          if subprocess.check_output(['git', 'rev-parse', 'HEAD'], timeout=10).decode().strip() != sha:
+              raise SystemExit('STAGING_COMMIT_MISMATCH')
+          records = subprocess.check_output(['git', 'ls-tree', '-r', '-z', sha], timeout=10).split(b'\0')
+          expected = set()
+          for record in records:
+              if not record:
+                  continue
+              header, rawpath = record.split(b'\t', 1)
+              mode, kind, oid = header.split(b' ')
+              path = rawpath.decode('utf-8')
+              parts = pathlib.PurePosixPath(path)
+              if mode not in (b'100644', b'100755') or kind != b'blob' or parts.is_absolute() or '..' in parts.parts or any(c in path for c in '\x00\r\n') or path in expected:
+                  raise SystemExit('UNSAFE_TRACKED_SOURCE')
+              expected.add(path)
+          if len(expected) != 341:
+              raise SystemExit('UNREVIEWED_SOURCE_INVENTORY')
+          raw = subprocess.check_output(['git', 'archive', '--format=tar', sha], timeout=20)
+          if len(raw) > 32 << 20:
+              raise SystemExit('SOURCE_ARCHIVE_TOO_LARGE')
+          parent = root / ('wt-registration-input-' + run + '-' + attempt)
+          parent.mkdir(mode=0o700, exist_ok=False)
+          source = parent / 'source'
+          source.mkdir(mode=0o700)
+          observed = set()
+          total = 0
+          with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+              members = archive.getmembers()
+              if len(members) > 1024:
+                  raise SystemExit('SOURCE_ARCHIVE_TOO_MANY_ENTRIES')
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or any(c in member.name for c in '\x00\r\n') or len(member.name) > 512:
+                      raise SystemExit('UNSAFE_ARCHIVE_PATH')
+                  target = source.joinpath(*path.parts)
+                  if member.isdir():
+                      target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                      continue
+                  if not member.isfile() or member.name not in expected or member.name in observed or member.size > 1 << 20:
+                      raise SystemExit('UNSAFE_ARCHIVE_MEMBER')
+                  total += member.size
+                  if total > 16 << 20:
+                      raise SystemExit('SOURCE_CONTENT_TOO_LARGE')
+                  observed.add(member.name)
+                  target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                  with archive.extractfile(member) as incoming, target.open('xb') as output:
+                      body = incoming.read((1 << 20) + 1)
+                      if len(body) != member.size:
+                          raise SystemExit('SOURCE_CONTENT_MISMATCH')
+                      output.write(body)
+                  target.chmod(0o755 if member.mode & 0o111 else 0o644)
+          if observed != expected:
+              raise SystemExit('SOURCE_INVENTORY_MISMATCH')
+          print('EXACT_COMMIT_STAGED_NO_RESOURCES_STARTED')
+          PY
+      - name: Run offline supervisor and fixture checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python3 -B -m unittest discover -s "$input/source/scripts" -p 'test_pg_registration_*.py' -v
+          cd "$input/source/backend-go"
+          unset WORKTOOL_PGTEST_ALLOW WORKTOOL_PGTEST_OWNER_DSN WORKTOOL_PGTEST_STORE_DSN WORKTOOL_REGISTRATION_PG_ENVELOPE
+          GOPROXY=off GOSUMDB=off go test -count=1 -p 1 -timeout=60s ./internal/store/pg -run '^TestRegistrationAuthority'
+      - name: Pin staged source and installed toolchain bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          script="$input/source/scripts/pg-registration-acceptance.py"
+          goroot="$(go env GOROOT)"
+          python3 -B "$script" make-source-pin --root "$input/source" --output "$input/source-pin.json"
+          python3 -B "$script" make-toolchain-pin --root "$goroot" --output "$input/toolchain-pin.json"
+      - name: Run one new controlled registration acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          goroot="$(go env GOROOT)"
+          python3 -B "$input/source/scripts/pg-registration-acceptance.py" run \
+            --source-root "$input/source" \
+            --source-manifest "$input/source-pin.json" \
+            --manifest-sha256 "$(sha256sum "$input/source-pin.json" | cut -d' ' -f1)" \
+            --go-binary "$goroot/bin/go" \
+            --toolchain-manifest "$input/toolchain-pin.json" \
+            --toolchain-manifest-sha256 "$(sha256sum "$input/toolchain-pin.json" | cut -d' ' -f1)" \
+            --module-cache "$GOMODCACHE" \
+            --repository ZhangIvan/worktool-open --commit "$GITHUB_SHA" --ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" | tee "$input/run-result.json"
+      - name: Always reconcile only this run's owned resources
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/wt-registration-input-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          script="$input/source/scripts/pg-registration-acceptance.py"
+          if test -f "$script"; then
+            python3 -B "$script" cleanup \
+              --repository ZhangIvan/worktool-open --commit "$GITHUB_SHA" --ref "$GITHUB_REF" \
+              --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" | tee "$input/cleanup-result.json"
+          else
+            if test -e "$RUNNER_TEMP/wt-registration-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"; then
+              printf '%s\n' 'Owned run evidence exists but cleanup code is unavailable: cleanup is UNCONFIRMED.'
+              exit 1
+            fi
+            printf '%s\n' 'Source staging and owned run evidence absent: no cleanup authority is available.'
+          fi
+      - name: Preserve only whitelisted redacted results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: controlled-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/wt-registration-${{ github.run_id }}-${{ github.run_attempt }}/outcome.json
+            ${{ runner.temp }}/wt-registration-${{ github.run_id }}-${{ github.run_attempt }}/catalog-proof.json
