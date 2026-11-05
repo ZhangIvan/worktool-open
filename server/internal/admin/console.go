@@ -12,6 +12,7 @@ package admin
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1011,7 +1012,9 @@ func (s *Server) handleCallbackLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	limit := pageLimit(r, 100, 500)
 	offset := pageOffset(r)
-	query := `SELECT id, COALESCE(command_id,''), kind, status, attempts, COALESCE(last_error,''), next_attempt, created_at, updated_at FROM outbox`
+	// http_status：最近一次投递的 HTTP 响应码（outbox.http_status，迁移 v4）；
+	// NULL（传输错误/未投递/skipped）→ JSON null——区分「无响应」与状态码 0。
+	query := `SELECT id, COALESCE(command_id,''), kind, status, attempts, COALESCE(last_error,''), next_attempt, created_at, updated_at, http_status FROM outbox`
 	var args []any
 	if st := strings.TrimSpace(r.URL.Query().Get("status")); st != "" {
 		switch st {
@@ -1032,11 +1035,17 @@ func (s *Server) handleCallbackLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id": atoiDefault(row[0]), "commandId": row[1], "kind": row[2], "status": row[3],
 			"attempts": atoiDefault(row[4]), "lastError": row[5],
 			"nextAttemptMs": atoiDefault(row[6]), "createdAtMs": atoiDefault(row[7]), "updatedAtMs": atoiDefault(row[8]),
-		})
+		}
+		if hs, err := strconv.Atoi(row[9]); err == nil {
+			item["httpStatus"] = hs
+		} else {
+			item["httpStatus"] = nil // NULL → JSON null（区分「无响应」与 0）
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": items, "count": len(items), "limit": limit, "offset": offset})
 }
@@ -1154,6 +1163,122 @@ func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": items, "count": len(items), "limit": limit, "offset": offset})
+}
+
+// ---- ⑤b 审计导出 ----
+
+// auditExportPage 为审计导出的翻页批大小（keyset 翻页逐批查询 + 逐批 flush，
+// 内存占用 O(批) 而非 O(全量)；全量上限由 limit 参数约束 ≤10000）。
+const auditExportPage = 500
+
+// auditExportMax 为审计导出行数上限（?limit= 参数 1..10000）。
+const auditExportMax = 10000
+
+// handleAuditExport GET /api/v1/admin/audit/export?format=jsonl|csv&limit=N
+// 审计日志全量导出（admin scope；审计导出车道，2026-11-05）：
+//   - format=jsonl（缺省回落 jsonl）：每行一个 JSON 对象 {id,kind,subject,detail,atMs}
+//     （与 handleAuditLogs 投影字段同名，便于消费方复用）；Content-Type
+//     application/x-ndjson；
+//   - format=csv：首行表头 id,kind,subject,detail,atMs + RFC4180 引用转义；
+//   - 分页流式：keyset（WHERE id > last ORDER BY id LIMIT 500）翻页，逐批
+//     Flush——稳定无漂移（offset 翻页在并发写入下会漏/重），内存 O(批)；
+//   - limit 截断导出总量（1..10000，越界 400）；
+//   - 无审计行 → 200 空流（csv 不写表头，与「空流」语义一致）；
+//   - Content-Disposition: attachment; filename="audit-export-<UTC 时间戳>.<ext>"；
+//   - 响应头已发出后查询失败：无法改写状态码——记服务端日志后中止（部分导出，
+//     客户端以截断可见；sqlite 只读查询失败面极窄）。
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "jsonl" // 缺省回落 jsonl
+	}
+	if format != "jsonl" && format != "csv" {
+		(&adminError{http.StatusBadRequest, "INVALID_FORMAT", "format 须为 jsonl|csv"}).write(w)
+		return
+	}
+	limit := auditExportMax
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > auditExportMax {
+			(&adminError{http.StatusBadRequest, "INVALID_LIMIT",
+				fmt.Sprintf("limit 须为 1..%d 整数", auditExportMax)}).write(w)
+			return
+		}
+		limit = n
+	}
+	// 响应头先落（错误路径已放行的查询失败无法回收——见函数注）。
+	if format == "csv" {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(
+		`attachment; filename="audit-export-%s.%s"`, s.now().UTC().Format("20060102T150405Z"), format))
+
+	var cw *csv.Writer
+	if format == "csv" {
+		cw = csv.NewWriter(w)
+	}
+	flusher, _ := w.(http.Flusher)
+	exported := 0
+	lastID := int64(0)
+	headerWritten := false
+	writeRow := func(row []string) {
+		if format == "csv" {
+			if !headerWritten {
+				_ = cw.Write([]string{"id", "kind", "subject", "detail", "atMs"})
+				headerWritten = true
+			}
+			_ = cw.Write(row)
+			return
+		}
+		id, _ := strconv.ParseInt(row[0], 10, 64)
+		at, _ := strconv.ParseInt(row[4], 10, 64)
+		line, err := json.Marshal(map[string]any{
+			"id": id, "kind": row[1], "subject": row[2], "detail": row[3], "atMs": at,
+		})
+		if err != nil {
+			return // Marshal 字符串字段不失败（防御性：坏行跳过不阻断全流）
+		}
+		_, _ = w.Write(append(line, '\n'))
+	}
+	for exported < limit && r.Context().Err() == nil {
+		page := auditExportPage
+		if remain := limit - exported; remain < page {
+			page = remain
+		}
+		rows, err := s.db.QueryDump(r.Context(),
+			`SELECT id, kind, subject, detail, at FROM audit_log WHERE id > ? ORDER BY id LIMIT ?`, lastID, page)
+		if err != nil {
+			s.log.Printf("admin: 审计导出查询失败（已导出 %d 行后中止）: %v", exported, err)
+			break
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			writeRow(row)
+			if id, err := strconv.ParseInt(row[0], 10, 64); err == nil {
+				lastID = id
+			}
+			exported++
+		}
+		if cw != nil {
+			cw.Flush() // csv 缓冲先落（再推 http 层）
+		}
+		if flusher != nil {
+			flusher.Flush() // 逐批推流（客户端实时可见）
+		}
+		if len(rows) < page {
+			break // 尾页
+		}
+	}
+	if cw != nil {
+		cw.Flush()
+	}
 }
 
 // ---- ⑥ 设置 ----

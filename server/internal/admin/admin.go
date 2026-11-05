@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"cn.worktool.open/server/internal/httpx"
 	"cn.worktool.open/server/internal/scheduler"
 	"cn.worktool.open/server/internal/store/sqlite"
 	"cn.worktool.open/server/internal/wire"
@@ -141,6 +142,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	amux.HandleFunc("GET /api/v1/admin/callbacks/logs", s.handleCallbackLogs)
 	amux.HandleFunc("GET /api/v1/admin/logs/executions", s.handleExecutionLogs)
 	amux.HandleFunc("GET /api/v1/admin/logs/audit", s.handleAuditLogs)
+	// 审计导出（审计导出车道，2026-11-05）：jsonl/csv 分页流式全量导出。
+	amux.HandleFunc("GET /api/v1/admin/audit/export", s.handleAuditExport)
 	amux.HandleFunc("GET /api/v1/admin/settings", s.handleSettings)
 	amux.HandleFunc("PUT /api/v1/admin/settings/guard", s.handleGuardSettings)
 	amux.HandleFunc("PUT /api/v1/admin/settings/encryption", s.handleEncryptionSettings)
@@ -162,9 +165,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 		})
 		amux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir(s.uiDir))))
 	}
-	mux.Handle("/api/v1/admin/", withCSP(amux))
-	mux.Handle("/admin", withCSP(amux))
-	mux.Handle("/admin/", withCSP(amux))
+	// requestId 中间件（requestId 车道，2026-11-05）：管理面全部响应回显
+	// X-Request-Id、访问日志行携带 rid；与 CSP 中间件串联（requestId 在外——
+	// CSP 语义不变）。嵌套安全：生产装配 api.NewServeMux 全局面已包一层，此处
+	// 内层复用外层 rid 且不重复记访问日志（独立挂载 admin 时本层兜底）。
+	amuxWrapped := httpx.RequestID(s.log, withCSP(amux))
+	mux.Handle("/api/v1/admin/", amuxWrapped)
+	mux.Handle("/admin", amuxWrapped)
+	mux.Handle("/admin/", amuxWrapped)
 }
 
 // handleOpenAPITokens 兼容面令牌生命周期路由（方法守卫内派发；W-M5 日常使用

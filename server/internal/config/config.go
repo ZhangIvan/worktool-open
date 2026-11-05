@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 )
 
 // DefaultListen 为默认监听地址：仅 loopback（SR-09 默认形态）。
@@ -62,11 +63,31 @@ type Config struct {
 	// 审计 TOP5：robotId 即身份的弱鉴权是上游已知事实，该面**默认不挂载**，
 	// 仅迁移期部署经 flag -enable-v1-compat / env WT_ENABLE_V1_COMPAT 显式开启）。
 	EnableV1Compat bool
+
+	// ---- 保留期 config 化（2026-11-05，秒数旗标；默认值 = 既有硬编码窗口）----
+
+	// RetentionOutboxDelivered outbox delivered 行保留窗（默认 7 天）。
+	RetentionOutboxDelivered time.Duration
+	// RetentionOutboxDead outbox dead 行保留窗（默认 30 天）。
+	RetentionOutboxDead time.Duration
+	// RetentionSessionClosed closed 设备会话整行保留窗（默认 30 天）。
+	RetentionSessionClosed time.Duration
+	// SweeperInterval 保留清理循环周期（启动即先扫一轮，不待首个 tick；默认 1h）。
+	SweeperInterval time.Duration
 }
 
-// Default 返回默认配置：loopback + 明文（本地原型例外，见 SR-09）。
+// Default 返回默认配置：loopback + 明文（本地原型例外，见 SR-09）。保留期
+// 窗口默认值 = store 常量同值（outbox delivered 7 天 / dead 30 天 / closed
+// 会话 30 天 / 清扫周期 1h）。
 func Default() Config {
-	return Config{Listen: DefaultListen, DBPath: "worktool.db"}
+	return Config{
+		Listen:                  DefaultListen,
+		DBPath:                  "worktool.db",
+		RetentionOutboxDelivered: 7 * 24 * time.Hour,
+		RetentionOutboxDead:      30 * 24 * time.Hour,
+		RetentionSessionClosed:   30 * 24 * time.Hour,
+		SweeperInterval:          time.Hour,
+	}
 }
 
 // TLSEnabled 报告是否启用 TLS（证书与私钥须同时提供）。
@@ -115,8 +136,35 @@ func Load(argv []string, environ []string) (Config, error) {
 	fs.BoolVar(&cfg.IssueAdminToken, "issue-admin-token", false, "签发一枚管理面令牌（打印原始值后退出；仅存 SHA-256 hash）")
 	fs.BoolVar(&cfg.IssueApproverToken, "issue-approver-token", false, "签发一枚审批决议令牌（approver scope，打印原始值后退出；仅存 SHA-256 hash）")
 	fs.BoolVar(&cfg.EnableV1Compat, "enable-v1-compat", cfg.EnableV1Compat, "挂载 v1 兼容 WS 面 /webserver/wework/{robotId}（默认 false；弱鉴权面仅迁移期显式开启，H-2）")
+	// 保留期 config 化（2026-11-05）：单位 = 秒；默认值 = 既有硬编码窗口。
+	var (
+		retentionOutboxDeliveredSec = int64(cfg.RetentionOutboxDelivered / time.Second)
+		retentionOutboxDeadSec      = int64(cfg.RetentionOutboxDead / time.Second)
+		retentionSessionClosedSec   = int64(cfg.RetentionSessionClosed / time.Second)
+		sweeperIntervalSec          = int64(cfg.SweeperInterval / time.Second)
+	)
+	fs.Int64Var(&retentionOutboxDeliveredSec, "retention-outbox-delivered", retentionOutboxDeliveredSec, "outbox delivered 行保留秒数（默认 604800=7 天）")
+	fs.Int64Var(&retentionOutboxDeadSec, "retention-outbox-dead", retentionOutboxDeadSec, "outbox dead 行保留秒数（默认 2592000=30 天）")
+	fs.Int64Var(&retentionSessionClosedSec, "retention-session-closed", retentionSessionClosedSec, "closed 设备会话整行保留秒数（默认 2592000=30 天）")
+	fs.Int64Var(&sweeperIntervalSec, "sweeper-interval", sweeperIntervalSec, "保留清理循环周期秒数（启动即先扫一轮；默认 3600=1 小时）")
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, fmt.Errorf("config: 解析命令行参数失败: %w", err)
+	}
+	cfg.RetentionOutboxDelivered = time.Duration(retentionOutboxDeliveredSec) * time.Second
+	cfg.RetentionOutboxDead = time.Duration(retentionOutboxDeadSec) * time.Second
+	cfg.RetentionSessionClosed = time.Duration(retentionSessionClosedSec) * time.Second
+	cfg.SweeperInterval = time.Duration(sweeperIntervalSec) * time.Second
+	// 保留期窗口非正数 = 误配（零窗口每轮全删/零周期忙转）→ 启动即拒绝
+	//（校验在旗标换算处而非 Validate：直构 Config 的零值 Durations 不判）。
+	for name, sec := range map[string]int64{
+		"-retention-outbox-delivered": retentionOutboxDeliveredSec,
+		"-retention-outbox-dead":      retentionOutboxDeadSec,
+		"-retention-session-closed":   retentionSessionClosedSec,
+		"-sweeper-interval":           sweeperIntervalSec,
+	} {
+		if sec <= 0 {
+			return Config{}, fmt.Errorf("config: %s 须为正整数秒（收到 %d）", name, sec)
+		}
 	}
 	if cfg.DBPath == "" {
 		cfg.DBPath = "worktool.db" // 空 env/flag 回落默认

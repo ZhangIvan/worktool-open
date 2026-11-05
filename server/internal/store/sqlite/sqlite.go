@@ -159,10 +159,14 @@ type OutboxItem struct {
 	Payload     string // JSON（仅元数据，不 echo 消息正文，docs/02 §6.1）
 	Attempts    int
 	NextAttempt time.Time
-	Status      string // pending | delivered | dead
+	Status      string // pending | delivered | dead | skipped
 	LastError   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// HTTPStatus 为最近一次投递尝试的 HTTP 响应码（投递记录独立字段车道，
+	// 迁移 v4）。NULL = 从未收到 HTTP 响应（传输错误/尚未投递/skipped——
+	// 与「响应码恰为 0」不可能混淆，HTTP 无 0 状态码）。
+	HTTPStatus sql.NullInt64
 }
 
 // Tombstone 为设备墓碑行（仅元数据）。
@@ -288,7 +292,8 @@ CREATE TABLE IF NOT EXISTS outbox (
   status        TEXT NOT NULL DEFAULT 'pending',
   last_error    TEXT NOT NULL DEFAULT '',
   created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  updated_at    INTEGER NOT NULL,
+  http_status   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, next_attempt);
 
@@ -437,6 +442,22 @@ func (db *DB) migrate() error {
 	if version < 3 {
 		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?)`, time.Now().UnixMilli()); err != nil {
 			return fmt.Errorf("sqlite: 登记迁移 v3 失败: %w", err)
+		}
+	}
+	// v4（投递记录 http_status 独立字段车道）：outbox 增 http_status 列（回调
+	// POST 响应码独立落列，与 last_error 文本区分；既有库 ALTER，新库已含列）。
+	if version < 4 {
+		var hasCol int
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('outbox') WHERE name='http_status'`).Scan(&hasCol); err != nil {
+			return fmt.Errorf("sqlite: 探测 outbox.http_status 失败: %w", err)
+		}
+		if hasCol == 0 {
+			if _, err := db.sql.Exec(`ALTER TABLE outbox ADD COLUMN http_status INTEGER`); err != nil {
+				return fmt.Errorf("sqlite: 迁移 v4（outbox.http_status）失败: %w", err)
+			}
+		}
+		if _, err := db.sql.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (4, ?)`, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("sqlite: 登记迁移 v4 失败: %w", err)
 		}
 	}
 	return nil
@@ -760,62 +781,80 @@ func (db *DB) ScrubClosedSessionKeys(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
-// ---- 保留清理（服务端可观测与保留清理车道，2026-11-05）----
+// ---- 保留清理（服务端可观测与保留清理车道，2026-11-05；保留期 config 化，
+// 2026-11-05）----
 // 终态行按保留期删除（ScanQueuedTTL 同形态的周期扫描删除；调度=启动一轮 +
-// 每小时，cmd/server main.go runRetentionSweeper）。
+// 每 interval 一轮，cmd/server main.go runRetentionSweeper——interval 与各窗口
+// 经 -sweeper-interval / -retention-* 旗标可配，常量仅为默认值）。
 
-// OutboxDeliveredRetain delivered 行保留期（7 天）。
+// OutboxDeliveredRetain delivered 行保留期默认值（7 天；生产窗口经
+// -retention-outbox-delivered 旗标注入 CleanupOutboxRetention，保留期 config 化）。
 const OutboxDeliveredRetain = 7 * 24 * time.Hour
 
-// OutboxDeadRetain dead 行保留期（30 天）。
+// OutboxDeadRetain dead 行保留期默认值（30 天；生产窗口经 -retention-outbox-dead 注入）。
 const OutboxDeadRetain = 30 * 24 * time.Hour
 
-// CleanupOutboxRetention 清理终态 outbox 行：delivered 超 [OutboxDeliveredRetain]、
-// dead 超 [OutboxDeadRetain]（均按 updated_at 判龄——终态迁移时刻）。dead 行删除
-// 前同事务落一条 outbox_dead_purged 审计（批量计数，死信消失前留痕）。
-// pending/skipped 行不动。返回 (delivered, dead) 删除行数（幂等：再扫 = 0,0）。
-func (db *DB) CleanupOutboxRetention(ctx context.Context, now time.Time) (delivered, dead int64, err error) {
+// OutboxSkippedRetain skipped 行保留期（30 天；skipped 为终态且无审计要求——
+// 与 delivered/dead 同 sweeper 清理，不计入 outbox_dead_purged 审计）。
+const OutboxSkippedRetain = 30 * 24 * time.Hour
+
+// CleanupOutboxRetention 清理终态 outbox 行：delivered 超 [deliveredRetain]、
+// dead 超 [deadRetain]、skipped 超 [OutboxSkippedRetain]（均按 updated_at 判龄
+// ——终态迁移时刻）。dead 行删除前同事务落一条 outbox_dead_purged 审计（批量
+// 计数，死信消失前留痕）；skipped 清理无审计要求；pending 行不动。
+// 返回 (delivered, dead, skipped) 删除行数（幂等：再扫 = 0,0,0）。
+func (db *DB) CleanupOutboxRetention(ctx context.Context, now time.Time, deliveredRetain, deadRetain time.Duration) (delivered, dead, skipped int64, err error) {
 	err = db.withTx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM outbox WHERE status='dead' AND updated_at <= ?`,
-			now.Add(-OutboxDeadRetain).UnixMilli()).Scan(&dead); err != nil {
+			now.Add(-deadRetain).UnixMilli()).Scan(&dead); err != nil {
 			return err
 		}
 		if dead > 0 {
 			// 清理前审计（与删除同事务：崩溃间隙不留无痕删除）。
 			if err := db.InsertAudit(ctx, tx, "outbox_dead_purged", "",
-				fmt.Sprintf("count=%d（dead 行保留期 %s，按 updated_at 判龄）", dead, OutboxDeadRetain), now); err != nil {
+				fmt.Sprintf("count=%d（dead 行保留期 %s，按 updated_at 判龄）", dead, deadRetain), now); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx,
 				`DELETE FROM outbox WHERE status='dead' AND updated_at <= ?`,
-				now.Add(-OutboxDeadRetain).UnixMilli()); err != nil {
+				now.Add(-deadRetain).UnixMilli()); err != nil {
 				return err
 			}
 		}
+		// skipped（W-M6 无接收器终态）与 delivered/dead 同 sweeper 清理；
+		// 无审计要求——批量删除即可。
+		resSkip, err := tx.ExecContext(ctx,
+			`DELETE FROM outbox WHERE status='skipped' AND updated_at <= ?`,
+			now.Add(-OutboxSkippedRetain).UnixMilli())
+		if err != nil {
+			return err
+		}
+		skipped, _ = resSkip.RowsAffected()
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM outbox WHERE status='delivered' AND updated_at <= ?`,
-			now.Add(-OutboxDeliveredRetain).UnixMilli())
+			now.Add(-deliveredRetain).UnixMilli())
 		if err != nil {
 			return err
 		}
 		delivered, _ = res.RowsAffected()
 		return nil
 	})
-	return delivered, dead, err
+	return delivered, dead, skipped, err
 }
 
-// ClosedSessionRetain closed 会话整行保留期（30 天；server_x25519_private 关闭即
-// 清零语义已存在（M-4），到期后连元数据一并整行删除）。
+// ClosedSessionRetain closed 会话整行保留期默认值（30 天；server_x25519_private
+// 关闭即清零语义已存在（M-4），到期后连元数据一并整行删除；生产窗口经
+// -retention-session-closed 旗标注入 CleanupClosedSessions）。
 const ClosedSessionRetain = 30 * 24 * time.Hour
 
-// CleanupClosedSessions 清理超期 closed 会话整行（closed_at 超 [ClosedSessionRetain]；
+// CleanupClosedSessions 清理超期 closed 会话整行（closed_at 超 [retain]；
 // closed_at 缺失的历史行按 created_at 兜底判龄）。open/pending 行不动（运行需要）。
 // 返回删除行数（幂等：再扫 = 0）。
-func (db *DB) CleanupClosedSessions(ctx context.Context, now time.Time) (int64, error) {
+func (db *DB) CleanupClosedSessions(ctx context.Context, now time.Time, retain time.Duration) (int64, error) {
 	res, err := db.sql.ExecContext(ctx,
 		`DELETE FROM device_sessions WHERE state='closed' AND COALESCE(closed_at, created_at) <= ?`,
-		now.Add(-ClosedSessionRetain).UnixMilli())
+		now.Add(-retain).UnixMilli())
 	if err != nil {
 		return 0, err
 	}
@@ -1101,39 +1140,28 @@ VALUES (?,?,?,0,?,'pending',?,?)`, commandID, kind, string(raw), at.UnixMilli(),
 // （过期 worker 写入拒绝）——归 PG 存储车道（docs/11 §D T4.3）一并设计。
 func (db *DB) DueOutbox(ctx context.Context, now time.Time, limit int) ([]OutboxItem, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at
+SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at, http_status
 FROM outbox WHERE status='pending' AND next_attempt <= ? ORDER BY id LIMIT ?`, now.UnixMilli(), limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []OutboxItem
-	for rows.Next() {
-		var it OutboxItem
-		var na, ca, ua int64
-		if err := rows.Scan(&it.ID, &it.CommandID, &it.Kind, &it.Payload, &it.Attempts, &na, &it.Status, &it.LastError, &ca, &ua); err != nil {
-			return nil, err
-		}
-		it.NextAttempt = time.UnixMilli(na)
-		it.CreatedAt = time.UnixMilli(ca)
-		it.UpdatedAt = time.UnixMilli(ua)
-		out = append(out, it)
-	}
-	return out, rows.Err()
+	return collectOutbox(rows)
 }
 
-// UpdateOutbox 更新出站行状态。
+// UpdateOutbox 更新出站行状态（含最近投递 HTTP 响应码 http_status；无 HTTP
+// 响应传 sql.NullInt64{} 落 NULL）。
 func (db *DB) UpdateOutbox(ctx context.Context, it OutboxItem) error {
 	_, err := db.sql.ExecContext(ctx, `
-UPDATE outbox SET attempts=?, next_attempt=?, status=?, last_error=?, updated_at=? WHERE id=?`,
-		it.Attempts, it.NextAttempt.UnixMilli(), it.Status, it.LastError, time.Now().UTC().UnixMilli(), it.ID)
+UPDATE outbox SET attempts=?, next_attempt=?, status=?, last_error=?, updated_at=?, http_status=? WHERE id=?`,
+		it.Attempts, it.NextAttempt.UnixMilli(), it.Status, it.LastError, time.Now().UTC().UnixMilli(), nullInt(it.HTTPStatus), it.ID)
 	return err
 }
 
 // OutboxByStatus 按状态列出出站行（测试）。
 func (db *DB) OutboxByStatus(ctx context.Context, status string) ([]OutboxItem, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at
+SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at, http_status
 FROM outbox WHERE status=? ORDER BY id`, status)
 	if err != nil {
 		return nil, err
@@ -1147,7 +1175,7 @@ func collectOutbox(rows *sql.Rows) ([]OutboxItem, error) {
 	for rows.Next() {
 		var it OutboxItem
 		var na, ca, ua int64
-		if err := rows.Scan(&it.ID, &it.CommandID, &it.Kind, &it.Payload, &it.Attempts, &na, &it.Status, &it.LastError, &ca, &ua); err != nil {
+		if err := rows.Scan(&it.ID, &it.CommandID, &it.Kind, &it.Payload, &it.Attempts, &na, &it.Status, &it.LastError, &ca, &ua, &it.HTTPStatus); err != nil {
 			return nil, err
 		}
 		it.NextAttempt = time.UnixMilli(na)
@@ -1487,7 +1515,7 @@ func collectCronJobs(rows *sql.Rows) ([]CronJob, error) {
 // OutboxByCommand 返回该指令的全部出站行（RAW_CONFIRM 结果查询取 kind=exec_result）。
 func (db *DB) OutboxByCommand(ctx context.Context, commandID string) ([]OutboxItem, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at
+SELECT id, command_id, kind, payload, attempts, next_attempt, status, last_error, created_at, updated_at, http_status
 FROM outbox WHERE command_id=? ORDER BY id`, commandID)
 	if err != nil {
 		return nil, err
@@ -1545,6 +1573,13 @@ func nullStrPtr(ns sql.NullString) any {
 		return nil
 	}
 	return ns.String
+}
+
+func nullInt(n sql.NullInt64) any {
+	if !n.Valid {
+		return nil
+	}
+	return n.Int64
 }
 
 func nullMilli(t sql.NullTime) any {

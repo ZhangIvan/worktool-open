@@ -316,14 +316,15 @@ func TestK1ListOver100(t *testing.T) {
 	}
 }
 
-// TestK1RequiredFieldPrevalidate：203 缺 receivedContent → 101011 前置（13 项
-// 清单第 7 条骨架）+ 整单拒绝。
+// TestK1RequiredFieldPrevalidate：203 缺 receivedContent → 422 + 101011 前置
+//（13 项清单第 7 条骨架；结构化字段错误车道：HTTP 400→422，顶层 code 语义不变）
+// + 整单拒绝。
 func TestK1RequiredFieldPrevalidate(t *testing.T) {
 	f := newFixture(t)
 	status, env, _ := f.doReq(t,
 		`{"socketType": 2, "list": [{"type": 203, "titleList": ["仑哥"]}]}`, "", nil)
-	if status != http.StatusBadRequest || env["code"] != float64(101011) {
-		t.Fatalf("缺必填应 101011: %v", env)
+	if status != http.StatusUnprocessableEntity || env["code"] != float64(101011) {
+		t.Fatalf("缺必填应 422 + 101011: status=%d %v", status, env)
 	}
 	if !strings.Contains(env["message"].(string), "receivedContent") {
 		t.Fatalf("message 应指出缺失字段: %v", env["message"])
@@ -331,7 +332,7 @@ func TestK1RequiredFieldPrevalidate(t *testing.T) {
 	if n := len(f.commands(t)); n != 0 {
 		t.Fatalf("应零入队: %d", n)
 	}
-	// 206/213/234 表项抽查
+	// 206/213/234 表项抽查（顶层 code 语义不变 + errors 数组在位）
 	for _, tc := range []struct{ body, field string }{
 		{`{"socketType": 2, "list": [{"type": 206, "groupName": "g"}]}`, "selectList"},
 		{`{"socketType": 2, "list": [{"type": 213, "friend": {"markName": "m"}}]}`, "friend.phone"},
@@ -341,6 +342,98 @@ func TestK1RequiredFieldPrevalidate(t *testing.T) {
 		if env["code"] != float64(101011) || !strings.Contains(env["message"].(string), tc.field) {
 			t.Fatalf("%s 必填校验未命中: %v", tc.field, env["message"])
 		}
+		assertErrorsArray(t, env, tc.field)
+	}
+}
+
+// assertErrorsArray 断言响应含 errors:[{field,code,message}] 数组，且数组内含
+// 指定 field 的元素（code=101011，message 含 list[i] 索引前缀）。
+func assertErrorsArray(t *testing.T, env map[string]any, field string) {
+	t.Helper()
+	raw, ok := env["errors"].([]any)
+	if !ok || len(raw) == 0 {
+		t.Fatalf("响应应含 errors 数组: %v", env)
+	}
+	found := false
+	for _, e := range raw {
+		fe, ok := e.(map[string]any)
+		if !ok {
+			t.Fatalf("errors 元素应为对象: %v", e)
+		}
+		if fe["field"] == field {
+			found = true
+			if fe["code"] != float64(101011) {
+				t.Fatalf("errors 元素 code 应为 101011: %v", fe)
+			}
+			msg, _ := fe["message"].(string)
+			if !strings.Contains(msg, "list[") {
+				t.Fatalf("errors 元素 message 应含 list[i] 索引: %v", fe)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("errors 数组应含 field=%s: %v", field, raw)
+	}
+}
+
+// TestK1RequiredFieldErrorsStructured（结构化字段错误车道）：多违例全量收集——
+// 单条多缺字段 → errors 覆盖全部缺失字段；多条 list 项 → 逐项索引化收集；
+// 结构性错误（缺 type）维持 400 不带 errors。
+func TestK1RequiredFieldErrorsStructured(t *testing.T) {
+	f := newFixture(t)
+	// 单条 203 双缺：titleList + receivedContent 两条 errors。
+	status, env, _ := f.doReq(t,
+		`{"socketType": 2, "list": [{"type": 203}]}`, "", nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("应 422: %d %v", status, env)
+	}
+	raw, _ := env["errors"].([]any)
+	if len(raw) != 2 {
+		t.Fatalf("双缺字段应 2 条 errors: %v", env["errors"])
+	}
+	fields := map[string]bool{}
+	for _, e := range raw {
+		fields[e.(map[string]any)["field"].(string)] = true
+	}
+	if !fields["titleList"] || !fields["receivedContent"] {
+		t.Fatalf("errors 应覆盖 titleList+receivedContent: %v", raw)
+	}
+
+	// 多条 list 项逐项收集（list[0] 206 缺 selectList + list[1] 213 缺 phone）。
+	status, env, _ = f.doReq(t,
+		`{"socketType": 2, "list": [{"type": 206, "groupName": "g"}, {"type": 213, "friend": {}}]}`, "", nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("应 422: %d %v", status, env)
+	}
+	raw, _ = env["errors"].([]any)
+	if len(raw) != 2 {
+		t.Fatalf("两条目应各 1 条 errors: %v", env["errors"])
+	}
+	var sawList0, sawList1 bool
+	for _, e := range raw {
+		msg, _ := e.(map[string]any)["message"].(string)
+		if strings.Contains(msg, "list[0]") {
+			sawList0 = true
+		}
+		if strings.Contains(msg, "list[1]") {
+			sawList1 = true
+		}
+	}
+	if !sawList0 || !sawList1 {
+		t.Fatalf("errors message 应逐项索引化（list[0]/list[1]）: %v", raw)
+	}
+	if n := len(f.commands(t)); n != 0 {
+		t.Fatalf("应零入队: %d", n)
+	}
+
+	// 结构性错误维持 400（非必填表违例不带 errors 数组）。
+	status, env, _ = f.doReq(t,
+		`{"socketType": 2, "list": [{"titleList": ["a"]}]}`, "", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("缺 type 应维持 400: %d", status)
+	}
+	if _, has := env["errors"]; has {
+		t.Fatalf("结构性错误不应带 errors 数组: %v", env)
 	}
 }
 

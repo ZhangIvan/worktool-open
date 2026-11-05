@@ -1,9 +1,12 @@
 // 保留清理回归测试（服务端可观测与保留清理车道，2026-11-05）：
 //   - CleanupOutboxRetention：delivered 行保留 7 天、dead 行保留 30 天（按
 //     updated_at 判龄）；dead 删除前同事务落一条 outbox_dead_purged 审计（批量
-//     计数）；pending/skipped 行不动；幂等（再扫 0 行、无重复审计）；
+//     计数）；skipped 行纳入同 sweeper 清理（30 天，无审计要求）；pending 行
+//     不动；幂等（再扫 0 行、无重复审计）；
 //   - CleanupClosedSessions：closed 会话整行保留 30 天（closed_at 判龄，缺失按
 //     created_at 兜底）；open/pending 行无论多旧都保留。
+//   - 保留期经参数注入（保留期 config 化车道）：常量为默认值，调用方
+//     （cmd/server）经 -retention-* 旗标传入实际窗口。
 package sqlite
 
 import (
@@ -56,25 +59,27 @@ func outboxStatus(t *testing.T, db *DB, id int64) (string, bool) {
 	return rows[0][0], true
 }
 
-// TestCleanupOutboxRetention：窗口语义 + dead 审计 + 幂等。
+// TestCleanupOutboxRetention：窗口语义 + dead 审计 + skipped 同 sweeper 30 天
+// 清理 + 幂等。
 func TestCleanupOutboxRetention(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	now := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
 
-	idDeliveredOld := seedOutboxRow(t, db, "cmd-delivered-old", "delivered", now.Add(-8*24*time.Hour))   // >7d → 删
+	idDeliveredOld := seedOutboxRow(t, db, "cmd-delivered-old", "delivered", now.Add(-8*24*time.Hour))     // >7d → 删
 	idDeliveredFresh := seedOutboxRow(t, db, "cmd-delivered-fresh", "delivered", now.Add(-6*24*time.Hour)) // <7d → 留
 	idDeadOld := seedOutboxRow(t, db, "cmd-dead-old", "dead", now.Add(-31*24*time.Hour))                   // >30d → 删
 	idDeadMid := seedOutboxRow(t, db, "cmd-dead-mid", "dead", now.Add(-8*24*time.Hour))                    // 8d：delivered 窗口外、dead 窗口内 → 留
 	idPending := seedOutboxRow(t, db, "cmd-pending", "pending", now.Add(-40*24*time.Hour))                 // pending → 不动
-	idSkipped := seedOutboxRow(t, db, "cmd-skipped", "skipped", now.Add(-40*24*time.Hour))                 // skipped → 不动
+	idSkippedOld := seedOutboxRow(t, db, "cmd-skipped-old", "skipped", now.Add(-40*24*time.Hour))          // skipped >30d → 删
+	idSkippedFresh := seedOutboxRow(t, db, "cmd-skipped-fresh", "skipped", now.Add(-29*24*time.Hour))      // skipped <30d → 留
 
-	delivered, dead, err := db.CleanupOutboxRetention(ctx, now)
+	delivered, dead, skipped, err := db.CleanupOutboxRetention(ctx, now, OutboxDeliveredRetain, OutboxDeadRetain)
 	if err != nil {
 		t.Fatalf("CleanupOutboxRetention: %v", err)
 	}
-	if delivered != 1 || dead != 1 {
-		t.Fatalf("应删 delivered=1 dead=1，got delivered=%d dead=%d", delivered, dead)
+	if delivered != 1 || dead != 1 || skipped != 1 {
+		t.Fatalf("应删 delivered=1 dead=1 skipped=1，got delivered=%d dead=%d skipped=%d", delivered, dead, skipped)
 	}
 	if _, ok := outboxStatus(t, db, idDeliveredOld); ok {
 		t.Fatal("delivered 超 7 天应已删除")
@@ -91,11 +96,15 @@ func TestCleanupOutboxRetention(t *testing.T) {
 	if st, ok := outboxStatus(t, db, idPending); !ok || st != "pending" {
 		t.Fatalf("pending 不应被清理，ok=%v st=%q", ok, st)
 	}
-	if st, ok := outboxStatus(t, db, idSkipped); !ok || st != "skipped" {
-		t.Fatalf("skipped 不应被清理，ok=%v st=%q", ok, st)
+	if _, ok := outboxStatus(t, db, idSkippedOld); ok {
+		t.Fatal("skipped 超 30 天应已删除（与 delivered/dead 同 sweeper）")
+	}
+	if st, ok := outboxStatus(t, db, idSkippedFresh); !ok || st != "skipped" {
+		t.Fatalf("skipped 未满 30 天应保留，ok=%v st=%q", ok, st)
 	}
 
-	// dead 清理前审计：恰一条 outbox_dead_purged，detail 含批量计数。
+	// dead 清理前审计：恰一条 outbox_dead_purged，detail 含批量计数；skipped
+	// 清理无审计要求（不计入 outbox_dead_purged）。
 	audit, err := db.QueryDump(ctx, `SELECT kind, detail FROM audit_log WHERE kind='outbox_dead_purged'`)
 	if err != nil {
 		t.Fatal(err)
@@ -108,9 +117,9 @@ func TestCleanupOutboxRetention(t *testing.T) {
 	}
 
 	// 幂等：再扫 0 行、不追加审计。
-	delivered, dead, err = db.CleanupOutboxRetention(ctx, now)
-	if err != nil || delivered != 0 || dead != 0 {
-		t.Fatalf("二次扫描应 0 行，got delivered=%d dead=%d err=%v", delivered, dead, err)
+	delivered, dead, skipped, err = db.CleanupOutboxRetention(ctx, now, OutboxDeliveredRetain, OutboxDeadRetain)
+	if err != nil || delivered != 0 || dead != 0 || skipped != 0 {
+		t.Fatalf("二次扫描应 0 行，got delivered=%d dead=%d skipped=%d err=%v", delivered, dead, skipped, err)
 	}
 	if audit, err := db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='outbox_dead_purged'`); err != nil || audit[0][0] != "1" {
 		t.Fatalf("无 dead 删除不应追加审计：rows=%v err=%v", audit, err)
@@ -159,7 +168,7 @@ func TestCleanupClosedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := db.CleanupClosedSessions(ctx, now)
+	n, err := db.CleanupClosedSessions(ctx, now, ClosedSessionRetain)
 	if err != nil {
 		t.Fatalf("CleanupClosedSessions: %v", err)
 	}
@@ -188,7 +197,7 @@ func TestCleanupClosedSessions(t *testing.T) {
 	}
 
 	// 幂等：再扫 0 行。
-	if n, err := db.CleanupClosedSessions(ctx, now); err != nil || n != 0 {
+	if n, err := db.CleanupClosedSessions(ctx, now, ClosedSessionRetain); err != nil || n != 0 {
 		t.Fatalf("二次扫描应 0 行，got n=%d err=%v", n, err)
 	}
 }

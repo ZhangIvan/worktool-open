@@ -7,6 +7,9 @@
 //	server [-listen host:port] [-tls-cert FILE] [-tls-key FILE]
 //	       [-db worktool.db] [-callback-url URL] [-callback-secret S]
 //	       [-enable-v1-compat]（v1 兼容 WS 面，默认不挂载，H-2）
+//	       [-retention-outbox-delivered SEC] [-retention-outbox-dead SEC]
+//	       [-retention-session-closed SEC] [-sweeper-interval SEC]
+//	       （保留清理窗口/周期，秒；默认 7d/30d/30d/1h——保留期 config 化）
 //
 // 环境变量（flag 优先于环境变量，环境变量优先于默认值）：
 //
@@ -150,9 +153,17 @@ func run(ctx context.Context, argv []string, environ []string, stdout, stderr io
 	go func() { _ = hub.RunDispatchPump(bgCtx, time.Second) }()
 	go func() { _ = worker.Run(bgCtx) }()
 	go func() { _ = pipeline.RunCronScheduler(bgCtx, 15*time.Second) }()
-	// 保留清理（服务端可观测与保留清理车道）：启动一轮 + 每小时——outbox
-	// delivered(7d)/dead(30d，删除前审计) 与 device_sessions closed(30d 整行)。
-	go func() { _ = runRetentionSweeper(bgCtx, db, logger, retentionSweepInterval) }()
+	// 保留清理（服务端可观测与保留清理车道；窗口/周期经 -retention-* /
+	// -sweeper-interval 旗标可配，保留期 config 化车道）：启动一轮 + 每 interval
+	// 一轮——outbox delivered/dead（dead 删除前审计）、skipped（30 天，无审计）
+	// 与 device_sessions closed（整行）。
+	retOpts := retentionOpts{
+		interval:        cfg.SweeperInterval,
+		outboxDelivered: cfg.RetentionOutboxDelivered,
+		outboxDead:      cfg.RetentionOutboxDead,
+		sessionClosed:   cfg.RetentionSessionClosed,
+	}
+	go func() { _ = runRetentionSweeper(bgCtx, db, logger, retOpts) }()
 
 	// H-2（安全审计 TOP5）：v1 兼容 WS 面默认不挂载，cfg.EnableV1Compat
 	// （flag -enable-v1-compat）显式开启才暴露 /webserver/wework/{robotId}。
@@ -209,43 +220,50 @@ func callbackState(url string) string {
 }
 
 // ---- 保留清理（服务端可观测与保留清理车道，2026-11-05；ScanQueuedTTL 同形态
-// 的周期扫描删除，调度=启动即一轮 + 每小时）----
+// 的周期扫描删除，调度=启动即一轮 + 每 interval 一轮；窗口/周期经 -retention-*
+// 与 -sweeper-interval 旗标可配——保留期 config 化车道，默认值 = store 常量）----
 
-// retentionSweepInterval 保留清理周期（每小时；启动即先扫一轮，不待首个 tick）。
-const retentionSweepInterval = time.Hour
+// retentionOpts 保留清理参数（config 旗标 → store 清理窗口的接线形态）。
+type retentionOpts struct {
+	interval        time.Duration // 清扫循环周期（启动即先扫一轮，不待首个 tick）
+	outboxDelivered time.Duration // outbox delivered 行保留窗
+	outboxDead      time.Duration // outbox dead 行保留窗
+	sessionClosed   time.Duration // device_sessions closed 整行保留窗
+}
 
-// runRetentionSweeper 保留清理循环：启动即扫一轮，此后每 interval 一轮；
+// runRetentionSweeper 保留清理循环：启动即扫一轮，此后每 opts.interval 一轮；
 // ctx 取消后返回 ctx.Err()（main 以 goroutine 挂后台，返回值仅测试断言用）。
-func runRetentionSweeper(ctx context.Context, db *sqlite.DB, logger *log.Logger, interval time.Duration) error {
-	sweepRetention(ctx, db, logger)
-	t := time.NewTicker(interval)
+func runRetentionSweeper(ctx context.Context, db *sqlite.DB, logger *log.Logger, opts retentionOpts) error {
+	sweepRetention(ctx, db, logger, opts)
+	t := time.NewTicker(opts.interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			sweepRetention(ctx, db, logger)
+			sweepRetention(ctx, db, logger, opts)
 		}
 	}
 }
 
 // sweepRetention 执行一轮保留清理（幂等家务，逐项 best-effort：失败记日志、
 // 下轮重试，不阻断服务）：
-//   - outbox：delivered 留 [sqlite.OutboxDeliveredRetain]（7 天）、dead 留
-//     [sqlite.OutboxDeadRetain]（30 天，删除前由 store 同事务审计批量计数）；
-//   - device_sessions：closed 整行留 [sqlite.ClosedSessionRetain]（30 天）。
-func sweepRetention(ctx context.Context, db *sqlite.DB, logger *log.Logger) {
+//   - outbox：delivered 留 opts.outboxDelivered（默认 7 天）、dead 留
+//     opts.outboxDead（默认 30 天，删除前由 store 同事务审计批量计数）、
+//     skipped 留 sqlite.OutboxSkippedRetain（30 天，无审计要求）；
+//   - device_sessions：closed 整行留 opts.sessionClosed（默认 30 天）。
+func sweepRetention(ctx context.Context, db *sqlite.DB, logger *log.Logger, opts retentionOpts) {
 	now := time.Now().UTC()
-	if delivered, dead, err := db.CleanupOutboxRetention(ctx, now); err != nil {
+	if delivered, dead, skipped, err := db.CleanupOutboxRetention(ctx, now, opts.outboxDelivered, opts.outboxDead); err != nil {
 		logger.Printf("retention: outbox 保留清理失败: %v", err)
-	} else if delivered > 0 || dead > 0 {
-		logger.Printf("retention: outbox 已清理 delivered=%d dead=%d（delivered 留 %s / dead 留 %s）",
-			delivered, dead, sqlite.OutboxDeliveredRetain, sqlite.OutboxDeadRetain)
+	} else if delivered > 0 || dead > 0 || skipped > 0 {
+		logger.Printf("retention: outbox 已清理 delivered=%d dead=%d skipped=%d（delivered 留 %s / dead 留 %s / skipped 留 %s）",
+			delivered, dead, skipped, opts.outboxDelivered, opts.outboxDead, sqlite.OutboxSkippedRetain)
 	}
-	if n, err := db.CleanupClosedSessions(ctx, now); err != nil {
+	if n, err := db.CleanupClosedSessions(ctx, now, opts.sessionClosed); err != nil {
 		logger.Printf("retention: device_sessions 保留清理失败: %v", err)
 	} else if n > 0 {
-		logger.Printf("retention: 已清理 %d 条超期 closed 会话（整行，留 %s）", n, sqlite.ClosedSessionRetain)
+		logger.Printf("retention: 已清理 %d 条超期 closed 会话（整行，留 %s）", n, opts.sessionClosed)
 	}
 }

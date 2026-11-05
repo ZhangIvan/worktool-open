@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateSR09 覆盖 SR-09 断言正反例：
@@ -193,5 +194,64 @@ func TestLoadT23Fields(t *testing.T) {
 	// 非 loopback 回调 + 明文绑定双违规均可被独立识别（SR-09 优先报监听）
 	if _, err := Load(nil, []string{"WT_LISTEN=0.0.0.0:8080"}); err == nil {
 		t.Fatal("SR-09 应拒绝")
+	}
+}
+
+// TestRetentionFlags（保留期 config 化车道，2026-11-05）：四个保留/清扫旗标
+// 默认值 = 既有硬编码值（outbox delivered 7 天 / dead 30 天 / closed 会话 30 天 /
+// 清扫周期 1h），按秒传参覆盖；非正数启动即拒绝（fail-fast，防误配零窗口）。
+func TestRetentionFlags(t *testing.T) {
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionOutboxDelivered != 7*24*3600*time.Second {
+		t.Fatalf("RetentionOutboxDelivered 默认应 7 天，got %v", cfg.RetentionOutboxDelivered)
+	}
+	if cfg.RetentionOutboxDead != 30*24*3600*time.Second {
+		t.Fatalf("RetentionOutboxDead 默认应 30 天，got %v", cfg.RetentionOutboxDead)
+	}
+	if cfg.RetentionSessionClosed != 30*24*3600*time.Second {
+		t.Fatalf("RetentionSessionClosed 默认应 30 天，got %v", cfg.RetentionSessionClosed)
+	}
+	if cfg.SweeperInterval != time.Hour {
+		t.Fatalf("SweeperInterval 默认应 1h，got %v", cfg.SweeperInterval)
+	}
+
+	// 按秒覆盖（含缩写形式 -flag=value）。
+	cfg, err = Load([]string{
+		"-retention-outbox-delivered=86400",
+		"-retention-outbox-dead", "172800",
+		"-retention-session-closed=3600",
+		"-sweeper-interval=120",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Load(retention flags): %v", err)
+	}
+	if cfg.RetentionOutboxDelivered != 24*time.Hour ||
+		cfg.RetentionOutboxDead != 48*time.Hour ||
+		cfg.RetentionSessionClosed != time.Hour ||
+		cfg.SweeperInterval != 2*time.Minute {
+		t.Fatalf("按秒覆盖未生效: %+v", cfg)
+	}
+
+	// 非正数（0/负）启动即拒绝。
+	for _, bad := range []string{"0", "-5"} {
+		if _, err := Load([]string{"-retention-outbox-delivered=" + bad}, nil); err == nil {
+			t.Fatalf("-retention-outbox-delivered=%s 应拒绝", bad)
+		}
+		if _, err := Load([]string{"-retention-outbox-dead=" + bad}, nil); err == nil {
+			t.Fatalf("-retention-outbox-dead=%s 应拒绝", bad)
+		}
+		if _, err := Load([]string{"-retention-session-closed=" + bad}, nil); err == nil {
+			t.Fatalf("-retention-session-closed=%s 应拒绝", bad)
+		}
+		if _, err := Load([]string{"-sweeper-interval=" + bad}, nil); err == nil {
+			t.Fatalf("-sweeper-interval=%s 应拒绝", bad)
+		}
+	}
+	// 非数字拒绝。
+	if _, err := Load([]string{"-sweeper-interval=abc"}, nil); err == nil {
+		t.Fatal("-sweeper-interval=abc 应拒绝")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,10 @@ func TestRunServesHealthz(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /healthz 状态码 = %d, want 200", resp.StatusCode)
 	}
+	// requestId 车道：生产装配（api 全局面 ⊃ admin 子树嵌套）响应回显 16 hex rid。
+	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(resp.Header.Get("X-Request-Id")) {
+		t.Fatalf("生产装配应回显 16 hex X-Request-Id，got %q", resp.Header.Get("X-Request-Id"))
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("读取响应体失败: %v", err)
@@ -126,10 +131,10 @@ func TestRunServesHealthz(t *testing.T) {
 	}
 }
 
-// TestRunRetentionSweeper（服务端可观测与保留清理车道）：保留清理循环——启动即
-// 扫一轮（不待首个 tick）：outbox delivered>7d / dead>30d 删（dead 删除前审计
-// outbox_dead_purged）、closed 会话>30d 整行删；窗口内行与 pending/open 保留；
-// ctx 取消后干净退出。
+// TestRunRetentionSweeper（服务端可观测与保留清理车道 + 保留期 config 化车道）：
+// 保留清理循环——启动即扫一轮（不待首个 tick）：outbox delivered>7d / dead>30d /
+// skipped>30d 删（dead 删除前审计 outbox_dead_purged；skipped 无审计）、closed
+// 会话>30d 整行删；窗口内行与 pending/open 保留；ctx 取消后干净退出。
 func TestRunRetentionSweeper(t *testing.T) {
 	db, err := sqlite.OpenMem()
 	if err != nil {
@@ -161,6 +166,8 @@ func TestRunRetentionSweeper(t *testing.T) {
 	seed("cmd-fresh-delivered", "delivered", now.Add(-1*time.Hour))
 	seed("cmd-old-dead", "dead", now.Add(-31*24*time.Hour))
 	seed("cmd-mid-dead", "dead", now.Add(-8*24*time.Hour))
+	seed("cmd-old-skipped", "skipped", now.Add(-40*24*time.Hour))
+	seed("cmd-fresh-skipped", "skipped", now.Add(-1*time.Hour))
 	seed("cmd-pending", "pending", now.Add(-40*24*time.Hour))
 	if err := db.CreateSession(ctx, sqlite.Session{
 		SessionID: "sess-sweeper-old", DeviceID: "dev-sweeper",
@@ -184,10 +191,17 @@ func TestRunRetentionSweeper(t *testing.T) {
 	}
 
 	// 启动轮应立即清理（不待首个 tick）；周期取极小值顺带验证循环可重入。
+	// 窗口取默认值（保留期 config 化车道的生产接线 = config 旗标 → 本参数）。
+	opts := retentionOpts{
+		interval:        10 * time.Millisecond,
+		outboxDelivered: sqlite.OutboxDeliveredRetain,
+		outboxDead:      sqlite.OutboxDeadRetain,
+		sessionClosed:   sqlite.ClosedSessionRetain,
+	}
 	sweepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- runRetentionSweeper(sweepCtx, db, log.New(io.Discard, "", 0), 10*time.Millisecond) }()
+	go func() { errCh <- runRetentionSweeper(sweepCtx, db, log.New(io.Discard, "", 0), opts) }()
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -203,7 +217,7 @@ func TestRunRetentionSweeper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if counts["delivered"] == "1" && counts["dead"] == "1" && oldClosed[0][0] == "0" {
+		if counts["delivered"] == "1" && counts["dead"] == "1" && counts["skipped"] == "1" && oldClosed[0][0] == "0" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -215,6 +229,7 @@ func TestRunRetentionSweeper(t *testing.T) {
 	for _, q := range []string{
 		`SELECT COUNT(*) FROM outbox WHERE status='delivered' AND command_id='cmd-fresh-delivered'`,
 		`SELECT COUNT(*) FROM outbox WHERE status='dead' AND command_id='cmd-mid-dead'`,
+		`SELECT COUNT(*) FROM outbox WHERE status='skipped' AND command_id='cmd-fresh-skipped'`,
 		`SELECT COUNT(*) FROM outbox WHERE status='pending'`,
 		`SELECT COUNT(*) FROM device_sessions WHERE session_id='sess-sweeper-open'`,
 	} {
@@ -223,7 +238,7 @@ func TestRunRetentionSweeper(t *testing.T) {
 			t.Fatalf("窗口内/活行应保留：%q → rows=%v err=%v", q, rows, err)
 		}
 	}
-	// dead 清理审计恰一条（启动轮落；后续轮 dead=0 不重复）。
+	// dead 清理审计恰一条（启动轮落；后续轮 dead=0 不重复；skipped 清理不落审计）。
 	audit, err := db.QueryDump(ctx, `SELECT COUNT(*) FROM audit_log WHERE kind='outbox_dead_purged'`)
 	if err != nil || audit[0][0] != "1" {
 		t.Fatalf("dead 清理审计应恰一条：rows=%v err=%v", audit, err)

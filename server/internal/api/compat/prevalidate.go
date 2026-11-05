@@ -20,6 +20,7 @@ package compat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -66,46 +67,77 @@ var requiredFields = map[int][]fieldSpec{
 	},
 }
 
-// validateRequired 对单条 list 项做必填校验（表外类型 = 透传不校验，维持既有
-// 宽容面）。命中缺失/形态不符返回 101011 语义错误（调用方整单拒绝）。
-func validateRequired(commandType int, item map[string]json.RawMessage) error {
+// FieldError 为一条结构化字段错误（422 响应 errors[] 元素；结构化字段错误
+// 车道，2026-11-05）。Field = 必填表 path（如 friend.phone）；Code = 101011
+// （上游数据格式错误码族）；Message = 人读信息（含 list[i] 索引前缀）。
+type FieldError struct {
+	Field   string `json:"field"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// validateRequiredAll 对单条 list 项做必填校验并**全量收集**违例（表外类型 =
+// 透传不校验，维持既有宽容面）。message 文本与既有 validateRequired 单错文本
+// 一致（调用方拼 list[i] 前缀）。
+func validateRequiredAll(commandType int, item map[string]json.RawMessage) []FieldError {
 	specs, ok := requiredFields[commandType]
 	if !ok {
 		return nil // 表外类型：不预校验（B2/B3 补全前维持透传）
 	}
+	var errs []FieldError
 	for _, sp := range specs {
 		parts := strings.SplitN(sp.Path, ".", 2)
 		raw, ok := item[parts[0]]
 		if !ok || len(raw) == 0 || string(raw) == "null" {
-			return fmt.Errorf("list 项缺必填字段 %s（type=%d，%s）", sp.Path, commandType, sp.Desc)
+			errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+				Message: fmt.Sprintf("list 项缺必填字段 %s（type=%d，%s）", sp.Path, commandType, sp.Desc)})
+			continue
 		}
 		if len(parts) == 2 {
 			var sub map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &sub); err != nil {
-				return fmt.Errorf("list 项字段 %s 须为对象（type=%d）", parts[0], commandType)
+				errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+					Message: fmt.Sprintf("list 项字段 %s 须为对象（type=%d）", parts[0], commandType)})
+				continue
 			}
 			raw, ok = sub[parts[1]]
 			if !ok || len(raw) == 0 || string(raw) == "null" {
-				return fmt.Errorf("list 项缺必填字段 %s（type=%d，%s）", sp.Path, commandType, sp.Desc)
+				errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+					Message: fmt.Sprintf("list 项缺必填字段 %s（type=%d，%s）", sp.Path, commandType, sp.Desc)})
+				continue
 			}
 		}
 		switch sp.Kind {
 		case kindString:
 			var s string
 			if err := json.Unmarshal(raw, &s); err != nil || strings.TrimSpace(s) == "" {
-				return fmt.Errorf("list 项字段 %s 须为非空字符串（type=%d，%s）", sp.Path, commandType, sp.Desc)
+				errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+					Message: fmt.Sprintf("list 项字段 %s 须为非空字符串（type=%d，%s）", sp.Path, commandType, sp.Desc)})
 			}
 		case kindArray:
 			var arr []json.RawMessage
 			if err := json.Unmarshal(raw, &arr); err != nil || len(arr) == 0 {
-				return fmt.Errorf("list 项字段 %s 须为非空数组（type=%d，%s）", sp.Path, commandType, sp.Desc)
+				errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+					Message: fmt.Sprintf("list 项字段 %s 须为非空数组（type=%d，%s）", sp.Path, commandType, sp.Desc)})
 			}
 		case kindObject:
 			var obj map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &obj); err != nil || len(obj) == 0 {
-				return fmt.Errorf("list 项字段 %s 须为非空对象（type=%d，%s）", sp.Path, commandType, sp.Desc)
+				errs = append(errs, FieldError{Field: sp.Path, Code: codeUpstreamData,
+					Message: fmt.Sprintf("list 项字段 %s 须为非空对象（type=%d，%s）", sp.Path, commandType, sp.Desc)})
 			}
 		}
+	}
+	return errs
+}
+
+// validateRequired 对单条 list 项做必填校验（表外类型 = 透传不校验，维持既有
+// 宽容面）。命中缺失/形态不符返回 101011 语义错误（调用方整单拒绝）。
+// 文本以 validateRequiredAll 首条违例为准——单一事实源（结构化字段错误车道
+// 收编；导出包装 ValidateRequired 语义/文本不变，catalog 契约机检不受影响）。
+func validateRequired(commandType int, item map[string]json.RawMessage) error {
+	if errs := validateRequiredAll(commandType, item); len(errs) > 0 {
+		return errors.New(errs[0].Message)
 	}
 	return nil
 }

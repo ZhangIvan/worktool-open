@@ -15,6 +15,7 @@ import (
 
 	"cn.worktool.open/server/internal/api/compat"
 	"cn.worktool.open/server/internal/gateway"
+	"cn.worktool.open/server/internal/httpx"
 	"cn.worktool.open/server/internal/scheduler"
 	"cn.worktool.open/server/internal/statemachine"
 	"cn.worktool.open/server/internal/store/sqlite"
@@ -126,21 +127,31 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 		}
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", handleHealthz)
 	if s == nil {
+		mux.HandleFunc("/healthz", handleHealthz) // T1.3 骨架模式（无 Server 不包中间件）
 		return mux
 	}
-	mux.HandleFunc("/readyz", s.handleReadyz)
-	mux.HandleFunc("POST /api/v2/pair", s.HandlePair)
-	mux.HandleFunc("/api/v2/device-sessions", s.Hub.HandleCreateSession) // POST（方法守卫在 handler）
-	mux.HandleFunc("/api/v2/device-sessions/{sessionId}", s.Hub.HandleDeviceSessionWS)
+	// requestId 中间件（requestId 车道，2026-11-05）：api 面在 NewServeMux
+	// 装配处统一包出——无 X-Request-Id 则生成 16 hex，响应头回显，访问日志行
+	// 携带 rid。逐路由包装（返回类型保持 *ServeMux——main.go 在其上继续挂 admin
+	// 子树，其内层包装复用本层 rid、不重复记日志，httpx 嵌套安全）。未匹配
+	// 路径（404）无路由即无包装、无 rid——如实记录。Flusher/Hijacker 经包装器
+	// 转发（WS 升级与流式响应不受影响）。
+	reg := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, httpx.RequestID(s.logger(), h))
+	}
+	reg("/healthz", handleHealthz)
+	reg("/readyz", s.handleReadyz)
+	reg("POST /api/v2/pair", s.HandlePair)
+	reg("/api/v2/device-sessions", s.Hub.HandleCreateSession) // POST（方法守卫在 handler）
+	reg("/api/v2/device-sessions/{sessionId}", s.Hub.HandleDeviceSessionWS)
 	// H-2（安全审计 TOP5）：v1 兼容面默认不挂载（Options.EnableV1Compat 显式开启）。
 	if enableV1Compat {
-		mux.HandleFunc("/webserver/wework/{robotId}", s.Hub.HandleV1)
+		reg("/webserver/wework/{robotId}", s.Hub.HandleV1)
 	}
 	// apifox 兼容面（FR-34，ADR-08；方法守卫在 handler）
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands", s.HandleOpenAPICommand)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/commands/{commandId}", s.HandleOpenAPIResult)
+	reg("/openapi/v1/robots/{robotId}/commands", s.HandleOpenAPICommand)
+	reg("/openapi/v1/robots/{robotId}/commands/{commandId}", s.HandleOpenAPIResult)
 	// 兼容面扩展组（apifox 全量面：配置/回调/历史/群/队列；openapi_rest.go）
 	// + b2 补齐组（文件上传/取回、robotInfo/update；openapi_upload.go，REV-SRV-02）
 	if err := s.ensureOpenAPISchema(context.Background()); err != nil {
@@ -150,28 +161,38 @@ func NewServeMux(opts ...Options) *http.ServeMux {
 	if err := s.ensureOpenAPIUploadSchema(context.Background()); err != nil {
 		panic(err)
 	}
-	mux.HandleFunc("/fileUpload/upload", s.HandleFileUpload)
-	mux.HandleFunc("/robot/clientLog/upload", s.HandleClientLogUpload) // 510 契约端点（W-M6 W2）
-	mux.HandleFunc("/robot/robotInfo/update", s.HandleRobotInfoUpdate)
-	mux.HandleFunc("GET /files/{fileId}", s.HandleFileGet)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/info", s.HandleOpenAPIRobotInfo)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/online", s.HandleOpenAPIRobotOnline)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/logs", s.HandleOpenAPIRobotLogs)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/corps", s.HandleOpenAPIRobotCorps)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/callbacks", s.HandleOpenAPICallbacks)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/groups", s.HandleOpenAPIGroups)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue", s.HandleOpenAPIQueue)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue/priority", s.HandleOpenAPIQueuePriority)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/queue/{commandId}", s.HandleOpenAPIQueueItem)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/commands", s.HandleOpenAPIHistoryCommands)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/results", s.HandleOpenAPIHistoryResults)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/callbacks", s.HandleOpenAPIHistoryCallbacks)
-	mux.HandleFunc("/openapi/v1/robots/{robotId}/history/messages", s.HandleOpenAPIHistoryMessages)
+	reg("/fileUpload/upload", s.HandleFileUpload)
+	reg("/robot/clientLog/upload", s.HandleClientLogUpload) // 510 契约端点（W-M6 W2）
+	reg("/robot/robotInfo/update", s.HandleRobotInfoUpdate)
+	reg("GET /files/{fileId}", s.HandleFileGet)
+	reg("/openapi/v1/robots/{robotId}/info", s.HandleOpenAPIRobotInfo)
+	reg("/openapi/v1/robots/{robotId}/online", s.HandleOpenAPIRobotOnline)
+	reg("/openapi/v1/robots/{robotId}/logs", s.HandleOpenAPIRobotLogs)
+	reg("/openapi/v1/robots/{robotId}/corps", s.HandleOpenAPIRobotCorps)
+	reg("/openapi/v1/robots/{robotId}/callbacks", s.HandleOpenAPICallbacks)
+	reg("/openapi/v1/robots/{robotId}/groups", s.HandleOpenAPIGroups)
+	reg("/openapi/v1/robots/{robotId}/queue", s.HandleOpenAPIQueue)
+	reg("/openapi/v1/robots/{robotId}/queue/priority", s.HandleOpenAPIQueuePriority)
+	reg("/openapi/v1/robots/{robotId}/queue/{commandId}", s.HandleOpenAPIQueueItem)
+	reg("/openapi/v1/robots/{robotId}/history/commands", s.HandleOpenAPIHistoryCommands)
+	reg("/openapi/v1/robots/{robotId}/history/results", s.HandleOpenAPIHistoryResults)
+	reg("/openapi/v1/robots/{robotId}/history/callbacks", s.HandleOpenAPIHistoryCallbacks)
+	reg("/openapi/v1/robots/{robotId}/history/messages", s.HandleOpenAPIHistoryMessages)
 	// T3.6 apifox 兼容适配层（docs/15）：K1/K2/K6 提交面挂载 + K3/K5 回调面
-	// 能力装配（双面并存——既有 /openapi/v1 面零改动）。
+	// 能力装配（双面并存——既有 /openapi/v1 面零改动）。compat.Mount 在其
+	// 挂载处自带 requestId 包装（deps.Log 注入），与全局面一致。
 	compat.Mount(mux, s.compatDeps())
 	s.wireOutboxCompat()
 	return mux
+}
+
+// logger 返回注入日志器（直构 Server 未设 Log 时回落标准 log——requestId
+// 中间件兜底，nil 接口调用会 panic）。
+func (s *Server) logger() Logger {
+	if s.Log == nil {
+		return log.Default()
+	}
+	return s.Log
 }
 
 // compatDeps 为兼容适配层（T3.6）构造最小依赖桥：鉴权/目标解析/per-robot 限流

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"cn.worktool.open/server/internal/httpx"
 	"cn.worktool.open/server/internal/scheduler"
 	"cn.worktool.open/server/internal/store/sqlite"
 	"cn.worktool.open/server/internal/wire"
@@ -61,10 +62,12 @@ type Deps struct {
 }
 
 // Mount 挂载兼容层端点（api.NewServeMux 一行调用；模式守卫由 Go 1.22
-// ServeMux 承担——非 POST 自动 405）。
+// ServeMux 承担——非 POST 自动 405）。挂载处自带 requestId 中间件
+// （requestId 车道：deps.Log 访问日志 + X-Request-Id 回显，与 api/admin 面
+// 单一实现同源——internal/httpx）。
 func Mount(mux *http.ServeMux, deps Deps) {
 	rt := &router{deps: deps, ips: newIPLimiter()}
-	mux.HandleFunc("POST /wework/sendRawMessage", rt.handleSendRawMessage)
+	mux.Handle("POST /wework/sendRawMessage", httpx.RequestID(deps.Log, http.HandlerFunc(rt.handleSendRawMessage)))
 }
 
 // ---- 兼容面错误码（上游码族镜像；与 openapi_registry.go 同值，本包自持副本） ----
@@ -99,11 +102,14 @@ type router struct {
 // envelope 为兼容面响应信封（K2）：成功 {code:0, data:<string>, message:"success",
 // detail:{...}}；错误 {code, message[, detail]}。data 的 string 化仅指令提交面
 // （文档仅此处 data=string messageId）；别名查询端点（B2/B3）按文档各自形态。
+// Errors 为结构化字段错误数组（422 必填预校验违例专用；omitempty——其余响应
+// 不受影响，顶层 code/message 语义不变，向后兼容）。
 type envelope struct {
-	Code    int    `json:"code"`
-	Data    any    `json:"data,omitempty"`
-	Message string `json:"message"`
-	Detail  any    `json:"detail,omitempty"`
+	Code    int          `json:"code"`
+	Data    any          `json:"data,omitempty"`
+	Message string       `json:"message"`
+	Detail  any          `json:"detail,omitempty"`
+	Errors  []FieldError `json:"errors,omitempty"`
 }
 
 func writeCompatData(w http.ResponseWriter, data string, detail any) {
@@ -223,6 +229,13 @@ func (rt *router) handleSendRawMessage(w http.ResponseWriter, r *http.Request) {
 		up          bool
 	}
 	items := make([]parsed, 0, len(env.List))
+	// fieldErrs 收集必填表违例（结构化字段错误车道，2026-11-05）：任一条命中
+	// → 整单 422（HTTP 状态 400→422，Unprocessable Entity=语义校验失败的上游
+	// 惯例形态），顶层 code=101011 语义不变 + errors[] 全量收集；结构性错误
+	//（缺 type/未注册等）维持 400 即时拒绝。校验为纯函数——继续扫描余下条目
+	// 拿全量违例，仍零入队（原子性不变）。
+	var fieldErrs []FieldError
+	firstErrIndex := 0
 	for i, raw := range env.List {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &m); err != nil || m == nil {
@@ -248,16 +261,32 @@ func (rt *router) handleSendRawMessage(w http.ResponseWriter, r *http.Request) {
 				map[string]any{"index": i, "type": commandType})
 			return
 		}
-		if err := validateRequired(commandType, m); err != nil {
-			writeCompatErrData(w, http.StatusBadRequest, codeUpstreamData,
-				fmt.Sprintf("list[%d] %v（101011 数据格式错误，整单拒绝）", i, err), map[string]any{"index": i})
-			return
+		if ferrs := validateRequiredAll(commandType, m); len(ferrs) > 0 {
+			if len(fieldErrs) == 0 {
+				firstErrIndex = i
+			}
+			for _, fe := range ferrs {
+				fe.Message = fmt.Sprintf("list[%d] %s", i, fe.Message)
+				fieldErrs = append(fieldErrs, fe)
+			}
+			continue
 		}
 		p := parsed{raw: m, commandType: commandType}
 		if upRaw, ok := m["up"]; ok {
 			_ = json.Unmarshal(upRaw, &p.up) // 非布尔容忍为 false（文档 up:boolean）
 		}
 		items = append(items, p)
+	}
+	if len(fieldErrs) > 0 {
+		// 422 结构化字段错误：顶层 message = 首条违例（与既有文本完全一致，
+		// 向后兼容），detail 保留首条 index，errors 全量收集。
+		writeJSON(w, http.StatusUnprocessableEntity, envelope{
+			Code:    codeUpstreamData,
+			Message: fieldErrs[0].Message + "（101011 数据格式错误，整单拒绝）",
+			Detail:  map[string]any{"index": firstErrIndex},
+			Errors:  fieldErrs,
+		})
+		return
 	}
 	// 入队去重（上游 101014 语义；原子：任一条命中 → 整单拒绝）
 	for i, p := range items {

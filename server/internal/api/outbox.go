@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -410,6 +411,12 @@ func (w *OutboxWorker) deliverOne(ctx context.Context, it sqlite.OutboxItem, now
 	resp, err := w.client.Do(req)
 	if err == nil {
 		defer func() { _ = resp.Body.Close() }()
+		// http_status 独立字段（迁移 v4）：收到 HTTP 响应即落本次响应码
+		//（最近一次尝试口径——后续重试覆盖）。
+		it.HTTPStatus = sql.NullInt64{Int64: int64(resp.StatusCode), Valid: true}
+	} else {
+		// 传输错误（无 HTTP 响应）→ NULL（不落 0，HTTP 无 0 状态码）。
+		it.HTTPStatus = sql.NullInt64{}
 	}
 	delivered := err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
 
