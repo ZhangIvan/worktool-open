@@ -56,10 +56,14 @@ type adminCommandEntry struct {
 	Example  string
 	Group    string
 	// Status 能力履历标记（StatusRegistered/Implemented/Wired/Verified）。
-	// 当前口径（2026-11-04）：501/502/513=verified（真机验证通过），其余全部
+	// 当前口径（2026-11-04）：501/502/513=verified，其余全部
 	// implemented（端侧执行器均已在 feature:executor defaultFullBatch 实装）；
 	// registered 保留给 Unimplemented 执行器条目（235/243 等排期批入册时使用，
-	// 现目录无）。
+	// 现目录无）。verified 与支持矩阵翻格门不是同一口径：501/502=回执+数据本体
+	// 双面真机核对（矩阵 ✅，docs/05）；513=仅回执终态面（succeeded ec=0 ×2，
+	// local-private/evidence/session10、session11）——数据本体 query_result 回调
+	// 未实测捕获、含 H1/H2 构建复测未收敛，矩阵侧 513 行 ⬜ 不翻（docs/05 v1.10
+	// 证据口径节专项条+513 行，差异显式登记非漂移）。
 	Status string
 }
 
@@ -268,6 +272,11 @@ var adminCommandCatalog = []adminCommandEntry{
 	// = schema required（执行器同读且必填）——example 本已可消费，补 Required 标注。
 	{511, "查询会议信息", "L0", []string{"objectName"}, `{"type":511,"objectName":"2026-11-04"}`, "查询", StatusImplemented},
 	{512, "查询群成员信息", "L0", []string{"groupName"}, `{"type":512,"groupName":"交付群"}`, "查询", StatusImplemented},
+	// 513 口径加注（2026-11-05 矩阵口径对齐车道）：此处 StatusVerified=回执终态面
+	// （真机 succeeded ec=0 ×2，local-private/evidence/session10/s10f-result.json、
+	// session11/s11-summary.json）；数据本体经 query_result 事件回调的契约面未实测
+	// 捕获、含 H1/H2 构建复测未收敛（session20 poll 90s timeout），支持矩阵 513 行
+	// ⬜ 不翻（docs/05 v1.10 证据口径节+513 行；收敛后同步全义）。
 	{513, "查询设备资源", "L0", nil, `{"type":513}`, "查询", StatusVerified},
 	// 514 冻结决策（2026-11-05）：messageId 为幻影字段（upstream doc-9564531 §514
 	// messageId 模式承载字段=objectName，时间段模式=logStartTime/logEndTime）→
