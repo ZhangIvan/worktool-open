@@ -22,7 +22,7 @@ IMAGE = "postgres@sha256:41a369edc91d9bdd7a58be6bc71ea0f8f7a3f49e82818a9f0829021
 MAX_EVENTS_BYTES = 8 << 20
 MAX_EVENT_LINES = 12000
 MANIFEST_KEYS = {"format", "scope", "package", "test", "leaves", "source_files", "source_inventory_sha256", "scope_notes"}
-BINDING_KEYS = {"format", "run_id", "source_manifest_sha256", "source_before_sha256", "source_after_sha256", "executable_before_sha256", "executable_after_sha256", "command_sha256", "build_command_sha256", "events_sha256", "exit_code", "compile_exit_code", "timed_out", "interrupted", "image", "server_version", "database", "database_oid", "schema_oid", "issuer_oid", "consumer_oid", "routine_definition_sha256", "provisioning_evidence_sha256", "host", "port", "cleanup", "bootstrap_closed", "go_invocations"}
+BINDING_KEYS = {"format", "run_id", "source_manifest_sha256", "source_before_sha256", "source_after_sha256", "executable_before_sha256", "executable_after_sha256", "command_sha256", "build_command_sha256", "events_sha256", "exit_code", "compile_exit_code", "timed_out", "interrupted", "image", "server_version", "database", "database_oid", "schema_oid", "issuer_oid", "consumer_oid", "routine_definition_sha256", "provisioning_evidence_sha256", "host", "port", "cleanup", "bootstrap_closed", "go_invocations", "bootstrap_role", "bootstrap_oid", "activity_guard_oid", "admission_schema_oid", "admission_function_oid", "admission_function_definition_sha256", "admission_sha256"}
 
 
 class EvidenceError(ValueError):
@@ -72,7 +72,7 @@ def validate_manifest(manifest: dict) -> dict:
             len(set(leaves)) != len(leaves)):
         _fail("MANIFEST_LEAVES")
     paths = manifest["source_files"]
-    if (not isinstance(paths, list) or len(paths) != 341 or
+    if (not isinstance(paths, list) or len(paths) != 342 or
             any(not isinstance(x, str) or len(x) > 512 or x.startswith("/") or "\\" in x or
                 any(p in ("", ".", "..", ".git", "node_modules", ".cache", "__pycache__") for p in x.split("/")) or
                 any(c in x for c in "\x00\r\n") for x in paths) or paths != sorted(set(paths))):
@@ -230,7 +230,7 @@ def validate_run(raw_events: bytes, manifest: dict, binding: dict, expected_sour
         _fail("BINDING_SCHEMA")
     if binding["format"] != "worktool-registration-run-binding-v1" or not _digest(expected_source_sha256):
         _fail("BINDING_IDENTITY")
-    hashes = ("source_manifest_sha256", "source_before_sha256", "source_after_sha256", "executable_before_sha256", "executable_after_sha256", "command_sha256", "build_command_sha256", "events_sha256", "routine_definition_sha256", "provisioning_evidence_sha256")
+    hashes = ("source_manifest_sha256", "source_before_sha256", "source_after_sha256", "executable_before_sha256", "executable_after_sha256", "command_sha256", "build_command_sha256", "events_sha256", "routine_definition_sha256", "provisioning_evidence_sha256", "admission_function_definition_sha256", "admission_sha256")
     if any(not _digest(binding[k]) for k in hashes):
         _fail("BINDING_DIGEST")
     if any(binding[k] != expected_source_sha256 for k in ("source_manifest_sha256", "source_before_sha256", "source_after_sha256")):
@@ -252,6 +252,15 @@ def validate_run(raw_events: bytes, manifest: dict, binding: dict, expected_sour
         _fail("TARGET_PORT")
     if any(type(binding[k]) is not int or not 0 < binding[k] <= 4294967295 for k in ("database_oid", "schema_oid", "issuer_oid", "consumer_oid")) or binding["issuer_oid"] == binding["consumer_oid"]:
         _fail("TARGET_OIDS")
+    if (not isinstance(binding["bootstrap_role"], str) or
+            re.fullmatch(r"wt_admin_[a-f0-9]{32}", binding["bootstrap_role"]) is None or
+            type(binding["bootstrap_oid"]) is not int or binding["bootstrap_oid"] != 10):
+        _fail("BOOTSTRAP_IDENTITY")
+    oid_keys = ("activity_guard_oid", "admission_schema_oid", "admission_function_oid")
+    if any(type(binding[k]) is not int or not 0 < binding[k] <= 4294967295 for k in oid_keys):
+        _fail("ADMISSION_OIDS")
+    if binding["activity_guard_oid"] in (10, binding["issuer_oid"], binding["consumer_oid"]):
+        _fail("ADMISSION_ROLE_IDENTITY")
     result = validate_events(raw_events, manifest)
     return {"format": "worktool-registration-focused-evidence-v1", "status": "PASS_FOCUSED_ISOLATED_SCOPE", "scope": SCOPE, **result,
             "binding": dict(binding), "broader_acceptance": "NOT_PROVEN", "durable_recovery_authority": "NOT_IMPLEMENTED_NOT_PROVEN"}

@@ -36,6 +36,10 @@ const rafIssuer = "wt_registration_lab_issuer"
 const rafConsumer = "wt_registration_lab_consumer"
 const rafUnrelated = "wt_registration_lab_unrelated"
 const rafRoutineOwner = "wt_registration_lab_routine"
+const rafActivityGuard = "wt_registration_lab_activity_guard"
+const rafActivitySourcePath = "testdata/registration_activity_guard.sql"
+const rafActivityBodyDelimiter = "$registration_activity_guard_v1$"
+const rafActivityAdmissionSQL = `SELECT wt_registration_admission.isolated_owner_session_v1()`
 const rafConsumeSQL = `SELECT wt_synthetic_registry.consume_prepared_fresh_registration_v1($1::text,$2::text)`
 const rafImage = "postgres@sha256:41a369edc91d9bdd7a58be6bc71ea0f8f7a3f49e82818a9f0829021ea7840b7c"
 const rafEnvelopeEnv = "WORKTOOL_REGISTRATION_PG_ENVELOPE"
@@ -45,35 +49,43 @@ var rafNotConfigured = errors.New("NOT_RUN: explicit isolated registration envel
 var rafUnknown = errors.New("SYNTHETIC_REGISTRATION_UNKNOWN_STOP_NO_RETRY")
 var rafDBPattern = regexp.MustCompile(`^wt_test_[a-z0-9_]{8,48}$`)
 var rafRunPattern = regexp.MustCompile(`^synthetic_[a-z0-9_]{8,40}$`)
+var rafBootstrapPattern = regexp.MustCompile(`^wt_admin_[a-z0-9_]{16,40}$`)
 
 // Every field is explicit. No fallback DSN, role selection, source adoption or
 // permission repair is available. External provisioning/resource evidence still
 // requires independent review; a string in this envelope does not prove it.
 type rafRunEnvelope struct {
-	Format                     string `json:"format"`
-	Allow                      string `json:"allow"`
-	RunID                      string `json:"run_id"`
-	Host                       string `json:"host"`
-	Port                       uint16 `json:"port"`
-	Database                   string `json:"database"`
-	DatabaseOID                uint32 `json:"database_oid"`
-	SchemaOID                  uint32 `json:"schema_oid"`
-	ConsumerOID                uint32 `json:"consumer_oid"`
-	IssuerOID                  uint32 `json:"issuer_oid"`
-	Environment                string `json:"environment"`
-	RecoveryGeneration         string `json:"recovery_generation"`
-	Image                      string `json:"image"`
-	ServerVersion              int    `json:"server_version"`
-	BoundarySHA256             string `json:"boundary_sha256"`
-	RegistrySHA256             string `json:"registry_sha256"`
-	RoutineDefinitionSHA256    string `json:"routine_definition_sha256"`
-	SourceManifestSHA256       string `json:"source_manifest_sha256"`
-	ExecutableSHA256           string `json:"executable_sha256"`
-	ProvisioningEvidenceSHA256 string `json:"provisioning_evidence_sha256"`
-	OwnerDSN                   string `json:"owner_dsn"`
-	IssuerDSN                  string `json:"issuer_dsn"`
-	ConsumerDSN                string `json:"consumer_dsn"`
-	UnrelatedDSN               string `json:"unrelated_dsn"`
+	Format                            string `json:"format"`
+	Allow                             string `json:"allow"`
+	RunID                             string `json:"run_id"`
+	Host                              string `json:"host"`
+	Port                              uint16 `json:"port"`
+	Database                          string `json:"database"`
+	DatabaseOID                       uint32 `json:"database_oid"`
+	SchemaOID                         uint32 `json:"schema_oid"`
+	ConsumerOID                       uint32 `json:"consumer_oid"`
+	IssuerOID                         uint32 `json:"issuer_oid"`
+	Environment                       string `json:"environment"`
+	RecoveryGeneration                string `json:"recovery_generation"`
+	Image                             string `json:"image"`
+	ServerVersion                     int    `json:"server_version"`
+	BoundarySHA256                    string `json:"boundary_sha256"`
+	RegistrySHA256                    string `json:"registry_sha256"`
+	RoutineDefinitionSHA256           string `json:"routine_definition_sha256"`
+	SourceManifestSHA256              string `json:"source_manifest_sha256"`
+	ExecutableSHA256                  string `json:"executable_sha256"`
+	ProvisioningEvidenceSHA256        string `json:"provisioning_evidence_sha256"`
+	BootstrapRole                     string `json:"bootstrap_role"`
+	BootstrapOID                      uint32 `json:"bootstrap_oid"`
+	ActivityGuardOID                  uint32 `json:"activity_guard_oid"`
+	AdmissionSchemaOID                uint32 `json:"admission_schema_oid"`
+	AdmissionFunctionOID              uint32 `json:"admission_function_oid"`
+	AdmissionFunctionDefinitionSHA256 string `json:"admission_function_definition_sha256"`
+	AdmissionSHA256                   string `json:"admission_sha256"`
+	OwnerDSN                          string `json:"owner_dsn"`
+	IssuerDSN                         string `json:"issuer_dsn"`
+	ConsumerDSN                       string `json:"consumer_dsn"`
+	UnrelatedDSN                      string `json:"unrelated_dsn"`
 }
 
 func rafSHA(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -111,7 +123,11 @@ func rafParseEnvelope(raw string) (rafRunEnvelope, error) {
 		e.DatabaseOID == 0 || e.SchemaOID == 0 || e.ConsumerOID == 0 || e.IssuerOID == 0 || e.ConsumerOID == e.IssuerOID ||
 		!rafRunPattern.MatchString(e.Environment) || !rafRunPattern.MatchString(e.RecoveryGeneration) ||
 		e.Image != rafImage || e.ServerVersion != 180006 || !rafDigest(e.BoundarySHA256) || !rafDigest(e.RegistrySHA256) ||
-		!rafDigest(e.RoutineDefinitionSHA256) || !rafDigest(e.SourceManifestSHA256) || !rafDigest(e.ExecutableSHA256) || !rafDigest(e.ProvisioningEvidenceSHA256) {
+		!rafDigest(e.RoutineDefinitionSHA256) || !rafDigest(e.SourceManifestSHA256) || !rafDigest(e.ExecutableSHA256) || !rafDigest(e.ProvisioningEvidenceSHA256) ||
+		!rafBootstrapPattern.MatchString(e.BootstrapRole) || e.BootstrapOID != 10 || e.ActivityGuardOID == 0 ||
+		e.ActivityGuardOID == e.IssuerOID || e.ActivityGuardOID == e.ConsumerOID || e.AdmissionSchemaOID == 0 ||
+		e.AdmissionSchemaOID == e.SchemaOID || e.AdmissionFunctionOID == 0 ||
+		!rafDigest(e.AdmissionFunctionDefinitionSHA256) || !rafDigest(e.AdmissionSHA256) {
 		return e, rafInvalid
 	}
 	for _, pair := range []struct{ dsn, role string }{{e.OwnerDSN, rafOwner}, {e.IssuerDSN, rafIssuer}, {e.ConsumerDSN, rafConsumer}, {e.UnrelatedDSN, rafUnrelated}} {
@@ -151,7 +167,7 @@ func rafPreconnect(raw string, environment []string, read func(string) ([]byte, 
 	if read == nil {
 		return e, rafInvalid
 	}
-	for _, v := range []struct{ path, hash string }{{"testdata/registration_authority_boundary.sql", e.BoundarySHA256}, {"testdata/fresh_registration_registry_candidate.sql", e.RegistrySHA256}} {
+	for _, v := range []struct{ path, hash string }{{"testdata/registration_authority_boundary.sql", e.BoundarySHA256}, {"testdata/fresh_registration_registry_candidate.sql", e.RegistrySHA256}, {rafActivitySourcePath, e.AdmissionSHA256}} {
 		body, err := read(v.path)
 		if err != nil || rafSHA(body) != v.hash {
 			return e, rafInvalid
@@ -280,13 +296,13 @@ func rafSourceDigest() (string, error) {
 		return "", rafInvalid
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))
-	return rafSourceDigestAt(root, 341, rafSourceInventorySHA256)
+	return rafSourceDigestAt(root, 342, rafSourceInventorySHA256)
 }
 
-// This independently reviewed constant hashes the 341 sorted POSIX paths listed
+// This independently reviewed constant hashes the 342 sorted POSIX paths listed
 // in scripts/pg-registration-cases.json, each terminated by LF. File content is
 // separately bound by the external reviewed source pin and run envelope.
-const rafSourceInventorySHA256 = "09f805689c01aec0de08a388024ec3bde02ca39050198d58927a22b592f2069f"
+const rafSourceInventorySHA256 = "8386bc277995bbe52f9bcaea4594bfde22f979beafc451dbf816c173e4e345fa"
 
 func rafExecutableDigest() (string, error) {
 	path, err := os.Executable()
@@ -375,6 +391,7 @@ func rafOpenFixture(t *testing.T) *rafFixture {
 		t.Skip("NOT_RUN: real PostgreSQL registration fixture needs a separately reviewed exact run envelope and preprovisioned isolated database")
 	}
 	var e rafRunEnvelope
+	var activityBody string
 	rafLeaf(t, "preflight_private_envelope_source_executable", func(t *testing.T) {
 		raw, err := rafReadPrivate(path)
 		if err != nil {
@@ -383,6 +400,14 @@ func rafOpenFixture(t *testing.T) *rafFixture {
 		e, err = rafPreconnect(string(raw), os.Environ(), os.ReadFile, rafSourceDigest)
 		if err != nil {
 			t.Fatal("registration source gate failed before connect; no fallback")
+		}
+		activitySource, err := os.ReadFile(rafActivitySourcePath)
+		if err != nil {
+			t.Fatal("registration activity source unavailable; no connection")
+		}
+		activityBody, err = rafActivitySourceBody(activitySource, e.AdmissionSHA256)
+		if err != nil {
+			t.Fatal("registration activity source binding rejected; no connection")
 		}
 		executable, err := rafExecutableDigest()
 		if err != nil || executable != e.ExecutableSHA256 {
@@ -398,7 +423,9 @@ func rafOpenFixture(t *testing.T) *rafFixture {
 	f := &rafFixture{e: e, ctx: ctx}
 	fixtureT := t
 	// Four separately authenticated ordinary sessions, opened serially. Owner
-	// proves capacity before any other connection. No pool or bootstrap session.
+	// proves capacity and independently verifies the activity helper before any
+	// other connection. Extra-client controls close before ordinary sessions open.
+	// No pool or bootstrap session is available to this fixture.
 	for n, v := range []struct {
 		dsn, role, leaf string
 		target          **pgx.Conn
@@ -431,13 +458,16 @@ func rafOpenFixture(t *testing.T) *rafFixture {
 				t.Fatal("registration authenticated principal/database mismatch")
 			}
 			if n == 0 {
-				var version, max, reserved, superReserved, live int
-				err = c.QueryRow(ctx, `SELECT current_setting('server_version_num')::integer,current_setting('max_connections')::integer,current_setting('reserved_connections')::integer,current_setting('superuser_reserved_connections')::integer,(SELECT count(*)::integer FROM pg_catalog.pg_stat_activity WHERE usesysid IS NOT NULL OR usename IS NOT NULL OR backend_type IS NULL)`).Scan(&version, &max, &reserved, &superReserved, &live)
-				if err != nil || version != 180006 || max != 10 || max-reserved-superReserved < 5 || live != 1 {
+				var version, max, reserved, superReserved int
+				err = c.QueryRow(ctx, `SELECT pg_catalog.current_setting('server_version_num')::integer,pg_catalog.current_setting('max_connections')::integer,pg_catalog.current_setting('reserved_connections')::integer,pg_catalog.current_setting('superuser_reserved_connections')::integer`).Scan(&version, &max, &reserved, &superReserved)
+				if err != nil || version != 180006 || max != 10 || max-reserved-superReserved < 5 {
 					t.Fatal("registration isolated capacity/version preflight failed")
 				}
 			}
 		})
+		if n == 0 {
+			rafActivityPreflight(t, f, activityBody)
+		}
 	}
 	rafLeaf(t, "preflight_role_memberships", func(t *testing.T) {
 		var memberships int
@@ -462,6 +492,320 @@ func rafOpenFixture(t *testing.T) *rafFixture {
 	})
 	return f
 }
+
+// The source file is already part of the pinned complete source inventory.
+// Verify its independent digest again before extracting the exact prosrc bytes;
+// do not learn an expected body or function definition from the live database.
+func rafActivitySourceBody(source []byte, digest string) (string, error) {
+	if len(source) == 0 || len(source) > 1<<20 || !rafDigest(digest) || rafSHA(source) != digest ||
+		bytes.Count(source, []byte(rafActivityBodyDelimiter)) != 2 {
+		return "", rafInvalid
+	}
+	parts := bytes.Split(source, []byte(rafActivityBodyDelimiter))
+	if len(parts) != 3 || len(parts[1]) == 0 {
+		return "", rafInvalid
+	}
+	return string(parts[1]), nil
+}
+
+// The query has no caller-controlled arguments. A SQL NULL, SQL error, cancelled
+// context or missing deadline is never a true admission or an expected refusal.
+func rafReadActivityAdmission(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) (bool, error) {
+	if ctx == nil || q == nil {
+		return false, rafInvalid
+	}
+	if _, bounded := ctx.Deadline(); !bounded || ctx.Err() != nil {
+		return false, rafInvalid
+	}
+	var admitted *bool
+	if err := q.QueryRow(ctx, rafActivityAdmissionSQL).Scan(&admitted); err != nil {
+		return false, err
+	}
+	if admitted == nil {
+		return false, rafInvalid
+	}
+	return *admitted, nil
+}
+
+func rafCheckActivityCatalog(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, e rafRunEnvelope, sourceBody string) error {
+	if ctx == nil || q == nil || sourceBody == "" {
+		return rafInvalid
+	}
+	if _, bounded := ctx.Deadline(); !bounded || ctx.Err() != nil {
+		return rafInvalid
+	}
+	var safe bool
+	var body, definition string
+	err := q.QueryRow(ctx, rafActivityCatalogSQL,
+		e.BootstrapRole, e.BootstrapOID, e.ActivityGuardOID, e.AdmissionSchemaOID,
+		e.AdmissionFunctionOID, e.Database, e.DatabaseOID).Scan(&safe, &body, &definition)
+	if err != nil || !safe || body != sourceBody || rafSHA([]byte(definition)) != e.AdmissionFunctionDefinitionSHA256 {
+		return rafInvalid
+	}
+	return nil
+}
+
+func rafVerifyActivityCatalog(t *testing.T, f *rafFixture, sourceBody string) {
+	t.Helper()
+	if rafCheckActivityCatalog(f.ctx, f.owner, f.e, sourceBody) != nil {
+		f.halted = true
+		t.Fatal("registration independent activity helper catalog/source verification failed; stop")
+	}
+}
+
+func rafRequireActivityAdmission(t *testing.T, f *rafFixture) {
+	t.Helper()
+	if f.halted {
+		t.Fatal("registration activity admission already halted; no retry")
+	}
+	admitted, err := rafReadActivityAdmission(f.ctx, f.owner)
+	if err != nil || !admitted {
+		f.halted = true
+		t.Fatal("registration isolated activity admission refused; stop without retry")
+	}
+}
+
+// These controls run while only the initial owner session is open. Every extra
+// session authenticates directly and is explicitly closed before the next case.
+// An expected negative cannot overwrite a failed formal admission: rafLeaf and
+// halted stop the parent, and the first formal positive precedes every control.
+func rafActivityPreflight(t *testing.T, f *rafFixture, sourceBody string) {
+	t.Helper()
+	rafLeaf(t, "preflight_activity_guard_catalog", func(t *testing.T) {
+		rafVerifyActivityCatalog(t, f, sourceBody)
+	})
+	rafLeaf(t, "preflight_activity_admission", func(t *testing.T) {
+		rafRequireActivityAdmission(t, f)
+	})
+	for _, control := range []struct{ leaf, dsn, role string }{
+		{"activity_extra_owner_refused", f.e.OwnerDSN, rafOwner},
+		{"activity_extra_issuer_refused", f.e.IssuerDSN, rafIssuer},
+		{"activity_extra_consumer_refused", f.e.ConsumerDSN, rafConsumer},
+		{"activity_extra_unrelated_refused", f.e.UnrelatedDSN, rafUnrelated},
+	} {
+		rafLeaf(t, control.leaf, func(t *testing.T) {
+			rafExtraActivityRefused(t, f, control.dsn, control.role)
+		})
+	}
+	for _, denial := range []struct{ leaf, sql string }{
+		{"owner_set_activity_guard_denied", `SET LOCAL ROLE wt_registration_lab_activity_guard`},
+		{"owner_grant_read_all_stats_denied", `GRANT pg_read_all_stats TO wt_registration_lab_owner`},
+		{"owner_replace_activity_helper_denied", `CREATE OR REPLACE FUNCTION wt_registration_admission.isolated_owner_session_v1() RETURNS boolean LANGUAGE sql AS 'SELECT true'`},
+	} {
+		rafLeaf(t, denial.leaf, func(t *testing.T) {
+			// Independent transaction per statement; no preceding aborted state can
+			// turn a successful privilege escalation into a spurious denial.
+			tx, err := f.owner.BeginTx(f.ctx, pgx.TxOptions{})
+			if err != nil {
+				f.halted = true
+				t.Fatal("registration activity permission control BEGIN failed; stop")
+			}
+			_, execErr := tx.Exec(f.ctx, denial.sql)
+			clean, cancel := context.WithTimeout(f.ctx, time.Second)
+			rollbackErr := tx.Rollback(clean)
+			rollbackExpired := clean.Err() != nil
+			cancel()
+			var pe *pgconn.PgError
+			if rollbackErr != nil || rollbackExpired || !errors.As(execErr, &pe) || pe.Code != "42501" {
+				f.halted = true
+				t.Fatal("registration activity permission denial not established; stop")
+			}
+			// Recheck membership, all role attributes, effective/default ACLs and
+			// the independently pinned function body after each confirmed rollback.
+			rafVerifyActivityCatalog(t, f, sourceBody)
+			rafRequireActivityAdmission(t, f)
+		})
+	}
+}
+
+func rafExtraActivityRefused(t *testing.T, f *rafFixture, dsn, role string) {
+	t.Helper()
+	if f.halted || rafValidateDSN(dsn, role, f.e) != nil {
+		t.Fatal("registration extra-client control refused after halt/config mismatch")
+	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil || cfg.Host != f.e.Host || cfg.Port != f.e.Port || cfg.Database != f.e.Database || cfg.User != role || len(cfg.Fallbacks) != 0 || cfg.TLSConfig != nil {
+		t.Fatal("registration extra-client explicit config rejected")
+	}
+	cfg.ConnectTimeout = 2 * time.Second
+	cfg.RuntimeParams = map[string]string{"application_name": f.e.RunID, "statement_timeout": "5000", "lock_timeout": "1000", "idle_in_transaction_session_timeout": "5000", "search_path": "pg_catalog,pg_temp"}
+	c, err := pgx.ConnectConfig(f.ctx, cfg)
+	if err != nil {
+		f.halted = true
+		t.Fatal("registration extra-client authentication failed; stop without retry")
+	}
+	t.Cleanup(func() {
+		if !c.IsClosed() {
+			clean, cancel := context.WithTimeout(f.ctx, time.Second)
+			defer cancel()
+			if c.Close(clean) != nil {
+				f.halted = true
+				t.Error("registration extra-client cleanup unconfirmed; stop")
+			}
+		}
+	})
+	var session, effective, db string
+	var oid, databaseOID uint32
+	var pid int32
+	var unsafe bool
+	err = c.QueryRow(f.ctx, `SELECT session_user::text,current_user::text,pg_catalog.current_database(),r.oid,d.oid,pg_catalog.pg_backend_pid(),r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls FROM pg_catalog.pg_roles r,pg_catalog.pg_database d WHERE r.rolname=session_user AND d.datname=pg_catalog.current_database()`).Scan(&session, &effective, &db, &oid, &databaseOID, &pid, &unsafe)
+	if err != nil || session != role || effective != role || db != f.e.Database || databaseOID != f.e.DatabaseOID || pid <= 0 || unsafe ||
+		(role == rafIssuer && oid != f.e.IssuerOID) || (role == rafConsumer && oid != f.e.ConsumerOID) {
+		f.halted = true
+		t.Fatal("registration extra-client authenticated identity/PID mismatch; stop")
+	}
+	if _, err := f.owner.Exec(f.ctx, `SELECT pg_catalog.pg_stat_clear_snapshot()`); err != nil {
+		f.halted = true
+		t.Fatal("registration extra-client visibility refresh failed; stop")
+	}
+	var visible int
+	if err := f.owner.QueryRow(f.ctx, `SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_stat_activity WHERE pid=$1 AND pid<>pg_catalog.pg_backend_pid()`, pid).Scan(&visible); err != nil || visible != 1 {
+		f.halted = true
+		t.Fatal("registration authenticated extra-client PID not visible; stop")
+	}
+	admitted, admissionErr := rafReadActivityAdmission(f.ctx, f.owner)
+	// Close even when the negative assertion failed, but never continue after
+	// either an unexpected result or an unconfirmed close. No reconnect/retry.
+	clean, cancel := context.WithTimeout(f.ctx, time.Second)
+	closeErr := c.Close(clean)
+	closeExpired := clean.Err() != nil
+	cancel()
+	if closeExpired || closeErr != nil || !c.IsClosed() || admissionErr != nil || admitted {
+		f.halted = true
+		t.Fatal("registration extra-client refusal/close unconfirmed; stop")
+	}
+	// Observing backend exit may lag the completed protocol close. Poll only the
+	// departed PID, never retry a failed admission or open another connection.
+	gone, cancelGone := context.WithTimeout(f.ctx, time.Second)
+	defer cancelGone()
+	for {
+		if _, err := f.owner.Exec(gone, `SELECT pg_catalog.pg_stat_clear_snapshot()`); err != nil {
+			f.halted = true
+			t.Fatal("registration departed PID refresh failed; stop")
+		}
+		if err := f.owner.QueryRow(gone, `SELECT pg_catalog.count(*)::integer FROM pg_catalog.pg_stat_activity WHERE pid=$1`, pid).Scan(&visible); err != nil {
+			f.halted = true
+			t.Fatal("registration departed PID observation unconfirmed; stop")
+		}
+		if visible == 0 {
+			break
+		}
+		select {
+		case <-gone.Done():
+			f.halted = true
+			t.Fatal("registration extra-client backend exit unconfirmed; stop")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	rafRequireActivityAdmission(t, f)
+}
+
+// This independent catalog query must succeed before executing the helper. Its
+// complete membership set preserves initdb's three pg_monitor edges, adds only
+// the intended routine and statistics edges, and forbids every other edge.
+// Recursive closure also denies any indirect path into the guard/stats roles.
+// pg_roles masks passwords: PASSWORD NULL is separately checked by bootstrap;
+// no auth-catalog privilege is granted to owner merely to inspect that secret.
+const rafActivityCatalogSQL = `WITH RECURSIVE
+bootstrap AS (SELECT * FROM pg_catalog.pg_roles WHERE oid=$2::oid AND rolname=$1::text),
+lab_roles AS (SELECT * FROM pg_catalog.pg_roles WHERE rolname IN ('wt_registration_lab_owner','wt_registration_lab_issuer','wt_registration_lab_consumer','wt_registration_lab_unrelated','wt_registration_lab_routine','wt_registration_lab_activity_guard')),
+owner_role AS (SELECT * FROM lab_roles WHERE rolname='wt_registration_lab_owner'),
+guard AS (SELECT * FROM lab_roles WHERE oid=$3::oid AND rolname='wt_registration_lab_activity_guard'),
+ns AS (SELECT * FROM pg_catalog.pg_namespace WHERE oid=$4::oid AND nspname='wt_registration_admission'),
+helper AS (SELECT p.* FROM pg_catalog.pg_proc p,ns WHERE p.oid=$5::oid AND p.pronamespace=ns.oid),
+stats AS (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='pg_read_all_stats'),
+monitor AS (SELECT oid FROM pg_catalog.pg_roles WHERE rolname='pg_monitor'),
+builtin_roles AS (SELECT * FROM pg_catalog.pg_roles WHERE rolname IN('pg_monitor','pg_read_all_settings','pg_read_all_stats','pg_stat_scan_tables')),
+expected_members AS (
+ SELECT roleid,member,$2::oid AS grantor,admin_option,inherit_option,set_option
+ FROM (VALUES
+ ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname='wt_registration_lab_routine'),(SELECT oid FROM owner_role),false,false,true),
+ ((SELECT oid FROM stats),(SELECT oid FROM guard),false,true,false),
+ ((SELECT oid FROM stats),(SELECT oid FROM monitor),false,true,true),
+ ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname='pg_read_all_settings'),(SELECT oid FROM monitor),false,true,true),
+ ((SELECT oid FROM pg_catalog.pg_roles WHERE rolname='pg_stat_scan_tables'),(SELECT oid FROM monitor),false,true,true)
+ ) AS v(roleid,member,admin_option,inherit_option,set_option)
+), actual_members AS (
+ SELECT roleid,member,grantor,admin_option,inherit_option,set_option FROM pg_catalog.pg_auth_members
+), reachable(member,roleid) AS (
+ SELECT member,roleid FROM actual_members
+ UNION
+ SELECT r.member,m.roleid FROM reachable r JOIN actual_members m ON m.member=r.roleid
+), schema_acl AS (
+ SELECT a.* FROM ns CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(ns.nspacl,pg_catalog.acldefault('n',ns.nspowner))) a
+), expected_schema_acl AS (
+ SELECT $2::oid AS grantor,v.grantee,v.privilege_type,false AS is_grantable
+ FROM (VALUES ($2::oid,'CREATE'::text),($2::oid,'USAGE'::text),((SELECT oid FROM owner_role),'USAGE'::text)) v(grantee,privilege_type)
+), function_acl AS (
+ SELECT a.* FROM helper p CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+), expected_function_acl AS (
+ SELECT $3::oid AS grantor,v.grantee,'EXECUTE'::text AS privilege_type,false AS is_grantable
+ FROM (VALUES ($3::oid),((SELECT oid FROM owner_role))) v(grantee)
+)
+SELECT (
+ $2::oid=10 AND $1::text ~ '^wt_admin_[a-z0-9_]{16,40}$'
+ AND (SELECT pg_catalog.count(*)=1 FROM bootstrap WHERE rolsuper AND rolcanlogin)
+ AND (SELECT pg_catalog.count(*)=1 FROM owner_role WHERE NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit AND rolcanlogin AND rolconnlimit=2)
+ AND (SELECT pg_catalog.count(*)=1 FROM guard WHERE NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit AND NOT rolcanlogin AND rolconnlimit=0 AND rolvaliduntil IS NULL)
+ AND (SELECT pg_catalog.count(*)=6 FROM lab_roles)
+ AND NOT EXISTS(SELECT 1 FROM lab_roles WHERE rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls OR rolinherit
+       OR rolcanlogin<>(rolname NOT IN('wt_registration_lab_routine','wt_registration_lab_activity_guard'))
+       OR rolconnlimit<>CASE WHEN rolname='wt_registration_lab_activity_guard' THEN 0 ELSE 2 END
+       OR rolvaliduntil IS NOT NULL OR rolconfig IS NOT NULL)
+ AND (SELECT oid=3375 FROM stats)
+ AND (SELECT oid=3373 FROM monitor)
+ AND (SELECT oid=3374 FROM pg_catalog.pg_roles WHERE rolname='pg_read_all_settings')
+ AND (SELECT oid=3377 FROM pg_catalog.pg_roles WHERE rolname='pg_stat_scan_tables')
+ AND (SELECT pg_catalog.count(*)=4 FROM builtin_roles)
+ AND NOT EXISTS(SELECT 1 FROM builtin_roles WHERE rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+ AND (SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_database WHERE oid=$7::oid AND datname=$6::text AND datname=pg_catalog.current_database() AND datdba=(SELECT oid FROM owner_role))
+ AND session_user='wt_registration_lab_owner' AND current_user='wt_registration_lab_owner'
+ AND (SELECT pg_catalog.count(*)=1 FROM ns WHERE nspowner=$2::oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class c,ns WHERE c.relnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type o,ns WHERE o.typnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_operator o,ns WHERE o.oprnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_collation o,ns WHERE o.collnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_conversion o,ns WHERE o.connamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_opclass o,ns WHERE o.opcnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_opfamily o,ns WHERE o.opfnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_ts_config o,ns WHERE o.cfgnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_ts_dict o,ns WHERE o.dictnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_ts_parser o,ns WHERE o.prsnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_ts_template o,ns WHERE o.tmplnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_statistic_ext o,ns WHERE o.stxnamespace=ns.oid)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint o,ns WHERE o.connamespace=ns.oid)
+ AND (SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_proc p,ns WHERE p.pronamespace=ns.oid)
+ AND (SELECT pg_catalog.count(*)=1 FROM helper p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+      WHERE p.proname='isolated_owner_session_v1' AND p.proowner=$3::oid AND p.prokind='f'
+      AND p.pronargs=0 AND p.pronargdefaults=0 AND p.proargtypes=''::pg_catalog.oidvector
+      AND p.proallargtypes IS NULL AND p.proargmodes IS NULL AND p.proargnames IS NULL
+      AND p.proargdefaults IS NULL AND p.provariadic=0 AND p.prosupport=0
+      AND p.procost=100 AND p.prorows=0 AND p.probin IS NULL
+      AND p.prorettype='pg_catalog.bool'::pg_catalog.regtype AND NOT p.proretset
+      AND p.prosecdef AND NOT p.proleakproof AND NOT p.proisstrict
+      AND p.provolatile='v' AND p.proparallel='u' AND p.prosqlbody IS NULL AND p.protrftypes IS NULL
+      AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']::text[] AND l.lanname='plpgsql' AND l.lanpltrusted)
+ AND (SELECT pg_catalog.count(*)=5 FROM actual_members)
+ AND NOT EXISTS((SELECT * FROM actual_members EXCEPT SELECT * FROM expected_members)
+                UNION ALL (SELECT * FROM expected_members EXCEPT SELECT * FROM actual_members))
+ AND NOT EXISTS(SELECT 1 FROM reachable WHERE roleid=(SELECT oid FROM guard)
+       OR (roleid=(SELECT oid FROM stats) AND member NOT IN((SELECT oid FROM guard),(SELECT oid FROM monitor))))
+ AND (SELECT pg_catalog.count(*)=3 FROM schema_acl)
+ AND NOT EXISTS((SELECT * FROM schema_acl EXCEPT SELECT * FROM expected_schema_acl)
+                UNION ALL (SELECT * FROM expected_schema_acl EXCEPT SELECT * FROM schema_acl))
+ AND (SELECT pg_catalog.count(*)=2 FROM function_acl)
+ AND NOT EXISTS((SELECT * FROM function_acl EXCEPT SELECT * FROM expected_function_acl)
+                UNION ALL (SELECT * FROM expected_function_acl EXCEPT SELECT * FROM function_acl))
+ AND pg_catalog.has_schema_privilege((SELECT oid FROM owner_role),$4::oid,'USAGE')
+ AND NOT pg_catalog.has_schema_privilege((SELECT oid FROM owner_role),$4::oid,'CREATE')
+ AND pg_catalog.has_function_privilege((SELECT oid FROM owner_role),$5::oid,'EXECUTE')
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_default_acl)
+) IS TRUE,(SELECT prosrc FROM helper),(SELECT pg_catalog.pg_get_functiondef(oid) FROM helper)`
 
 // Effective checks include inherited/PUBLIC and column grants, while raw ACL
 // checks reject unrelated grantees/default grant options. Still only a focused

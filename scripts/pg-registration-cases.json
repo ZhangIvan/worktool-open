@@ -6,6 +6,15 @@
   "leaves": [
     "preflight_private_envelope_source_executable",
     "preflight_owner_identity_capacity",
+    "preflight_activity_guard_catalog",
+    "preflight_activity_admission",
+    "activity_extra_owner_refused",
+    "activity_extra_issuer_refused",
+    "activity_extra_consumer_refused",
+    "activity_extra_unrelated_refused",
+    "owner_set_activity_guard_denied",
+    "owner_grant_read_all_stats_denied",
+    "owner_replace_activity_helper_denied",
     "preflight_issuer_identity",
     "preflight_consumer_identity",
     "preflight_unrelated_identity",
@@ -269,6 +278,7 @@
     "backend-go/internal/store/pg/session.go",
     "backend-go/internal/store/pg/testdata/admission-golden.json",
     "backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql",
+    "backend-go/internal/store/pg/testdata/registration_activity_guard.sql",
     "backend-go/internal/store/pg/testdata/registration_authority_boundary.sql",
     "backend-go/migrations/0001_base19.sql",
     "backend-go/migrations/0002_control7.sql",
@@ -385,12 +395,13 @@
     "tests/ws-shutdown.test.ts",
     "tsconfig.json"
   ],
-  "source_inventory_sha256": "09f805689c01aec0de08a388024ec3bde02ca39050198d58927a22b592f2069f",
+  "source_inventory_sha256": "8386bc277995bbe52f9bcaea4594bfde22f979beafc451dbf816c173e4e345fa",
   "scope_notes": [
     "A focused single committed pending-registration graph; not the separate 27- or 45-case design matrices.",
     "The other valid grant reaches pending only inside an explicitly rolled-back transaction. Prepared grants and inert control rows remain until owned-resource teardown.",
     "Each runtime acceptance leaf requires exact go test2json run and pass events plus source, compiled executable, target and confirmed physical teardown binding from the supervisor.",
     "Offline tests and fabricated parser streams never constitute PostgreSQL execution or acceptance.",
-    "Durable pre-mutation inhibition, crash/restart/recovery authority, concurrency and the broader corruption/authority matrix remain NOT_IMPLEMENTED or NOT_PROVEN."
+    "Durable pre-mutation inhibition, crash/restart/recovery authority, concurrency and the broader corruption/authority matrix remain NOT_IMPLEMENTED or NOT_PROVEN.",
+    "Activity-admission candidate adds a NOLOGIN statistics guard and nine exact preflight/negative leaves; authored locally but no PostgreSQL execution evidence is supplied by offline checks."
   ]
 }

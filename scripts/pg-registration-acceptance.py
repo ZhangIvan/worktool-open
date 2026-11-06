@@ -38,14 +38,14 @@ ROLE_NAMES = ('wt_registration_lab_owner', 'wt_registration_lab_issuer',
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 ENV_ALLOW = 'one-reviewed-synthetic-pending-only-run-no-retry'
 MAX_OUTPUT = 2 << 20
-PROVISION_PHASES = ('bootstrap_preflight', 'bootstrap_roles', 'bootstrap_database', 'owner_schema') + tuple(
+PROVISION_PHASES = ('bootstrap_preflight', 'bootstrap_roles', 'bootstrap_database', 'bootstrap_helper', 'owner_schema') + tuple(
     'migration_%04d' % number for number in range(1, 11)) + ('registry', 'boundary', 'synthetic_seed', 'catalog_readback')
 PROVISION_DIAGNOSTIC_CLASSES = frozenset(('SQL_PROCESS_PENDING', 'SQL_PROCESS_ACKNOWLEDGED',
     'SQL_PROCESS_FAILED', 'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_OUTPUT_LIMIT',
     'INTERRUPTED', 'JSON_DECODE_FAILED', 'JSON_SHAPE_INVALID', 'QUERY_RESULT_RETURNED',
     'UNEXPECTED_NONQUERY_OUTPUT', 'EMPTY_RESULT_ACKNOWLEDGED'))
 PREFLIGHT_CHECKS = ('version', 'session_user', 'current_user', 'database_absent', 'roles_absent',
-                    'other_clients', 'bootstrap_superuser', 'event_triggers')
+                    'activity_admitted', 'bootstrap_oid', 'bootstrap_superuser', 'event_triggers')
 CENSUS_MAX_BYTES = 128 << 10
 CENSUS_STATUSES = frozenset(('OBSERVED', 'SKIPPED_BUDGET', 'SKIPPED_INTERRUPTED',
     'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_FAILED', 'SQL_PROCESS_OUTPUT_LIMIT',
@@ -884,7 +884,7 @@ class Supervisor:
                 fields['format'] == 'worktool-registration-preflight-fields-v1' and fields['authority'] == 'DIAGNOSTIC_ONLY' and
                 fields['classification'] == 'VALUE_MISMATCH' and
                 fields['shape'] == {key: 'MATCH' for key in ('root', 'row_count', 'row', 'fields')} and
-                fields['checks'] == {key: 'MISMATCH' if key == 'other_clients' else 'MATCH' for key in PREFLIGHT_CHECKS} and
+                fields['checks'] == {key: 'MISMATCH' if key == 'activity_admitted' else 'MATCH' for key in PREFLIGHT_CHECKS} and
                 self.container_verified is True and self.server_settings_verified is True and
                 self.authentication_summary.get('status') == 'VERIFIED_IN_ISOLATED_SCOPE' and
                 self.authentication_summary.get('wrong_password_probe') == 'AUTH_DENIAL_OBSERVED' and
@@ -1054,12 +1054,15 @@ class Supervisor:
             self.sleep(1)
         else:
             raise Fault('PG_READY_TIMEOUT')
-        settings = self.sql_call(self.admin, 'postgres', "SELECT json_build_object('version',current_setting('server_version_num'),'version_string',version(),'connections',current_setting('max_connections'),'reserved',current_setting('reserved_connections'),'super_reserved',current_setting('superuser_reserved_connections'),'messages',current_setting('lc_messages'),'statement',current_setting('statement_timeout'),'lock',current_setting('lock_timeout'),'idle',current_setting('idle_in_transaction_session_timeout'),'data',current_setting('data_directory'))::text;")
+        settings = self.sql_call(self.admin, 'postgres', "SELECT json_build_object('version',current_setting('server_version_num'),'version_string',version(),'connections',current_setting('max_connections'),'reserved',current_setting('reserved_connections'),'super_reserved',current_setting('superuser_reserved_connections'),'messages',current_setting('lc_messages'),'statement',current_setting('statement_timeout'),'lock',current_setting('lock_timeout'),'idle',current_setting('idle_in_transaction_session_timeout'),'data',current_setting('data_directory'),'shared_preload',current_setting('shared_preload_libraries'),'session_preload',current_setting('session_preload_libraries'),'local_preload',current_setting('local_preload_libraries'),'archive_mode',current_setting('archive_mode'),'summarize_wal',current_setting('summarize_wal'),'io_method',current_setting('io_method'),'io_workers',current_setting('io_workers'))::text;")
         v = parse_json(settings)
         require(v.get('version') == '180006' and v.get('version_string', '').startswith('PostgreSQL 18.6 ') and
                 v.get('connections') == '10' and v.get('reserved') == '0' and v.get('super_reserved') == '3' and v.get('messages') == 'C' and
                 v.get('statement') == '5s' and v.get('lock') == '1s' and v.get('idle') == '5s' and
-                v.get('data') == '/var/lib/postgresql/18/docker', 'PG_SETTINGS_MISMATCH')
+                v.get('data') == '/var/lib/postgresql/18/docker' and
+                all(v.get(k) == '' for k in ('shared_preload', 'session_preload', 'local_preload')) and
+                v.get('archive_mode') == 'off' and v.get('summarize_wal') == 'off' and
+                v.get('io_method') == 'worker' and v.get('io_workers') == '3', 'PG_SETTINGS_MISMATCH')
         wal = self.call([DOCKER, 'exec', self.marker['container_id'], 'readlink', '-f',
                          '/var/lib/postgresql/18/docker/pg_wal']).stdout.strip()
         require(wal == b'/var/lib/postgresql/18/docker/pg_wal', 'PG_SETTINGS_MISMATCH')
@@ -1076,9 +1079,15 @@ class Supervisor:
         # Every setup subprocess exited, therefore all setup/psql sessions have
         # closed. Independently inspect real activity before opening fixture.
         self.stage = 'bootstrap_close'
-        active = self.sql_call(ROLE_NAMES[0], self.database,
-            "SELECT count(*)::text FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND (backend_type='client backend' OR datid IS NOT NULL OR usename IS NOT NULL OR backend_type IS NULL);")
-        require(active == b'0', 'PG_SETTINGS_MISMATCH')
+        # Independently re-bind catalog/source/ACL and exact receipt identities
+        # in a separate statement before planning the fixed definer call. Output is
+        # never authority, and a failed/unknown check never becomes zero clients.
+        query = self.provision_helper.owner_admission_query(
+            self.bundle, self.database, self.receipt.private_metadata)
+        active = parse_json(self.sql_call(ROLE_NAMES[0], self.database, query))
+        require(type(active) is list and len(active) == 1 and type(active[0]) is dict and
+                set(active[0]) == {'activity_admitted'} and active[0]['activity_admitted'] is True,
+                'PG_SETTINGS_MISMATCH')
         self.bootstrap_closed = True
         del self.credentials[self.admin]
         (self.folder / 'container.env').unlink()
@@ -1133,7 +1142,12 @@ class Supervisor:
             environment=self.run_id, recovery_generation=self.run_id, image=IMAGE, server_version=180006,
             boundary_sha256=metadata['boundary_sha256'], registry_sha256=metadata['registry_sha256'],
             routine_definition_sha256=metadata['routine_definition_sha256'], source_manifest_sha256=self.source_sha256,
-            executable_sha256=self.executable_sha256, provisioning_evidence_sha256=self.provisioning_sha256)
+            executable_sha256=self.executable_sha256, provisioning_evidence_sha256=self.provisioning_sha256,
+            bootstrap_role=metadata['bootstrap_role'], bootstrap_oid=metadata['bootstrap_oid'],
+            activity_guard_oid=metadata['activity_guard_oid'], admission_schema_oid=metadata['admission_schema_oid'],
+            admission_function_oid=metadata['admission_function_oid'],
+            admission_function_definition_sha256=metadata['admission_function_definition_sha256'],
+            admission_sha256=metadata['admission_sha256'])
         for key, role in zip(('owner_dsn', 'issuer_dsn', 'consumer_dsn', 'unrelated_dsn'), ROLE_NAMES):
             envelope[key] = 'postgresql://' + role + ':' + self.credentials[role] + '@127.0.0.1:' + str(self.port) + '/' + self.database + '?sslmode=disable'
         private_file(self.folder / 'envelope.json', canonical(envelope))
@@ -1176,7 +1190,12 @@ class Supervisor:
             cleanup='NOT_CONFIRMED', bootstrap_closed=True, go_invocations=1, events_sha256=sha(result.stdout),
             compile_exit_code=self.compile_exit_code, build_command_sha256=sha(canonical(self.build_command)),
             schema_oid=metadata['schema_oid'], issuer_oid=metadata['issuer_oid'], consumer_oid=metadata['consumer_oid'],
-            routine_definition_sha256=metadata['routine_definition_sha256'], provisioning_evidence_sha256=self.provisioning_sha256)
+            routine_definition_sha256=metadata['routine_definition_sha256'], provisioning_evidence_sha256=self.provisioning_sha256,
+            bootstrap_role=metadata['bootstrap_role'], bootstrap_oid=metadata['bootstrap_oid'],
+            activity_guard_oid=metadata['activity_guard_oid'], admission_schema_oid=metadata['admission_schema_oid'],
+            admission_function_oid=metadata['admission_function_oid'],
+            admission_function_definition_sha256=metadata['admission_function_definition_sha256'],
+            admission_sha256=metadata['admission_sha256'])
         require(result.returncode == 0, 'RUN_FAILED')
         self.evidence_helper.validate_events(result.stdout, self.cases)
 

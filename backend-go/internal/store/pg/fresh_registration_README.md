@@ -123,3 +123,66 @@ wrong/unsafe namespace and temp shadowing, malformed graph/history refusal,
 transaction rollback and complete graph, and real unknown/cleanup recovery.
 The existing required PG evidence gate is unchanged; current green CI on b4d3fd88
 is not evidence for this new candidate. No production callback is enabled.
+
+
+## Local activity-admission candidate (2026-11-06, not executed)
+
+This review candidate is based on PR #1 commit
+`32ba4614e7202ea36872fcabd8d43031320eb270`. It changes only isolated diagnostic
+setup, admission checks and their tests. It is not installed or pushed, and no
+PostgreSQL, Docker, CI, callbacks, browser, merge or deployment was run for this
+candidate. Offline test success is not SQL installation or privilege evidence.
+
+A sixth role, `wt_registration_lab_activity_guard`, is NOLOGIN with PASSWORD
+NULL, no superuser/createdb/createrole/replication/bypassrls attributes and no
+role-level inheritance. Its only new membership is `pg_read_all_stats` with
+ADMIN FALSE, INHERIT TRUE and SET FALSE. None of the four existing login roles
+receives direct or inherited statistics access, membership or SET/ADMIN rights
+over this guard. PostgreSQL's fixed built-in `pg_monitor` membership is inspected,
+not changed or treated as newly granted access.
+
+The existing bootstrap role owns the separate `wt_registration_admission`
+schema. The guard owns only the no-argument, boolean
+`isolated_owner_session_v1()` function. It is SECURITY DEFINER, VOLATILE,
+PARALLEL UNSAFE, non-leakproof, and uses fixed qualified catalog references with
+`search_path=pg_catalog, pg_temp`. PUBLIC execution is revoked in the creation
+transaction. Only the existing owner receives schema USAGE and function EXECUTE,
+without grant options; it receives no CREATE, replacement or ownership rights.
+The helper returns neither activity rows, query text nor connection identities.
+The bootstrap's privileged catalog read proves PASSWORD NULL before its client
+credentials are deleted. Its server role remains until exact-container teardown.
+
+The five gates share one reviewed activity classification: bootstrap preflight,
+every owner setup session, source-derived catalog readback, supervisor bootstrap
+close, and the fixture's first owner connection. Only the current verified owner
+(or the bootstrap at initial preflight) connection is excluded. A fresh snapshot
+is cleared before one materialized activity read. Unknown types, NULL/incomplete
+identities, other clients (including the same role), and counts above the fixed
+background-worker limits reject admission. The accepted background processes
+are checkpointer, background writer, walwriter and autovacuum launcher (at most
+one each), io workers (at most three), and the logical replication launcher (at
+most one, tied to the independently verified initdb role OID 10). No minimum
+count is required. Server image/version and empty preload libraries, disabled
+archive/WAL summarization, worker I/O and three configured I/O workers are
+independently checked. No server setting is changed to make the gate pass.
+
+The catalog checks bind the guard, schema, function body/settings/signature,
+expanded ACLs and membership paths to frozen source rather than trusting helper
+output. Catalog validation must finish in a separate statement before the helper
+call is planned: a CASE branch is not a safe barrier against constant folding of
+a tampered IMMUTABLE function. Snapshot admission is not an atomic connection fence; it still relies
+on the isolated pinned container, controlled credentials and no unreviewed
+extensions. A later failure census cannot prove what existed at the failed gate
+or convert that failure into acceptance. Failure and unknown cleanup remain
+fail-closed with no automatic retry.
+
+The proposed exact-leaf contract retains all 37 existing cases and adds nine:
+independent helper catalog/admission checks; a real second owner, issuer,
+consumer or unrelated connection each causing false; and denied SET ROLE,
+statistics GRANT and helper-replacement attempts by the owner. These real SQL
+negative tests are authored but not run. Each extra connection must be witnessed,
+closed and absent before a fresh baseline is accepted. Permission negatives must
+return the expected permission SQLSTATE and roll back; syntax/network failures
+are not successful denials. Resource budgets, the four production-like test
+roles' business ACLs, all production migrations and exact-owned cleanup remain
+unchanged. Temporary guard objects disappear only with the owned test container.

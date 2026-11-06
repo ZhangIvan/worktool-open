@@ -27,7 +27,14 @@ ISSUER = "wt_registration_lab_issuer"
 CONSUMER = "wt_registration_lab_consumer"
 ROUTINE = "wt_registration_lab_routine"
 UNRELATED = "wt_registration_lab_unrelated"
-ROLES = (OWNER, ISSUER, CONSUMER, ROUTINE, UNRELATED)
+ACTIVITY_GUARD = "wt_registration_lab_activity_guard"
+ADMISSION_SCHEMA = "wt_registration_admission"
+ADMISSION_FUNCTION = "isolated_owner_session_v1"
+ADMISSION_PATH = "backend-go/internal/store/pg/testdata/registration_activity_guard.sql"
+BOOTSTRAP_OID = 10
+BUILTIN_STATS_ROLES = {"pg_monitor": 3373, "pg_read_all_settings": 3374,
+                       "pg_read_all_stats": 3375, "pg_stat_scan_tables": 3377}
+ROLES = (OWNER, ISSUER, CONSUMER, ROUTINE, UNRELATED, ACTIVITY_GUARD)
 LOGIN_ROLES = (OWNER, ISSUER, CONSUMER, UNRELATED)
 CONSUME = "consume_prepared_fresh_registration_v1"
 VERSION = 180006
@@ -45,8 +52,9 @@ SOURCE_PINS = {
  'backend-go/migrations/0010_callback_replay_receipts.sql': '0b19aa77527642a9452365bde8631176c9241b2fb682a784e94cf92933d954fd',
  'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql': '042a674dc4cff90ffbdbb28ce43c29c1d6b1c4378803572a308b516c4daaccfc',
  'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql': '8407530ba3b382ddea3b81ef4bdc4185792a87a9b6d6ac1a6e0e475f962bba6a',
+ ADMISSION_PATH: 'e8f5bf0e7d4db1315303c20a9bacb17fdc3d1c6943602176c33fc445444c2382',
 }
-REGISTRY_PATH, BOUNDARY_PATH = tuple(SOURCE_PINS)[-2:]
+REGISTRY_PATH, BOUNDARY_PATH = tuple(SOURCE_PINS)[-3:-1]
 
 
 class ProvisionError(RuntimeError):
@@ -136,7 +144,7 @@ def _activity_census_bin_keys():
 
 
 def activity_census_query():
-    """Fixed, one-SELECT, later observation; never part of the 18-step plan.
+    """Fixed, one-SELECT, later observation; never part of the 19-step plan.
 
     Call only via the supervisor in its freshly verified isolated synthetic
     instance after terminal preflight failure. Labels are reports, not verified
@@ -445,6 +453,8 @@ def _column(table, fragment, contract):
 def derive_contract(texts):
     contract = {"tables": {}, "functions": {}, "triggers": [], "constraints": [], "indexes": [], "domain": "epoch_ms"}
     for path, text in texts:
+        if path == ADMISSION_PATH:
+            continue
         for statement in _expanded_statements(path, text):
             match = re.match(r"CREATE TABLE\s+([a-z0-9_.]+)\s*\(", statement)
             if match:
@@ -528,6 +538,12 @@ def derive_contract(texts):
             c["keys"] = tuple(sorted(set(re.findall(r"\b[a-z][a-z0-9_]*\b", visible)) & set(contract["tables"][c["table"]])))
     require(len(contract["tables"]) == 37 and len(contract["functions"]) == 20 and len(contract["triggers"]) == 24, "SOURCE_INVENTORY_COUNT")
     contract["acls"] = _derive_acls(dict(texts)[BOUNDARY_PATH], contract)
+    admission = dict(texts)[ADMISSION_PATH]
+    delimiter = "$registration_activity_guard_v1$"
+    require(admission.count(delimiter) == 2, "SOURCE_ADMISSION_BODY")
+    contract["admission"] = {"body": admission.split(delimiter)[1], "args": [], "argnames": [],
+        "result": "boolean", "owner": ACTIVITY_GUARD, "security_definer": True,
+        "config": ["search_path=pg_catalog, pg_temp"]}
     return contract
 
 
@@ -602,54 +618,106 @@ def build_provision_plan(bundle, database, bootstrap_role, role_passwords):
     require(len(set(role_passwords.values())) == 4, "PASSWORDS_NOT_DISTINCT")
     roles_sql = "BEGIN;\nSET LOCAL password_encryption='scram-sha-256';\n"
     for role in ROLES:
+        if role == ACTIVITY_GUARD:
+            continue
         password = " PASSWORD " + _quote(role_passwords[role]) if role in LOGIN_ROLES else ""
         roles_sql += f"CREATE ROLE {role} {'LOGIN' if role in LOGIN_ROLES else 'NOLOGIN'} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT 2{password};\n"
+    roles_sql += f"CREATE ROLE {ACTIVITY_GUARD} NOLOGIN PASSWORD NULL NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT 0;\n"
+    roles_sql += f"GRANT pg_read_all_stats TO {ACTIVITY_GUARD} WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;\n"
     roles_sql += f"GRANT {ROUTINE} TO {OWNER} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;\nCOMMIT;\n"
-    steps = [SQLStep("bootstrap_preflight", bootstrap_role, "postgres", _bootstrap_query(database, bootstrap_role), True),
+    steps = [SQLStep("bootstrap_preflight", bootstrap_role, "postgres", _bootstrap_query(database, bootstrap_role, bundle), True),
              SQLStep("bootstrap_roles", bootstrap_role, "postgres", roles_sql),
              SQLStep("bootstrap_database", bootstrap_role, "postgres", f"CREATE DATABASE {database} OWNER {OWNER} TEMPLATE template0 ENCODING 'UTF8';\n"),
-             SQLStep("owner_schema", OWNER, database, f"BEGIN;\n{_session_guard(database, OWNER)}\nCREATE SCHEMA {SCHEMA} AUTHORIZATION {OWNER};\nREVOKE ALL ON SCHEMA {SCHEMA} FROM PUBLIC;\nCOMMIT;\n")]
+             SQLStep("bootstrap_helper", bootstrap_role, database, _bootstrap_helper_sql(bundle, database, bootstrap_role), True),
+             SQLStep("owner_schema", OWNER, database, f"BEGIN;\n{_session_guard(database, OWNER, bundle, bootstrap_role)}\nCREATE SCHEMA {SCHEMA} AUTHORIZATION {OWNER};\nREVOKE ALL ON SCHEMA {SCHEMA} FROM PUBLIC;\nCOMMIT;\n")]
     for i, (path, sql) in enumerate(bundle.texts):
+        if path == ADMISSION_PATH:
+            continue
         if path == BOUNDARY_PATH:
             # Entire exact script, own BEGIN/COMMIT; never wrap in another tx.
-            wrapped = _session_guard(database, OWNER) + "\n" + sql
+            wrapped = _session_guard(database, OWNER, bundle, bootstrap_role) + "\n" + sql
             phase = "boundary"
         else:
-            wrapped = f"BEGIN;\nSET LOCAL search_path TO {SCHEMA}, pg_catalog, pg_temp;\n{_session_guard(database, OWNER)}\n" + sql + "\nCOMMIT;\n"
+            wrapped = f"BEGIN;\nSET LOCAL search_path TO {SCHEMA}, pg_catalog, pg_temp;\n{_session_guard(database, OWNER, bundle, bootstrap_role)}\n" + sql + "\nCOMMIT;\n"
             phase = "registry" if path == REGISTRY_PATH else f"migration_{i + 1:04d}"
         steps.append(SQLStep(phase, OWNER, database, wrapped))
-    steps.append(SQLStep("synthetic_seed", OWNER, database, seed_sql(database)))
+    steps.append(SQLStep("synthetic_seed", OWNER, database, seed_sql(database, bundle, bootstrap_role)))
     steps.append(SQLStep("catalog_readback", OWNER, database, catalog_query(bundle), True))
     return tuple(steps)
 
 
-def _session_guard(database, role):
+def _session_guard(database, role, bundle, bootstrap_role):
     return f"""DO $identity$ BEGIN
  IF session_user <> '{role}' OR current_user <> session_user
  OR pg_catalog.current_database() <> '{database}'
  OR pg_catalog.current_setting('server_version_num') <> '180006'
- OR EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
-    WHERE pid<>pg_catalog.pg_backend_pid() AND (backend_type='client backend' OR usename IS NOT NULL OR backend_type IS NULL))
+ OR ({_admission_catalog_predicate(bundle)}) IS NOT TRUE
+ OR (SELECT rolname FROM pg_catalog.pg_roles WHERE oid=10) IS DISTINCT FROM '{bootstrap_role}'
+ THEN RAISE EXCEPTION 'REGISTRATION_INSTALL_SESSION_INVALID'; END IF;
+ -- Separate statement: do not plan a potentially tampered IMMUTABLE definer
+ -- before the preceding catalog IF has succeeded.
+ IF {ADMISSION_SCHEMA}.{ADMISSION_FUNCTION}() IS NOT TRUE
  THEN RAISE EXCEPTION 'REGISTRATION_INSTALL_SESSION_INVALID'; END IF;
  END $identity$;"""
 
 
-def _bootstrap_query(database, role):
-    return f"""SELECT pg_catalog.json_build_array(pg_catalog.json_build_object(
+def _activity_classification(bundle):
+    # Shared code is extracted from independently pinned source, never readback.
+    source = dict(bundle.texts)[ADMISSION_PATH]
+    begin, end = "-- BEGIN ACTIVITY_CLASSIFICATION_V1\n", "-- END ACTIVITY_CLASSIFICATION_V1"
+    require(source.count(begin) == 1 and source.count(end) == 1, "SOURCE_ACTIVITY_CLASSIFICATION")
+    return source.split(begin)[1].split(end)[0].strip()
+
+
+def _bootstrap_query(database, role, bundle):
+    return f"""DO $snapshot$ BEGIN PERFORM pg_catalog.pg_stat_clear_snapshot(); END $snapshot$;
+WITH {_activity_classification(bundle)}
+SELECT pg_catalog.json_build_array(pg_catalog.json_build_object(
  'version',pg_catalog.current_setting('server_version_num')::integer,
  'session_user',session_user,'current_user',current_user,
  'database_absent',NOT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname='{database}'),
  'roles_absent',NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN ({','.join(repr(x) for x in ROLES)})),
- 'other_clients',(SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE pid<>pg_catalog.pg_backend_pid() AND (backend_type='client backend' OR usename IS NOT NULL OR backend_type IS NULL)),
- 'bootstrap_superuser',(SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname='{role}'),
+ 'activity_admitted',((SELECT b.ok FROM background_admitted AS b)
+ AND (SELECT pg_catalog.count(*) FROM activity AS a WHERE a.pid=pg_catalog.pg_backend_pid())=1
+ AND (SELECT pg_catalog.count(*)=1 FROM activity AS a
+ JOIN pg_catalog.pg_database AS d ON d.oid=a.datid AND d.datname=a.datname
+ JOIN pg_catalog.pg_roles AS r ON r.oid=a.usesysid AND r.rolname=a.usename
+ WHERE a.pid=pg_catalog.pg_backend_pid() AND a.backend_type='client backend'
+ AND a.leader_pid IS NULL AND a.datname='postgres' AND a.usename='{role}'
+ AND r.oid=10 AND d.datdba=10)) IS TRUE,
+ 'bootstrap_oid',(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='{role}'),
+ 'bootstrap_superuser',(SELECT rolsuper AND rolcanlogin AND oid=10
+ AND pg_catalog.current_setting('shared_preload_libraries')=''
+ FROM pg_catalog.pg_roles WHERE rolname='{role}'),
  'event_triggers',(SELECT count(*) FROM pg_catalog.pg_event_trigger)
  ));"""
 
 
-def seed_sql(database):
+def _bootstrap_helper_sql(bundle, database, role):
+    return f"""BEGIN;
+DO $bootstrap$ BEGIN
+ IF session_user <> '{role}' OR current_user <> session_user
+ OR pg_catalog.current_database() <> '{database}'
+ OR pg_catalog.current_setting('server_version_num') <> '180006'
+ OR pg_catalog.current_setting('shared_preload_libraries') <> ''
+ OR (SELECT pg_catalog.count(*) FROM pg_catalog.pg_roles
+     WHERE oid=10 AND rolname='{role}' AND rolsuper AND rolcanlogin) <> 1
+ OR (SELECT pg_catalog.count(*) FROM pg_catalog.pg_database AS d
+     JOIN pg_catalog.pg_roles AS r ON r.oid=d.datdba
+     WHERE d.datname='{database}' AND r.rolname='{OWNER}') <> 1
+ THEN RAISE EXCEPTION 'REGISTRATION_BOOTSTRAP_IDENTITY_INVALID'; END IF;
+END $bootstrap$;
+{dict(bundle.texts)[ADMISSION_PATH]}
+SELECT pg_catalog.json_build_array(pg_catalog.json_build_object(
+ 'guard_password_is_null',(SELECT rolpassword IS NULL FROM pg_catalog.pg_authid WHERE rolname='{ACTIVITY_GUARD}')));
+COMMIT;
+"""
+
+
+def seed_sql(database, bundle, bootstrap_role):
     return f"""BEGIN;
 SET LOCAL search_path TO {SCHEMA}, pg_catalog, pg_temp;
-{_session_guard(database, OWNER)}
+{_session_guard(database, OWNER, bundle, bootstrap_role)}
 INSERT INTO {SCHEMA}.tenants(id) VALUES('tenant_synthetic');
 INSERT INTO {SCHEMA}.users(tenant,id,login,role,password,active)
  VALUES('tenant_synthetic','actor_synthetic','actor_synthetic','owner','!disabled-inert-synthetic-not-a-password!',false);
@@ -659,6 +727,141 @@ INSERT INTO {SCHEMA}.scope_limits(scope_kind,tenant,scope_id,destination_id,max_
  VALUES('tenant','tenant_synthetic','tenant_synthetic',NULL,1,1,false,1,1,0,pg_catalog.clock_timestamp(),NULL,0,1,0,0,0,0,false,1);
 COMMIT;
 """
+
+
+def _admission_catalog_predicate(bundle):
+    """Source-derived read-only guard BEFORE invoking a possibly changed definer.
+
+    Callers execute this check in a separate prior statement. CASE is not safe
+    against planner folding of a tampered IMMUTABLE no-argument definer. The
+    trusted bootstrap remains live; this is not protection against that trusted
+    administrator or an atomic fence against concurrent catalog writers.
+    """
+    body = "'" + bundle.contract["admission"]["body"].replace("'", "''") + "'"
+    owner = f"(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='{OWNER}')"
+    guard = f"(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='{ACTIVITY_GUARD}')"
+    ns = f"(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='{ADMISSION_SCHEMA}')"
+    expected_edges = []
+    for member, role, inherit, can_set in (
+        (OWNER, ROUTINE, False, True), (ACTIVITY_GUARD, "pg_read_all_stats", True, False),
+        *(("pg_monitor", name, True, True) for name in
+          ("pg_read_all_settings", "pg_read_all_stats", "pg_stat_scan_tables"))):
+        expected_edges.append(f"('{member}','{role}',false,{str(inherit).lower()},{str(can_set).lower()},10::pg_catalog.oid)")
+    edge_values = ",".join(expected_edges)
+    role_posture = " AND ".join(f"""(SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_roles AS r
+      WHERE r.rolname='{role}' AND NOT r.rolsuper AND NOT r.rolcreatedb AND NOT r.rolcreaterole
+      AND NOT r.rolreplication AND NOT r.rolbypassrls AND NOT r.rolinherit
+      AND r.rolcanlogin={'true' if role in LOGIN_ROLES else 'false'}
+      AND r.rolconnlimit={0 if role == ACTIVITY_GUARD else 2}
+      AND r.rolvaliduntil IS NULL AND r.rolconfig IS NULL)""" for role in ROLES)
+    builtins = " AND ".join(f"""(SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_roles
+        WHERE rolname='{name}' AND oid={oid} AND NOT rolcanlogin AND NOT rolsuper
+        AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)"""
+        for name,oid in BUILTIN_STATS_ROLES.items())
+    # Reject every extra schema object using the same exact namespace inventory
+    # also independently validated in the complete catalog readback.
+    no_objects = " AND ".join(f"NOT EXISTS(SELECT 1 FROM pg_catalog.{table} WHERE {col}={ns})" for table,col in ADMISSION_OBJECT_CATALOGS)
+    return f"""(
+ (SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_roles AS b
+  WHERE b.oid=10 AND b.rolname ~ '^wt_admin_[a-z0-9_]{{16,40}}$' AND b.rolsuper AND b.rolcanlogin)
+ AND {role_posture}
+ AND (SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_namespace AS n
+  WHERE n.nspname='{ADMISSION_SCHEMA}' AND n.nspowner=10)
+ AND (SELECT pg_catalog.count(*) FROM pg_catalog.pg_proc AS p WHERE p.pronamespace={ns})=1
+ AND (SELECT pg_catalog.count(*)=1 FROM pg_catalog.pg_proc AS p
+  JOIN pg_catalog.pg_language AS l ON l.oid=p.prolang WHERE p.pronamespace={ns}
+  AND p.proname='{ADMISSION_FUNCTION}' AND p.proowner={guard}
+  AND p.prosrc={body} AND p.prorettype='pg_catalog.bool'::pg_catalog.regtype
+  AND p.pronargs=0 AND p.proargtypes=''::pg_catalog.oidvector
+  AND p.proallargtypes IS NULL AND p.proargmodes IS NULL AND p.proargnames IS NULL
+  AND p.pronargdefaults=0 AND p.proargdefaults IS NULL
+  AND p.prosecdef AND l.lanname='plpgsql' AND p.provolatile='v' AND p.proparallel='u'
+  AND NOT p.proisstrict AND NOT p.proleakproof AND p.prokind='f' AND NOT p.proretset
+  AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']::pg_catalog.text[]
+  AND p.protrftypes IS NULL AND p.prosupport=0 AND p.provariadic=0 AND p.procost=100 AND p.prorows=0 AND p.probin IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_default_acl)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting)
+ AND {no_objects}
+ AND {builtins}
+ AND (SELECT pg_catalog.count(*) FROM pg_catalog.pg_auth_members)=5
+ AND NOT EXISTS (
+  SELECT mbr.rolname::pg_catalog.text,r.rolname::pg_catalog.text,m.admin_option,m.inherit_option,m.set_option,m.grantor
+  FROM pg_catalog.pg_auth_members AS m
+  JOIN pg_catalog.pg_roles AS r ON r.oid=m.roleid
+  JOIN pg_catalog.pg_roles AS mbr ON mbr.oid=m.member
+  EXCEPT VALUES {edge_values})
+ AND (SELECT pg_catalog.count(*) FROM pg_catalog.pg_namespace AS n
+  CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))) AS a
+  WHERE n.oid={ns})=3
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_namespace AS n
+  CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))) AS a
+  WHERE n.oid={ns} AND (a.grantor=10 AND NOT a.is_grantable
+   AND ((a.grantee=10 AND a.privilege_type IN ('CREATE','USAGE'))
+    OR (a.grantee={owner} AND a.privilege_type='USAGE'))) IS NOT TRUE)
+ AND (SELECT pg_catalog.count(*) FROM pg_catalog.pg_proc AS p
+  CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) AS a
+  WHERE p.pronamespace={ns})=2
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS p
+  CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) AS a
+  WHERE p.pronamespace={ns} AND (a.grantor={guard} AND NOT a.is_grantable
+   AND a.grantee IN ({owner},{guard}) AND a.privilege_type='EXECUTE') IS NOT TRUE)
+)"""
+
+
+def admission_catalog_predicate(bundle):
+    _verified_bundle(bundle)
+    return _admission_catalog_predicate(bundle)
+
+
+def owner_admission_query(bundle, database, metadata):
+    """One safe boolean after source/ACL/identity checks, no added role/session.
+
+    The supervisor supplies the first validated private receipt. This query does
+    not learn expected names, OIDs, bodies or grants from a fresh observation.
+    """
+    _verified_bundle(bundle)
+    require(type(metadata) is dict, "ADMISSION_METADATA_INVALID")
+    bootstrap = metadata.get("bootstrap_role")
+    _validate_target(database, bootstrap)
+    require(metadata.get("database") == database and type(metadata.get("bootstrap_oid")) is int and metadata["bootstrap_oid"] == 10
+        and metadata.get("admission_sha256") == SOURCE_PINS[ADMISSION_PATH], "ADMISSION_METADATA_INVALID")
+    keys = ("database_oid", "schema_oid", "owner_oid", "issuer_oid", "consumer_oid", "routine_owner_oid",
+            "unrelated_oid", "activity_guard_oid", "admission_schema_oid", "admission_function_oid")
+    require(all(_oid(metadata.get(k)) for k in keys), "ADMISSION_METADATA_INVALID")
+    definition = metadata.get("admission_function_definition_sha256")
+    require(type(definition) is str and re.fullmatch(r"[0-9a-f]{64}", definition), "ADMISSION_METADATA_INVALID")
+    bindings = [f"(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='{bootstrap}')=10",
+        f"(SELECT oid FROM pg_catalog.pg_database WHERE datname='{database}' AND datdba={metadata['owner_oid']})={metadata['database_oid']}",
+        f"(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='{SCHEMA}' AND nspowner={metadata['owner_oid']})={metadata['schema_oid']}",
+        f"(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='{ADMISSION_SCHEMA}' AND nspowner=10)={metadata['admission_schema_oid']}",
+        f"(SELECT oid FROM pg_catalog.pg_proc WHERE pronamespace={metadata['admission_schema_oid']} AND proname='{ADMISSION_FUNCTION}')={metadata['admission_function_oid']}",
+        f"pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.pg_get_functiondef({metadata['admission_function_oid']}),'UTF8')),'hex')='{definition}'"]
+    for key, role in (("owner_oid", OWNER), ("issuer_oid", ISSUER), ("consumer_oid", CONSUMER),
+                      ("routine_owner_oid", ROUTINE), ("unrelated_oid", UNRELATED), ("activity_guard_oid", ACTIVITY_GUARD)):
+        bindings.append(f"(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='{role}')={metadata[key]}")
+    identity = f"session_user='{OWNER}' AND current_user=session_user AND pg_catalog.current_database()='{database}' AND ({' AND '.join(bindings)})"
+    return _admission_validation_sql(bundle, identity) + f"""SELECT pg_catalog.json_build_array(pg_catalog.json_build_object(
+ 'activity_admitted',{ADMISSION_SCHEMA}.{ADMISSION_FUNCTION}()));
+"""
+
+
+def _admission_validation_sql(bundle, identity="true"):
+    # This DO must finish before a later statement containing the definer call
+    # is planned. A single CASE/AND statement is not a security boundary.
+    return f"""DO $admission_catalog$ BEGIN
+ IF ({identity}) IS NOT TRUE OR {_admission_catalog_predicate(bundle)} IS NOT TRUE
+ THEN RAISE EXCEPTION 'REGISTRATION_ADMISSION_CATALOG_INVALID'; END IF;
+END $admission_catalog$;
+"""
+
+
+ADMISSION_OBJECT_CATALOGS = (("pg_class", "relnamespace"), ("pg_type", "typnamespace"),
+    ("pg_operator", "oprnamespace"), ("pg_collation", "collnamespace"),
+    ("pg_conversion", "connamespace"), ("pg_opclass", "opcnamespace"),
+    ("pg_opfamily", "opfnamespace"), ("pg_ts_config", "cfgnamespace"),
+    ("pg_ts_dict", "dictnamespace"), ("pg_ts_parser", "prsnamespace"),
+    ("pg_ts_template", "tmplnamespace"), ("pg_statistic_ext", "stxnamespace"),
+    ("pg_constraint", "connamespace"))
 
 
 def catalog_query(bundle):
@@ -676,8 +879,8 @@ def catalog_query(bundle):
         "database":"pg_catalog.current_database()", "database_oid":"d.oid", "database_owner":"pg_catalog.pg_get_userbyid(d.datdba)",
         "schema_oid":"n.oid", "schema_owner":"pg_catalog.pg_get_userbyid(n.nspowner)",
         "version":"pg_catalog.current_setting('server_version_num')::integer", "session_user":"session_user", "current_user":"current_user",
-        "other_clients":"(SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE pid<>pg_catalog.pg_backend_pid() AND (backend_type='client backend' OR usename IS NOT NULL OR backend_type IS NULL))",
-        "unexpected_schemas":f"(SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','public','{SCHEMA}') AND nspname !~ '^pg_toast' AND nspname !~ '^pg_temp_')",
+        "activity_admitted":f"{ADMISSION_SCHEMA}.{ADMISSION_FUNCTION}()",
+        "unexpected_schemas":f"(SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','public','{SCHEMA}','{ADMISSION_SCHEMA}') AND nspname !~ '^pg_toast' AND nspname !~ '^pg_temp_')",
         "public_objects":"(SELECT count(*) FROM pg_catalog.pg_class WHERE relnamespace='public'::pg_catalog.regnamespace)+(SELECT count(*) FROM pg_catalog.pg_proc WHERE pronamespace='public'::pg_catalog.regnamespace)",
         "default_acls":"(SELECT count(*) FROM pg_catalog.pg_default_acl)", "role_settings":"(SELECT count(*) FROM pg_catalog.pg_db_role_setting)",
         "event_triggers":"(SELECT count(*) FROM pg_catalog.pg_event_trigger)",
@@ -686,10 +889,20 @@ def catalog_query(bundle):
         "policies":f"(SELECT count(*) FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid=p.polrelid WHERE c.relnamespace={ns})",
     },f"FROM pg_catalog.pg_database d,pg_catalog.pg_namespace n WHERE d.datname=pg_catalog.current_database() AND n.oid={ns}")
     add("role", {"name":"r.rolname", "oid":"r.oid", "superuser":"r.rolsuper", "createdb":"r.rolcreatedb", "createrole":"r.rolcreaterole", "replication":"r.rolreplication", "bypassrls":"r.rolbypassrls", "inherit":"r.rolinherit", "login":"r.rolcanlogin", "connection_limit":"r.rolconnlimit", "valid_until":"r.rolvaliduntil", "config":"r.rolconfig"}, f"FROM pg_catalog.pg_roles r WHERE r.rolname IN ({rolelist})")
-    add("membership", {"member":"mbr.rolname", "role":"r.rolname", "admin":"m.admin_option", "inherit":"m.inherit_option", "set":"m.set_option"}, f"FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.roleid JOIN pg_catalog.pg_roles mbr ON mbr.oid=m.member WHERE r.rolname IN ({rolelist}) OR mbr.rolname IN ({rolelist})")
+    add("membership", {"member":"mbr.rolname", "role":"r.rolname", "member_oid":"m.member", "role_oid":"m.roleid", "grantor_oid":"m.grantor", "admin":"m.admin_option", "inherit":"m.inherit_option", "set":"m.set_option"}, "FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.roleid JOIN pg_catalog.pg_roles mbr ON mbr.oid=m.member")
     add("relation", {"name":"c.relname", "relation_kind":"c.relkind", "owner":"pg_catalog.pg_get_userbyid(c.relowner)", "persistence":"c.relpersistence", "rls":"c.relrowsecurity", "force_rls":"c.relforcerowsecurity", "partition":"c.relispartition", "options":"c.reloptions"}, f"FROM pg_catalog.pg_class c WHERE c.relnamespace={ns}")
     add("column", {"table":"c.relname", "name":"a.attname", "position":"a.attnum", "type":"pg_catalog.format_type(a.atttypid,a.atttypmod)", "not_null":"a.attnotnull", "identity":"a.attidentity", "generated":"a.attgenerated", "default":"pg_catalog.pg_get_expr(d.adbin,d.adrelid)", "dropped":"a.attisdropped", "collation":"co.collname"}, f"FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum LEFT JOIN pg_catalog.pg_collation co ON co.oid=a.attcollation WHERE c.relnamespace={ns} AND c.relkind='r' AND a.attnum>0")
-    add("function", {"name":"p.proname", "oid":"p.oid", "owner":"pg_catalog.pg_get_userbyid(p.proowner)", "body":"p.prosrc", "definition":"pg_catalog.pg_get_functiondef(p.oid)", "arguments":"pg_catalog.oidvectortypes(p.proargtypes)", "argument_names":"p.proargnames", "argument_modes":"p.proargmodes", "argument_defaults":"p.pronargdefaults", "result":"pg_catalog.format_type(p.prorettype,NULL)", "security_definer":"p.prosecdef", "language":"l.lanname", "volatility":"p.provolatile", "parallel":"p.proparallel", "strict":"p.proisstrict", "leakproof":"p.proleakproof", "function_kind":"p.prokind", "set_returning":"p.proretset", "config":"p.proconfig", "support":"p.prosupport::oid", "variadic":"p.provariadic::oid", "cost":"p.procost", "rows":"p.prorows", "binary":"p.probin"}, f"FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE p.pronamespace={ns}")
+    add("function", {"name":"p.proname", "oid":"p.oid", "owner":"pg_catalog.pg_get_userbyid(p.proowner)", "body":"p.prosrc", "definition":"pg_catalog.pg_get_functiondef(p.oid)", "arguments":"pg_catalog.oidvectortypes(p.proargtypes)", "argument_names":"p.proargnames", "argument_modes":"p.proargmodes", "argument_defaults":"p.pronargdefaults", "all_argument_types":"p.proallargtypes", "argument_default_expression":"p.proargdefaults::text", "transform_types":"p.protrftypes", "result":"pg_catalog.format_type(p.prorettype,NULL)", "security_definer":"p.prosecdef", "language":"l.lanname", "volatility":"p.provolatile", "parallel":"p.proparallel", "strict":"p.proisstrict", "leakproof":"p.proleakproof", "function_kind":"p.prokind", "set_returning":"p.proretset", "config":"p.proconfig", "support":"p.prosupport::oid", "variadic":"p.provariadic::oid", "cost":"p.procost", "rows":"p.prorows", "binary":"p.probin"}, f"FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE p.pronamespace={ns}")
+    add("admission_function", {"name":"p.proname", "oid":"p.oid", "owner":"pg_catalog.pg_get_userbyid(p.proowner)", "body":"p.prosrc", "definition":"pg_catalog.pg_get_functiondef(p.oid)", "arguments":"pg_catalog.oidvectortypes(p.proargtypes)", "argument_names":"p.proargnames", "argument_modes":"p.proargmodes", "argument_defaults":"p.pronargdefaults", "all_argument_types":"p.proallargtypes", "argument_default_expression":"p.proargdefaults::text", "transform_types":"p.protrftypes", "result":"pg_catalog.format_type(p.prorettype,NULL)", "security_definer":"p.prosecdef", "language":"l.lanname", "volatility":"p.provolatile", "parallel":"p.proparallel", "strict":"p.proisstrict", "leakproof":"p.proleakproof", "function_kind":"p.prokind", "set_returning":"p.proretset", "config":"p.proconfig", "support":"p.prosupport::oid", "variadic":"p.provariadic::oid", "cost":"p.procost", "rows":"p.prorows", "binary":"p.probin"}, f"FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE p.pronamespace='{ADMISSION_SCHEMA}'::pg_catalog.regnamespace")
+    add("builtin_role", {"name":"r.rolname", "oid":"r.oid", "superuser":"r.rolsuper", "createdb":"r.rolcreatedb",
+        "createrole":"r.rolcreaterole", "replication":"r.rolreplication", "bypassrls":"r.rolbypassrls", "login":"r.rolcanlogin"},
+        f"FROM pg_catalog.pg_roles AS r WHERE r.rolname IN ({','.join(repr(x) for x in BUILTIN_STATS_ROLES)})")
+    add("bootstrap", {"name":"r.rolname", "oid":"r.oid", "superuser":"r.rolsuper", "login":"r.rolcanlogin"}, "FROM pg_catalog.pg_roles AS r WHERE r.oid=10")
+    admission_ns = f"'{ADMISSION_SCHEMA}'::pg_catalog.regnamespace"
+    object_catalogs = ADMISSION_OBJECT_CATALOGS
+    unexpected = "+".join(f"(SELECT pg_catalog.count(*) FROM pg_catalog.{table} WHERE {col}={admission_ns})" for table,col in object_catalogs)
+    add("admission_schema", {"name":"n.nspname", "oid":"n.oid", "owner":"pg_catalog.pg_get_userbyid(n.nspowner)",
+        "owner_oid":"n.nspowner", "other_objects":unexpected}, f"FROM pg_catalog.pg_namespace AS n WHERE n.oid={admission_ns}")
     add("trigger", {"table":"c.relname", "name":"t.tgname", "function":"p.proname", "function_schema":"pn.nspname", "trigger_kind":"t.tgtype", "enabled":"t.tgenabled", "arguments":"t.tgnargs", "argument_bytes":"pg_catalog.encode(t.tgargs,'hex')", "qualification":"t.tgqual::text", "columns":"t.tgattr::text", "constraint":"t.tgconstraint::oid", "deferrable":"t.tgdeferrable", "deferred":"t.tginitdeferred", "old_table":"t.tgoldtable", "new_table":"t.tgnewtable"}, f"FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE c.relnamespace={ns} AND NOT t.tgisinternal")
     add("internal_trigger", {"table":"r.relname", "constraint_table":"cr.relname", "constraint_name":"c.conname", "function":"p.proname", "function_schema":"pn.nspname", "trigger_kind":"t.tgtype", "enabled":"t.tgenabled", "deferrable":"t.tgdeferrable", "deferred":"t.tginitdeferred", "arguments":"t.tgnargs", "argument_bytes":"pg_catalog.encode(t.tgargs,'hex')", "qualification":"t.tgqual::text", "columns":"t.tgattr::text"}, f"FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class r ON r.oid=t.tgrelid LEFT JOIN pg_catalog.pg_constraint c ON c.oid=t.tgconstraint LEFT JOIN pg_catalog.pg_class cr ON cr.oid=c.conrelid JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE r.relnamespace={ns} AND t.tgisinternal")
     key_sql = "ARRAY(SELECT a.attname FROM unnest(c.conkey) WITH ORDINALITY k(num,ord) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord)"
@@ -705,26 +918,33 @@ def catalog_query(bundle):
         ("function", "p.proname", "''", "p.proowner", "COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))", f"pg_catalog.pg_proc p WHERE p.pronamespace={ns}"),
         ("schema", "n.nspname", "''", "n.nspowner", "COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))", f"pg_catalog.pg_namespace n WHERE n.oid={ns}"),
         ("database", "''", "''", "d.datdba", "COALESCE(d.datacl,pg_catalog.acldefault('d',d.datdba))", "pg_catalog.pg_database d WHERE d.datname=pg_catalog.current_database()"),
+        ("admission_function", "p.proname", "''", "p.proowner", "COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))", f"pg_catalog.pg_proc p WHERE p.pronamespace={admission_ns}"),
+        ("admission_schema", "n.nspname", "''", "n.nspowner", "COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))", f"pg_catalog.pg_namespace n WHERE n.oid={admission_ns}"),
         ("column", "c.relname", "a.attname", "c.relowner", "a.attacl", f"pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid WHERE c.relnamespace={ns} AND a.attnum>0"),
     ]:
         from_sql, where_sql = source.split(" WHERE ", 1)
-        add("acl", {"scope":repr(scope), "object":object_expr, "column":column_expr, "owner":f"pg_catalog.pg_get_userbyid({owner_expr})", "grantee":"CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END", "grantor":"pg_catalog.pg_get_userbyid(acl.grantor)", "privilege":"acl.privilege_type", "grantable":"acl.is_grantable"}, f"FROM {from_sql} CROSS JOIN LATERAL pg_catalog.aclexplode({acl_expr}) acl WHERE {where_sql}")
+        kind = "admission_acl" if scope.startswith("admission_") else "acl"
+        scope = scope.removeprefix("admission_")
+        add(kind, {"scope":repr(scope), "object":object_expr, "column":column_expr, "owner":f"pg_catalog.pg_get_userbyid({owner_expr})", "grantee":"CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END", "grantor":"pg_catalog.pg_get_userbyid(acl.grantor)", "privilege":"acl.privilege_type", "grantable":"acl.is_grantable"}, f"FROM {from_sql} CROSS JOIN LATERAL pg_catalog.aclexplode({acl_expr}) acl WHERE {where_sql}")
     for table in bundle.contract["tables"]:
         add("row_count", {"table":repr(table), "count":"count(*)"}, f"FROM {SCHEMA}.{table}")
     add("seed", {"exact":f"""(SELECT count(*)=1 FROM {SCHEMA}.tenants WHERE id='tenant_synthetic')
  AND (SELECT count(*)=1 FROM {SCHEMA}.users WHERE tenant='tenant_synthetic' AND id='actor_synthetic' AND login='actor_synthetic' AND role='owner' AND password='!disabled-inert-synthetic-not-a-password!' AND NOT active)
  AND (SELECT count(*)=1 FROM {SCHEMA}.developer_apps WHERE tenant='tenant_synthetic' AND id='app_synthetic' AND creator='actor_synthetic' AND name='Synthetic registration fixture' AND token_hash='!inert-synthetic-no-auth-token!' AND active AND auth_epoch=0 AND token_expires=0 AND scopes='[]'::jsonb AND callback_url IS NULL)
  AND (SELECT count(*)=1 FROM {SCHEMA}.scope_limits WHERE scope_kind='tenant' AND tenant='tenant_synthetic' AND scope_id='tenant_synthetic' AND destination_id IS NULL AND max_in_flight=1 AND weight=1 AND NOT enabled AND rate_per_sec=1 AND burst=1 AND tokens=0 AND blocked_until IS NULL AND virtual_finish=0 AND policy_version=1 AND capacity_jobs=0 AND capacity_bytes=0 AND charged_jobs=0 AND charged_bytes=0 AND NOT admission_enabled AND admission_policy_version=1)"""}, "")
-    return "SET search_path TO pg_catalog;\nSELECT COALESCE(pg_catalog.jsonb_agg(item),'[]'::jsonb) FROM (\n" + "\nUNION ALL\n".join(rows) + "\n) AS bounded_catalog;\n"
+    return "SET search_path TO pg_catalog;\n" + _admission_validation_sql(bundle) + "SELECT COALESCE(pg_catalog.jsonb_agg(item),'[]'::jsonb) FROM (\n" + "\nUNION ALL\n".join(rows) + "\n) AS bounded_catalog;\n"
 
 
 FIELDS = {
- 'identity': 'database database_oid database_owner schema_oid schema_owner version session_user current_user other_clients unexpected_schemas public_objects default_acls role_settings event_triggers extensions rewrites policies',
+ 'identity': 'database database_oid database_owner schema_oid schema_owner version session_user current_user activity_admitted unexpected_schemas public_objects default_acls role_settings event_triggers extensions rewrites policies',
  'role': 'name oid superuser createdb createrole replication bypassrls inherit login connection_limit valid_until config',
- 'membership': 'member role admin inherit set',
+ 'membership': 'member role member_oid role_oid grantor_oid admin inherit set',
+ 'bootstrap': 'name oid superuser login',
+ 'builtin_role': 'name oid superuser createdb createrole replication bypassrls login',
+ 'admission_schema': 'name oid owner owner_oid other_objects',
  'relation': 'name relation_kind owner persistence rls force_rls partition options',
  'column': 'table name position type not_null identity generated default dropped collation',
- 'function': 'name oid owner body definition arguments argument_names argument_modes argument_defaults result security_definer language volatility parallel strict leakproof function_kind set_returning config support variadic cost rows binary',
+ 'function': 'name oid owner body definition arguments argument_names argument_modes argument_defaults all_argument_types argument_default_expression transform_types result security_definer language volatility parallel strict leakproof function_kind set_returning config support variadic cost rows binary',
  'trigger': 'table name function function_schema trigger_kind enabled arguments argument_bytes qualification columns constraint deferrable deferred old_table new_table',
  'internal_trigger': 'table constraint_table constraint_name function function_schema trigger_kind enabled deferrable deferred arguments argument_bytes qualification columns',
  'constraint': 'table name constraint_kind keys ref_table ref_schema ref_keys deferrable deferred validated enforced local inherit_count no_inherit match update_action delete_action definition index',
@@ -735,6 +955,9 @@ FIELDS = {
  'row_count': 'table count',
  'seed': 'exact',
 }
+
+FIELDS["admission_function"] = FIELDS["function"]
+FIELDS["admission_acl"] = FIELDS["acl"]
 
 
 def _bounded_rows(raw):
@@ -810,6 +1033,27 @@ def _constraint_key(c, actual=False):
     return (c["table"], c["kind"], c["keys"], c["ref_table"], c["ref_keys"], c["deferrable"], c["deferred"])
 
 
+def expected_membership_rows(role_oids):
+    # Preserve the three initdb pg_monitor edges; no new caller can reach them.
+    rows = []
+    all_oids = {**BUILTIN_STATS_ROLES, **role_oids}
+    for member, role, inherit, can_set in (
+        (OWNER, ROUTINE, False, True),
+        (ACTIVITY_GUARD, "pg_read_all_stats", True, False),
+        *(("pg_monitor", name, True, True) for name in
+          ("pg_read_all_settings", "pg_read_all_stats", "pg_stat_scan_tables"))):
+        rows.append({"kind":"membership", "member":member, "role":role,
+            "member_oid":all_oids[member], "role_oid":all_oids[role], "grantor_oid":10,
+            "admin":False, "inherit":inherit, "set":can_set})
+    return rows
+
+
+def validate_function(r, e):
+    require(_oid(r["oid"]) and r["body"] == e["body"] and r["owner"] == e["owner"] and r["arguments"] == ", ".join(e["args"]) and (r["argument_names"] or []) == e["argnames"] and r["result"] == e["result"] and r["security_definer"] is e["security_definer"] and (r["config"] or []) == e["config"], "CATALOG_FUNCTION_SOURCE")
+    require(r["argument_modes"] is None and r["argument_defaults"] == 0 and r["all_argument_types"] is None and r["argument_default_expression"] is None and r["transform_types"] is None and r["language"] == "plpgsql" and r["volatility"] == "v" and r["parallel"] == "u" and r["strict"] is False and r["leakproof"] is False and r["function_kind"] == "f" and r["set_returning"] is False and r["support"] == 0 and r["variadic"] == 0 and r["cost"] == 100 and r["rows"] == 0 and r["binary"] is None, "CATALOG_FUNCTION_ATTRIBUTES")
+    require(_bounded_definition(r["definition"]) and ("AS $function$" + e["body"] + "$function$") in r["definition"], "CATALOG_FUNCTION_DEFINITION")
+
+
 def validate_catalog(raw, bundle, database, execution_receipt):
     """Validate source-derived contracts, requiring the exact install receipt.
 
@@ -819,10 +1063,10 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     """
     _verified_bundle(bundle)
     require(type(execution_receipt) is list and [x.get("phase") for x in execution_receipt] ==
-        ["bootstrap_preflight", "bootstrap_roles", "bootstrap_database", "owner_schema"] +
+        ["bootstrap_preflight", "bootstrap_roles", "bootstrap_database", "bootstrap_helper", "owner_schema"] +
         [f"migration_{i:04d}" for i in range(1, 11)] + ["registry", "boundary", "synthetic_seed", "catalog_readback"], "INSTALL_RECEIPT_ORDER")
     require(all(set(x) == {"phase", "login_role", "database", "sql_sha256", "acknowledged"} and x["acknowledged"] is True and re.fullmatch(r"[0-9a-f]{64}", x["sql_sha256"]) for x in execution_receipt), "INSTALL_RECEIPT_INVALID")
-    require(all(x["login_role"] == OWNER and x["database"] == database for x in execution_receipt[3:]), "INSTALL_OWNER_AUTHENTICATION")
+    require(all(x["login_role"] == OWNER and x["database"] == database for x in execution_receipt[4:]), "INSTALL_OWNER_AUTHENTICATION")
     bootstrap = execution_receipt[0]["login_role"]
     _validate_target(database, bootstrap)
     reference = build_provision_plan(bundle, database, bootstrap, {r:"notused_" + str(i)*40 for i,r in enumerate(LOGIN_ROLES)})
@@ -834,14 +1078,39 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     contract = bundle.contract
     identity = _one(groups["identity"], "CATALOG_IDENTITY_COUNT")
     require(identity["database"] == database and identity["version"] == VERSION and identity["database_owner"] == OWNER and identity["schema_owner"] == OWNER and identity["session_user"] == OWNER and identity["current_user"] == OWNER and _oid(identity["database_oid"]) and _oid(identity["schema_oid"]), "CATALOG_IDENTITY")
-    require(identity["extensions"] == ["plpgsql"] and all(identity[x] == 0 for x in ("other_clients", "unexpected_schemas", "public_objects", "default_acls", "role_settings", "event_triggers", "rewrites", "policies")), "CATALOG_UNEXPECTED_POSTURE")
-    require(len(groups["role"]) == 5 and {r["name"] for r in groups["role"]} == set(ROLES), "CATALOG_ROLE_INVENTORY")
+    require(identity["activity_admitted"] is True and identity["extensions"] == ["plpgsql"] and all(identity[x] == 0 for x in ( "unexpected_schemas", "public_objects", "default_acls", "role_settings", "event_triggers", "rewrites", "policies")), "CATALOG_UNEXPECTED_POSTURE")
+    require(len(groups["role"]) == 6 and {r["name"] for r in groups["role"]} == set(ROLES), "CATALOG_ROLE_INVENTORY")
     role_oids = {}
     for r in groups["role"]:
-        require(_oid(r["oid"]) and r["login"] is (r["name"] != ROUTINE) and r["connection_limit"] == 2 and r["valid_until"] is None and r["config"] is None and all(r[x] is False for x in ("superuser", "createdb", "createrole", "replication", "bypassrls", "inherit")), "CATALOG_ROLE_ATTRIBUTES")
+        require(_oid(r["oid"]) and r["login"] is (r["name"] in LOGIN_ROLES) and r["connection_limit"] == (0 if r["name"] == ACTIVITY_GUARD else 2) and r["valid_until"] is None and r["config"] is None and all(r[x] is False for x in ("superuser", "createdb", "createrole", "replication", "bypassrls", "inherit")), "CATALOG_ROLE_ATTRIBUTES")
         role_oids[r["name"]] = r["oid"]
-    require(len(set(role_oids.values())) == 5, "CATALOG_ROLE_OIDS")
-    require(groups["membership"] == [{"kind": "membership", "member": OWNER, "role": ROUTINE, "admin": False, "inherit": False, "set": True}], "CATALOG_MEMBERSHIP")
+    require(len(set(role_oids.values())) == 6 and not (set(role_oids.values()) & {10, *BUILTIN_STATS_ROLES.values()}), "CATALOG_ROLE_OIDS")
+    require(len(groups["builtin_role"]) == 4 and {r["name"] for r in groups["builtin_role"]} == set(BUILTIN_STATS_ROLES), "CATALOG_BUILTIN_ROLE_INVENTORY")
+    for r in groups["builtin_role"]:
+        require(_oid(r["oid"]) and r["oid"] == BUILTIN_STATS_ROLES[r["name"]] and all(r[key] is False for key in
+            ("superuser", "createdb", "createrole", "replication", "bypassrls", "login")), "CATALOG_BUILTIN_ROLE_ATTRIBUTES")
+    expected_memberships = expected_membership_rows(role_oids)
+    require(Counter(canonical(x) for x in groups["membership"]) == Counter(canonical(x) for x in expected_memberships), "CATALOG_MEMBERSHIP")
+    bootstrap_row = _one(groups["bootstrap"], "CATALOG_BOOTSTRAP_COUNT")
+    require(bootstrap_row["name"] == bootstrap and _oid(bootstrap_row["oid"]) and bootstrap_row["oid"] == 10
+        and bootstrap_row["superuser"] is True and bootstrap_row["login"] is True, "CATALOG_BOOTSTRAP_IDENTITY")
+    admission_schema = _one(groups["admission_schema"], "CATALOG_ADMISSION_SCHEMA_COUNT")
+    require(admission_schema["name"] == ADMISSION_SCHEMA and _oid(admission_schema["oid"])
+        and admission_schema["owner"] == bootstrap and _oid(admission_schema["owner_oid"]) and admission_schema["owner_oid"] == 10
+        and type(admission_schema["other_objects"]) is int and admission_schema["other_objects"] == 0, "CATALOG_ADMISSION_SCHEMA")
+    admission_function = _one(groups["admission_function"], "CATALOG_ADMISSION_FUNCTION_COUNT")
+    require(admission_function["name"] == ADMISSION_FUNCTION, "CATALOG_ADMISSION_FUNCTION_NAME")
+    validate_function(admission_function, contract["admission"])
+    expected_admission_acls = [
+        {"kind":"admission_acl", "scope":scope, "object":obj, "column":"", "owner":owner,
+         "grantee":grantee, "grantor":owner, "privilege":privilege, "grantable":False}
+        for scope,obj,owner,grantee,privilege in (
+            ("schema",ADMISSION_SCHEMA,bootstrap,bootstrap,"USAGE"),
+            ("schema",ADMISSION_SCHEMA,bootstrap,bootstrap,"CREATE"),
+            ("schema",ADMISSION_SCHEMA,bootstrap,OWNER,"USAGE"),
+            ("function",ADMISSION_FUNCTION,ACTIVITY_GUARD,ACTIVITY_GUARD,"EXECUTE"),
+            ("function",ADMISSION_FUNCTION,ACTIVITY_GUARD,OWNER,"EXECUTE"))]
+    require(Counter(canonical(x) for x in groups["admission_acl"]) == Counter(canonical(x) for x in expected_admission_acls), "CATALOG_ADMISSION_ACL")
 
     expected_columns = [(table, name, position, info) for table, cols in contract["tables"].items() for position, (name, info) in enumerate(cols.items(), 1)]
     require(len(groups["column"]) == len(expected_columns), "CATALOG_COLUMN_COUNT")
@@ -858,9 +1127,7 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     require(len(groups["function"]) == len(contract["functions"]) and {r["name"] for r in groups["function"]} == set(contract["functions"]), "CATALOG_FUNCTION_INVENTORY")
     for r in groups["function"]:
         e = contract["functions"][r["name"]]
-        require(_oid(r["oid"]) and r["body"] == e["body"] and r["owner"] == e["owner"] and r["arguments"] == ", ".join(e["args"]) and (r["argument_names"] or []) == e["argnames"] and r["result"] == e["result"] and r["security_definer"] is e["security_definer"] and (r["config"] or []) == e["config"], "CATALOG_FUNCTION_SOURCE")
-        require(r["argument_modes"] is None and r["argument_defaults"] == 0 and r["language"] == "plpgsql" and r["volatility"] == "v" and r["parallel"] == "u" and r["strict"] is False and r["leakproof"] is False and r["function_kind"] == "f" and r["set_returning"] is False and r["support"] == 0 and r["variadic"] == 0 and r["cost"] == 100 and r["rows"] == 0 and r["binary"] is None, "CATALOG_FUNCTION_ATTRIBUTES")
-        require(_bounded_definition(r["definition"]) and ("AS $function$" + e["body"] + "$function$") in r["definition"], "CATALOG_FUNCTION_DEFINITION")
+        validate_function(r, e)
     require(len(groups["trigger"]) == len(contract["triggers"]), "CATALOG_TRIGGER_COUNT")
     expected_triggers = {(x["table"],x["name"],x["function"],x["kind"]) for x in contract["triggers"]}
     actual_triggers = {(x["table"],x["name"],x["function"],x["trigger_kind"]) for x in groups["trigger"]}
@@ -954,6 +1221,11 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     catalog_digest = sha(canonical(raw))
     receipt_digest = sha(canonical(private))
     metadata = {"database":database, "database_oid":identity["database_oid"], "schema_oid":identity["schema_oid"], "routine_oid":routine["oid"], "routine_definition_sha256":sha(routine["definition"].encode()), "boundary_sha256":SOURCE_PINS[BOUNDARY_PATH], "registry_sha256":SOURCE_PINS[REGISTRY_PATH], "sql_manifest_sha256":bundle.sql_manifest_sha256, "catalog_observation_sha256":catalog_digest, "install_receipt_sha256":receipt_digest}
+    metadata.update({"bootstrap_role":bootstrap, "bootstrap_oid":10,
+        "activity_guard_oid":role_oids[ACTIVITY_GUARD], "admission_schema_oid":admission_schema["oid"],
+        "admission_function_oid":admission_function["oid"],
+        "admission_function_definition_sha256":sha(admission_function["definition"].encode()),
+        "admission_sha256":SOURCE_PINS[ADMISSION_PATH]})
     metadata.update({key:role_oids[role] for key,role in (("owner_oid",OWNER),("issuer_oid",ISSUER),("consumer_oid",CONSUMER),("routine_owner_oid",ROUTINE),("unrelated_oid",UNRELATED))})
     public = {"format":"worktool-registration-install-summary-v1", "status":"VERIFIED_TRUSTED_INSTALLATION_PROVENANCE", "sql_manifest_sha256":bundle.sql_manifest_sha256, "catalog_observation_sha256":catalog_digest, "install_receipt_sha256":receipt_digest, "table_count":len(contract["tables"]), "function_count":len(contract["functions"]), "trigger_count":len(contract["triggers"]), "constraint_count":len(expected), "constraint_semantic_normalization":"NOT_PROVEN", "acceptance_tests":"NOT_RUN", "sql_sources":dict(SOURCE_PINS), "execution":execution_receipt}
     return InstallReceipt(metadata, public, private)
@@ -962,12 +1234,12 @@ def validate_catalog(raw, bundle, database, execution_receipt):
 def preflight_field_diagnostics(result, expected):
     """Fixed categories only, derived from the already-returned first result.
 
-    This is deliberately NOT an acceptance predicate. The existing result ==
-    expected comparison below remains the sole pristine-value decision. No SQL,
+    This is deliberately NOT an acceptance predicate. The exact typed
+    preflight comparison below remains the sole pristine-value decision. No SQL,
     observed values, names, counts, unexpected keys or exception text escapes.
     """
     keys = ("version", "session_user", "current_user", "database_absent",
-            "roles_absent", "other_clients", "bootstrap_superuser", "event_triggers")
+            "roles_absent", "activity_admitted", "bootstrap_oid", "bootstrap_superuser", "event_triggers")
     checks = {key: "INVALID_SHAPE" for key in keys}
     shape = {key: "INVALID_SHAPE" for key in ("root", "row_count", "row", "fields")}
     if type(result) is list:
@@ -1004,6 +1276,14 @@ def _record_preflight_diagnostics(executor, result, expected):
         pass
 
 
+def _exact_preflight_match(result, expected):
+    if type(result) is not list or len(result) != 1 or type(result[0]) is not dict:
+        return False
+    actual, wanted = result[0], expected[0]
+    return set(actual) == set(wanted) and all(
+        type(actual[key]) is type(value) and actual[key] == value for key,value in wanted.items())
+
+
 def provision(executor, bundle, database, bootstrap_role, role_passwords):
     """One attempt, no retries/fallback or autonomous process/role discovery.
 
@@ -1020,9 +1300,12 @@ def provision(executor, bundle, database, bootstrap_role, role_passwords):
         except Exception:
             raise ProvisionError("PROVISION_EXECUTION_FAILED_STOP_NO_RETRY") from None
         if step.phase == "bootstrap_preflight":
-            expected = [{"version":VERSION,"session_user":bootstrap_role,"current_user":bootstrap_role,"database_absent":True,"roles_absent":True,"other_clients":0,"bootstrap_superuser":True,"event_triggers":0}]
+            expected = [{"version":VERSION,"session_user":bootstrap_role,"current_user":bootstrap_role,"database_absent":True,"roles_absent":True,"activity_admitted":True,"bootstrap_oid":10,"bootstrap_superuser":True,"event_triggers":0}]
             _record_preflight_diagnostics(executor, result, expected)
-            require(result == expected, "BOOTSTRAP_NOT_PRISTINE")
+            require(_exact_preflight_match(result, expected), "BOOTSTRAP_NOT_PRISTINE")
+        elif step.phase == "bootstrap_helper":
+            require(result == [{"guard_password_is_null": True}]
+                and type(result[0]["guard_password_is_null"]) is bool, "ACTIVITY_GUARD_PASSWORD_NOT_NULL")
         elif step.query:
             catalog = result
         else:
@@ -1112,8 +1395,8 @@ def sanitized_catalog_proof(receipt):
     for kind in sorted(allowed):
         for row in groups[kind]:
             item = dict(row)
-            if kind == "function":
-                expected = contract["functions"].get(row["name"])
+            if kind in ("function", "admission_function"):
+                expected = contract["admission"] if kind == "admission_function" else contract["functions"].get(row["name"])
                 require(expected is not None and row["body"] == expected["body"], "CATALOG_ARTIFACT_FUNCTION_BODY")
                 item["definition_sha256"] = sha(item.pop("definition").encode())
             if kind in ("constraint", "index"):

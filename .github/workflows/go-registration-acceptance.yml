@@ -112,7 +112,7 @@ jobs:
               if mode not in (b'100644', b'100755') or kind != b'blob' or parts.is_absolute() or '..' in parts.parts or any(c in path for c in '\x00\r\n') or path in expected:
                   raise SystemExit('UNSAFE_TRACKED_SOURCE')
               expected.add(path)
-          if len(expected) != 341:
+          if len(expected) != 342:
               raise SystemExit('UNREVIEWED_SOURCE_INVENTORY')
           raw = subprocess.check_output(['git', 'archive', '--format=tar', sha], timeout=20)
           if len(raw) > 32 << 20:

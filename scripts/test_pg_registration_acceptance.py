@@ -83,6 +83,9 @@ class FakeProvision:
             'constraint_semantic_normalization': 'NOT_PROVEN', 'objects': [{'kind': 'identity'}],
             **{key: public[key] for key in ('sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution')}}
 
+    def owner_admission_query(self, bundle, database, metadata):
+        return 'SELECT synthetic_isolated_owner_session_v1();'
+
     def load_and_verify_sources(self, root):
         return None
 
@@ -101,7 +104,9 @@ class FakeProvision:
             'sql_sources': dict(self.SOURCE_PINS)}
         return types.SimpleNamespace(private_metadata={'database_oid': 100, 'schema_oid': 101, 'consumer_oid': 102,
             'issuer_oid': 103, 'boundary_sha256': 'b' * 64, 'registry_sha256': 'c' * 64,
-            'routine_definition_sha256': 'd' * 64}, public_evidence=public, private_catalog_receipt=private)
+            'routine_definition_sha256': 'd' * 64, 'bootstrap_role': bootstrap, 'bootstrap_oid': 10,
+            'activity_guard_oid': 104, 'admission_schema_oid': 105, 'admission_function_oid': 106,
+            'admission_function_definition_sha256': 'e' * 64, 'admission_sha256': 'f' * 64}, public_evidence=public, private_catalog_receipt=private)
 
 
 class FakeExecutor:
@@ -119,6 +124,8 @@ class FakeExecutor:
         self.hba_after_mutation = None
         self.bad_password_result = None
         self.hba_canonical_path = m.HBA_PATH
+        self.settings_mutation = None
+        self.activity_output = b'[{"activity_admitted":true}]\n'
 
     def phase(self, args):
         if args[0] != m.DOCKER:
@@ -133,9 +140,11 @@ class FakeExecutor:
                 return 'hba_before' if self.supervisor.stage == 'auth_hba_before' else 'hba_after'
             if self.supervisor.stage == 'auth_wrong_password':
                 return 'bad_password'
+            if self.supervisor.stage == 'bootstrap_close':
+                return 'activity'
             if b'json_build_object' in data:
                 return 'settings'
-            if b'pg_stat_activity' in data:
+            if b'pg_stat_activity' in data or b'isolated_owner_session_v1' in data:
                 return 'activity'
             return 'sql_' + self.supervisor.stage.removeprefix('provision_')
         if args[1] == 'image':
@@ -191,15 +200,19 @@ class FakeExecutor:
             message = ('psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "' + self.supervisor.admin + '"\n').encode()
             return m.Result(2, b'', message)
         elif phase == 'settings':
-            output = m.canonical({'version': '180006', 'version_string': 'PostgreSQL 18.6 synthetic', 'connections': '10',
+            settings = {'version': '180006', 'version_string': 'PostgreSQL 18.6 synthetic', 'connections': '10',
                 'reserved': '0', 'super_reserved': '3', 'messages': 'C', 'statement': '5s', 'lock': '1s', 'idle': '5s',
-                'data': '/var/lib/postgresql/18/docker'})
+                'data': '/var/lib/postgresql/18/docker', 'shared_preload': '', 'session_preload': '', 'local_preload': '',
+                'archive_mode': 'off', 'summarize_wal': 'off', 'io_method': 'worker', 'io_workers': '3'}
+            if self.settings_mutation:
+                self.settings_mutation(settings)
+            output = m.canonical(settings)
         elif phase == 'hba_path':
             output = self.hba_canonical_path.encode() + b'\n'
         elif phase == 'wal':
             output = b'/var/lib/postgresql/18/docker/pg_wal\n'
         elif phase == 'activity':
-            output = b'0\n'
+            output = self.activity_output
         elif phase == 'rm':
             self.removals += 1
             self.container = None
@@ -245,7 +258,7 @@ class SupervisorTests(unittest.TestCase):
             return self.s.run(handle_signals=False)
 
     def test_cross_module_real_plan_receipt_envelope_events_and_cleanup(self):
-        # Real implementation helpers, source contract and 37-leaf parser;
+        # Real implementation helpers, source contract and exact-leaf parser;
         # every external operation, catalog row and event is fabricated here.
         actual_root = path.resolve().parents[1]
         provision_tests = m.load_helper('test_pg_registration_provision.py')
@@ -262,10 +275,16 @@ class SupervisorTests(unittest.TestCase):
                 current = self.phase(args)
                 if current == 'sql_bootstrap_preflight':
                     rows = [dict(version=180006, session_user=self.supervisor.admin, current_user=self.supervisor.admin,
-                                 database_absent=True, roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)]
+                                 database_absent=True, roles_absent=True, activity_admitted=True, bootstrap_oid=10, bootstrap_superuser=True, event_triggers=0)]
                     return m.Result(0, m.canonical(rows))
+                if current == 'sql_bootstrap_helper':
+                    return m.Result(0, m.canonical([{'guard_password_is_null': True}]))
                 if current == 'sql_catalog_readback':
                     rows = provision_tests.fake_catalog(self.supervisor.bundle)
+                    for row in rows:
+                        for key, value in row.items():
+                            if value == provision_tests.ADMIN:
+                                row[key] = self.supervisor.admin
                     next(row for row in rows if row['kind'] == 'identity')['database'] = self.supervisor.database
                     return m.Result(0, m.canonical(rows))
                 return result
@@ -288,7 +307,7 @@ class SupervisorTests(unittest.TestCase):
             result = supervisor.run(handle_signals=False)
         self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE', result)
         self.assertEqual(result['evidence']['leaves'], manifest['leaves'])
-        self.assertEqual(len(result['installation']['execution']), 18)
+        self.assertEqual(len(result['installation']['execution']), 19)
         self.assertEqual(set(result['provision_diagnostics']['phases']), set(m.PROVISION_PHASES))
         self.assertEqual(result['preflight_diagnostics']['classification'], 'VALUE_MATCH')
         self.assertEqual(set(result['preflight_diagnostics']['checks'].values()), {'MATCH'})
@@ -801,6 +820,43 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result['resource_policy']['server_settings'], 'NOT_VERIFIED')
         self.assertEqual(result['status'], 'FAIL')
 
+    def test_admission_posture_settings_fail_closed_and_cleanup(self):
+        changes = {'shared_preload': 'unexpected_worker', 'session_preload': 'unexpected_worker',
+            'local_preload': 'unexpected_worker', 'archive_mode': 'on', 'summarize_wal': 'on',
+            'io_method': 'sync', 'io_workers': '4'}
+        for key, value in changes.items():
+            with self.subTest(key=key):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.settings_mutation = lambda settings, k=key, v=value: settings.update({k: v})
+                    result = case.run_fake()
+                    self.assertEqual(result['status'], 'FAIL')
+                    self.assertEqual(result['failure_code'], 'PG_SETTINGS_MISMATCH')
+                    self.assertEqual(result['resource_policy']['server_settings'], 'NOT_VERIFIED')
+                    self.assertEqual(case.executor.invocations, 0)
+                    self.assertEqual(case.executor.removals, 1)
+                    self.assertEqual(result['cleanup'], 'CONFIRMED')
+                finally:
+                    case.tearDown()
+
+    def test_admission_boolean_output_is_exact_and_failure_never_zero(self):
+        for output in (b'[{"activity_admitted":false}]', b'[{"activity_admitted":0}]',
+                b'[{"activity_admitted":1}]', b'[{"activity_admitted":null}]', b'[]',
+                b'[{"activity_admitted":true,"extra":0}]', b'[{},{}]', b't\n', b''):
+            with self.subTest(output=output):
+                case = SupervisorTests('runTest')
+                case.setUp()
+                try:
+                    case.executor.activity_output = output
+                    result = case.run_fake()
+                    self.assertEqual(result['status'], 'FAIL')
+                    self.assertEqual(case.executor.invocations, 0)
+                    self.assertEqual(case.executor.removals, 1)
+                    self.assertEqual(result['cleanup'], 'CONFIRMED')
+                finally:
+                    case.tearDown()
+
     def test_wrong_image_never_marks_container_verified(self):
         self.executor.inspect_mutation = {'image_id': 'sha256:' + 'e' * 64}
         result = self.run_fake()
@@ -976,7 +1032,7 @@ class SupervisorTests(unittest.TestCase):
         valid = {'format': 'worktool-registration-preflight-fields-v1', 'authority': 'DIAGNOSTIC_ONLY',
             'classification': 'VALUE_MISMATCH', 'shape': {key: 'MATCH' for key in ('root', 'row_count', 'row', 'fields')},
             'checks': {key: 'MATCH' for key in m.PREFLIGHT_CHECKS}}
-        valid['checks']['other_clients'] = 'MISMATCH'
+        valid['checks']['activity_admitted'] = 'MISMATCH'
         mutations = [None, [], 'PRIVATE_VALUE', {}, valid | {'raw': 'PRIVATE_VALUE'},
             valid | {'classification': 'PRIVATE_VALUE'}, valid | {'checks': valid['checks'] | {'session_user': 'PRIVATE_VALUE'}},
             valid | {'shape': valid['shape'] | {'row_count': 1}}, valid | {'authority': 'ACCEPTANCE'},
@@ -986,7 +1042,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertIsNone(self.s.preflight_diagnostics)
         self.s.record_preflight_diagnostics(valid)
         snapshot = copy.deepcopy(self.s.preflight_diagnostics)
-        valid['checks']['other_clients'] = 'PRIVATE_MUTATION_AFTER_CALLBACK'
+        valid['checks']['activity_admitted'] = 'PRIVATE_MUTATION_AFTER_CALLBACK'
         self.assertEqual(self.s.preflight_diagnostics, snapshot)
         self.assertLess(len(m.canonical(snapshot)), 1024)
         self.assertEqual(self.executor.calls, [])
@@ -1015,7 +1071,7 @@ class SupervisorTests(unittest.TestCase):
                             if self.phase(args) != 'sql_bootstrap_preflight':
                                 return result
                             row = dict(version=180006, session_user=self.supervisor.admin, current_user=self.supervisor.admin,
-                                database_absent=True, roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)
+                                database_absent=True, roles_absent=True, activity_admitted=True, bootstrap_oid=10, bootstrap_superuser=True, event_triggers=0)
                             if variant == 'process':
                                 return m.Result(2, b'', b'PRIVATE_SQL_ERROR_WITH_CREDENTIALS')
                             if variant == 'json':
@@ -1025,7 +1081,7 @@ class SupervisorTests(unittest.TestCase):
                             if variant == 'fields':
                                 row['PRIVATE_EXTRA_FIELD'] = 'PRIVATE_VALUE'
                             else:
-                                row['other_clients'] = 1
+                                row['activity_admitted'] = False
                             return m.Result(0, m.canonical([row]))
                     source_bytes = m.make_pin(actual_root)
                     case.source_pin.write_bytes(source_bytes)
@@ -1043,7 +1099,7 @@ class SupervisorTests(unittest.TestCase):
                     else:
                         self.assertEqual(result['preflight_diagnostics']['classification'], field_class)
                         if variant == 'pristine':
-                            self.assertEqual(result['preflight_diagnostics']['checks']['other_clients'], 'MISMATCH')
+                            self.assertEqual(result['preflight_diagnostics']['checks']['activity_admitted'], 'MISMATCH')
                     self.assertEqual(result['cleanup'], 'CONFIRMED')
                     self.assertEqual(executor.invocations, 0)
                     self.assertEqual(executor.removals, 1)
@@ -1189,7 +1245,7 @@ class CensusTests(unittest.TestCase):
                 rows = executor.execute(types.SimpleNamespace(phase='bootstrap_preflight', login_role=bootstrap,
                     database='postgres', sql='SELECT census_test_pristine;', timeout_seconds=30, query=True))
                 expected = [dict(version=180006, session_user=bootstrap, current_user=bootstrap, database_absent=True,
-                    roles_absent=True, other_clients=0, bootstrap_superuser=True, event_triggers=0)]
+                    roles_absent=True, activity_admitted=True, bootstrap_oid=10, bootstrap_superuser=True, event_triggers=0)]
                 executor.record_preflight_diagnostics(helper.preflight_field_diagnostics(rows, expected))
                 raise helper.ProvisionError('BOOTSTRAP_NOT_PRISTINE')
         class Executor(FakeExecutor):
@@ -1207,7 +1263,7 @@ class CensusTests(unittest.TestCase):
                 if phase == 'sql_bootstrap_preflight':
                     admin = self.supervisor.admin
                     return m.Result(0, m.canonical([dict(version=180006, session_user=admin, current_user=admin,
-                        database_absent=True, roles_absent=True, other_clients=1, bootstrap_superuser=True, event_triggers=0)]))
+                        database_absent=True, roles_absent=True, activity_admitted=False, bootstrap_oid=10, bootstrap_superuser=True, event_triggers=0)]))
                 if phase == 'census':
                     if isinstance(self.census_result, BaseException):
                         raise self.census_result
@@ -1285,7 +1341,7 @@ class CensusTests(unittest.TestCase):
             lambda s, o: s.credentials.clear(), lambda s, o: setattr(s, 'binding', {})]
         mutations += [lambda s, o, key=key: s.preflight_diagnostics['shape'].update({key: 'INVALID_SHAPE'})
                       for key in ('root', 'row_count', 'row', 'fields')]
-        mutations += [lambda s, o, key=key: s.preflight_diagnostics['checks'].update({key: 'MATCH' if key == 'other_clients' else 'MISMATCH'})
+        mutations += [lambda s, o, key=key: s.preflight_diagnostics['checks'].update({key: 'MATCH' if key == 'activity_admitted' else 'MISMATCH'})
                       for key in m.PREFLIGHT_CHECKS]
         original = self.s.collect_activity_census
         checked = []

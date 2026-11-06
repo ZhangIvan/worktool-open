@@ -21,7 +21,7 @@ import (
 )
 
 func rafOfflineEnvelope() rafRunEnvelope {
-	e := rafRunEnvelope{Format: "worktool-registration-isolated-fixture-v1", Allow: "one-reviewed-synthetic-pending-only-run-no-retry", RunID: "synthetic_offline_run", Host: "127.0.0.1", Port: 55432, Database: "wt_test_synthetic_offline", DatabaseOID: 12000, SchemaOID: 12001, IssuerOID: 12002, ConsumerOID: 12003, Environment: "synthetic_offline_environment", RecoveryGeneration: "synthetic_offline_recovery", Image: rafImage, ServerVersion: 180006, BoundarySHA256: rafSHA([]byte("boundary")), RegistrySHA256: rafSHA([]byte("registry")), RoutineDefinitionSHA256: rafSHA([]byte("routine")), SourceManifestSHA256: rafSHA([]byte("manifest")), ExecutableSHA256: rafSHA([]byte("executable")), ProvisioningEvidenceSHA256: rafSHA([]byte("unproven external resource evidence"))}
+	e := rafRunEnvelope{Format: "worktool-registration-isolated-fixture-v1", Allow: "one-reviewed-synthetic-pending-only-run-no-retry", RunID: "synthetic_offline_run", Host: "127.0.0.1", Port: 55432, Database: "wt_test_synthetic_offline", DatabaseOID: 12000, SchemaOID: 12001, IssuerOID: 12002, ConsumerOID: 12003, Environment: "synthetic_offline_environment", RecoveryGeneration: "synthetic_offline_recovery", Image: rafImage, ServerVersion: 180006, BoundarySHA256: rafSHA([]byte("boundary")), RegistrySHA256: rafSHA([]byte("registry")), RoutineDefinitionSHA256: rafSHA([]byte("routine")), SourceManifestSHA256: rafSHA([]byte("manifest")), ExecutableSHA256: rafSHA([]byte("executable")), ProvisioningEvidenceSHA256: rafSHA([]byte("unproven external resource evidence")), BootstrapRole: "wt_admin_0123456789abcdef", BootstrapOID: 10, ActivityGuardOID: 12004, AdmissionSchemaOID: 12005, AdmissionFunctionOID: 12006, AdmissionFunctionDefinitionSHA256: rafSHA([]byte("admission definition")), AdmissionSHA256: rafSHA([]byte("admission source"))}
 	dsn := func(role string) string {
 		return "postgresql://" + role + ":synthetic-not-a-real-secret@127.0.0.1:55432/" + e.Database + "?sslmode=disable"
 	}
@@ -266,6 +266,8 @@ func TestRegistrationAuthorityGateBeforeResources(t *testing.T) {
 			return []byte("boundary"), nil
 		case "testdata/fresh_registration_registry_candidate.sql":
 			return []byte("registry"), nil
+		case rafActivitySourcePath:
+			return []byte("admission source"), nil
 		default:
 			return nil, errors.New("unexpected read")
 		}
@@ -288,7 +290,7 @@ func TestRegistrationAuthorityGateBeforeResources(t *testing.T) {
 			t.Fatal("ambient PostgreSQL setting reached file/connect")
 		}
 	}
-	if attempt(rafEncode(t, e), nil) != nil || reads != 2 || connects != 1 {
+	if attempt(rafEncode(t, e), nil) != nil || reads != 3 || connects != 1 {
 		t.Fatal("complete exact mocked envelope not accepted")
 	}
 	reads, connects = 0, 0
@@ -326,7 +328,7 @@ func TestRegistrationAuthorityEnvelopeMalformedAndMissing(t *testing.T) {
 			t.Fatal("noncanonical/duplicate/unknown envelope accepted")
 		}
 	}
-	for _, change := range []func(*rafRunEnvelope){func(e *rafRunEnvelope) { e.Allow = "true" }, func(e *rafRunEnvelope) { e.Host = "localhost" }, func(e *rafRunEnvelope) { e.Port = 543 }, func(e *rafRunEnvelope) { e.Database = "production" }, func(e *rafRunEnvelope) { e.ServerVersion = 180005 }, func(e *rafRunEnvelope) { e.Image = "postgres:18" }, func(e *rafRunEnvelope) { e.ConsumerOID = e.IssuerOID }, func(e *rafRunEnvelope) { e.RunID = "not_synthetic" }, func(e *rafRunEnvelope) { e.SourceManifestSHA256 = strings.Repeat("0", 64) }} {
+	for _, change := range []func(*rafRunEnvelope){func(e *rafRunEnvelope) { e.Allow = "true" }, func(e *rafRunEnvelope) { e.Host = "localhost" }, func(e *rafRunEnvelope) { e.Port = 543 }, func(e *rafRunEnvelope) { e.Database = "production" }, func(e *rafRunEnvelope) { e.ServerVersion = 180005 }, func(e *rafRunEnvelope) { e.Image = "postgres:18" }, func(e *rafRunEnvelope) { e.ConsumerOID = e.IssuerOID }, func(e *rafRunEnvelope) { e.RunID = "not_synthetic" }, func(e *rafRunEnvelope) { e.SourceManifestSHA256 = strings.Repeat("0", 64) }, func(e *rafRunEnvelope) { e.BootstrapRole = "postgres" }, func(e *rafRunEnvelope) { e.BootstrapOID++ }, func(e *rafRunEnvelope) { e.ActivityGuardOID = e.ConsumerOID }, func(e *rafRunEnvelope) { e.AdmissionSchemaOID = e.SchemaOID }, func(e *rafRunEnvelope) { e.AdmissionFunctionOID = 0 }, func(e *rafRunEnvelope) { e.AdmissionFunctionDefinitionSHA256 = strings.Repeat("0", 64) }, func(e *rafRunEnvelope) { e.AdmissionSHA256 = strings.Repeat("0", 64) }} {
 		bad := e
 		change(&bad)
 		if _, err := rafParseEnvelope(rafEncode(t, bad)); err == nil {
@@ -561,7 +563,7 @@ func rafCheckReviewedManifestAt(root string) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || manifest.Format != "worktool-registration-cases-v1" || manifest.Scope != "focused-registration-consumer-boundary-v1" || manifest.Package != "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg" || manifest.Test != "TestRegistrationAuthorityIsolatedPostgreSQL" || len(manifest.Leaves) != 37 || len(manifest.SourceFiles) != 341 || !sort.StringsAreSorted(manifest.SourceFiles) || manifest.SourceInventorySHA256 != rafSourceInventorySHA256 || rafSHA([]byte(strings.Join(manifest.SourceFiles, "\n")+"\n")) != rafSourceInventorySHA256 {
+	if decoder.Decode(&manifest) != nil || manifest.Format != "worktool-registration-cases-v1" || manifest.Scope != "focused-registration-consumer-boundary-v1" || manifest.Package != "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg" || manifest.Test != "TestRegistrationAuthorityIsolatedPostgreSQL" || len(manifest.Leaves) != 46 || len(manifest.SourceFiles) != 342 || !sort.StringsAreSorted(manifest.SourceFiles) || manifest.SourceInventorySHA256 != rafSourceInventorySHA256 || rafSHA([]byte(strings.Join(manifest.SourceFiles, "\n")+"\n")) != rafSourceInventorySHA256 {
 		return rafInvalid
 	}
 	return nil
@@ -586,7 +588,7 @@ func TestRegistrationAuthorityReviewedManifestWithoutCheckoutScan(t *testing.T) 
 	if rafCheckReviewedManifestAt(checkout) != nil {
 		t.Fatal("ordinary checkout required strict staged-source scan")
 	}
-	if _, err := rafSourceDigestAt(checkout, 341, rafSourceInventorySHA256); err == nil {
+	if _, err := rafSourceDigestAt(checkout, 342, rafSourceInventorySHA256); err == nil {
 		t.Fatal("opt-in snapshot root rule weakened")
 	}
 }
@@ -618,5 +620,127 @@ func TestRegistrationAuthorityDistinctRollbackControlIntent(t *testing.T) {
 	}
 	if rafValidatePrepared(g, i, a, g.GrantID, a.notBefore) == nil {
 		t.Fatal("rollback-control intent confused with committed graph intent")
+	}
+}
+
+// These tests exercise Go's source binding and nullable driver boundary only.
+// String checks below are regression fences, not a SQL parser or live PG proof.
+type rafActivityCaptureQuery struct {
+	calls  int
+	sql    string
+	args   []any
+	values []any
+	err    error
+}
+
+func (q *rafActivityCaptureQuery) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	q.calls++
+	q.sql, q.args = sql, args
+	return callbackTestRow{values: q.values, err: q.err}
+}
+
+func TestRegistrationAuthorityActivitySourceBinding(t *testing.T) {
+	source, err := os.ReadFile(rafActivitySourcePath)
+	if err != nil {
+		t.Fatal("reviewed activity source missing")
+	}
+	body, err := rafActivitySourceBody(source, rafSHA(source))
+	if err != nil || body == "" || !strings.Contains(body, "PERFORM pg_catalog.pg_stat_clear_snapshot();") {
+		t.Fatal("fixed activity source body unavailable")
+	}
+	if _, err := rafActivitySourceBody(source, rafSHA(append(append([]byte{}, source...), ' '))); err == nil {
+		t.Fatal("activity source digest mismatch accepted")
+	}
+	for _, invalid := range [][]byte{nil, []byte("SELECT true"), bytes.Replace(source, []byte(rafActivityBodyDelimiter), []byte("$$"), 1), append(append([]byte{}, source...), []byte(rafActivityBodyDelimiter)...), []byte(rafActivityBodyDelimiter + rafActivityBodyDelimiter)} {
+		if _, err := rafActivitySourceBody(invalid, rafSHA(invalid)); err == nil {
+			t.Fatal("missing, ambiguous or empty fixed source body accepted")
+		}
+	}
+	for _, required := range []string{"activity AS MATERIALIZED", "a.allowed IS NOT TRUE", "RETURN admitted IS TRUE;", "a.usesysid = 10", "a.client_addr IS NULL", "a.client_hostname IS NULL", "a.client_port IS NULL", "a.leader_pid IS NULL", "session_user = 'wt_registration_lab_owner'", "current_user = 'wt_registration_lab_activity_guard'", "AND d.datdba = o.oid", "ELSE false"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("activity source lost fail-closed condition %q", required)
+		}
+	}
+	if strings.Count(body, "FROM pg_catalog.pg_stat_activity") != 1 || strings.Index(body, "pg_stat_clear_snapshot()") > strings.Index(body, "FROM pg_catalog.pg_stat_activity") {
+		t.Fatal("activity source does not clear snapshot before its one materialized activity read")
+	}
+}
+
+func TestRegistrationAuthorityActivityCatalogIndependentBinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	e := rafOfflineEnvelope()
+	q := &rafActivityCaptureQuery{values: []any{true, "fixed source body", "admission definition"}}
+	if rafCheckActivityCatalog(ctx, q, e, "fixed source body") != nil || q.calls != 1 || q.sql != rafActivityCatalogSQL ||
+		!reflect.DeepEqual(q.args, []any{e.BootstrapRole, e.BootstrapOID, e.ActivityGuardOID, e.AdmissionSchemaOID, e.AdmissionFunctionOID, e.Database, e.DatabaseOID}) {
+		t.Fatal("catalog evidence was not independently bound to the reviewed envelope")
+	}
+	for _, values := range [][]any{{false, "fixed source body", "admission definition"}, {nil, "fixed source body", "admission definition"}, {true, "replaced source body", "admission definition"}, {true, "fixed source body", "replaced definition"}, {true, nil, "admission definition"}, {true, "fixed source body", nil}} {
+		q.values = values
+		if rafCheckActivityCatalog(ctx, q, e, "fixed source body") == nil {
+			t.Fatal("untrusted catalog metadata/body was adopted as expected source")
+		}
+	}
+	q.values = []any{true, "fixed source body", "admission definition"}
+	q.err = errors.New("redacted transport")
+	if rafCheckActivityCatalog(ctx, q, e, "fixed source body") == nil {
+		t.Fatal("catalog read error accepted")
+	}
+	q.err = nil
+	before := q.calls
+	if rafCheckActivityCatalog(context.Background(), q, e, "fixed source body") == nil || q.calls != before || rafCheckActivityCatalog(ctx, q, e, "") == nil || q.calls != before {
+		t.Fatal("unbounded or source-free catalog verification reached database")
+	}
+	for _, required := range []string{
+		"WITH RECURSIVE", "JOIN actual_members m ON m.member=r.roleid", "SELECT * FROM actual_members EXCEPT SELECT * FROM expected_members",
+		"pg_catalog.aclexplode(COALESCE(ns.nspacl,pg_catalog.acldefault('n',ns.nspowner)))",
+		"pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner)))",
+		"SELECT * FROM schema_acl EXCEPT SELECT * FROM expected_schema_acl", "SELECT * FROM function_acl EXCEPT SELECT * FROM expected_function_acl",
+		"NOT EXISTS(SELECT 1 FROM pg_catalog.pg_default_acl)", "NOT EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting)",
+		"oid=3373 FROM monitor", "oid=3375 FROM stats", "oid=3374 FROM pg_catalog.pg_roles", "oid=3377 FROM pg_catalog.pg_roles",
+		"rolvaliduntil IS NOT NULL OR rolconfig IS NOT NULL", "p.procost=100 AND p.prorows=0 AND p.probin IS NULL",
+		"FROM builtin_roles WHERE rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls",
+		"NOT pg_catalog.has_schema_privilege((SELECT oid FROM owner_role),$4::oid,'CREATE')",
+		"p.prosecdef AND NOT p.proleakproof", "p.provolatile='v' AND p.proparallel='u'", "p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']::text[]",
+		") IS TRUE,(SELECT prosrc FROM helper)",
+	} {
+		if !strings.Contains(rafActivityCatalogSQL, required) {
+			t.Fatalf("independent catalog guard lost required check %q", required)
+		}
+	}
+	if strings.Contains(rafActivityCatalogSQL, "isolated_owner_session_v1()") {
+		t.Fatal("catalog verification invoked the function it was meant to authenticate")
+	}
+}
+
+func TestRegistrationAuthorityActivityAdmissionNullFailsClosed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	yes, no := true, false
+	q := &rafActivityCaptureQuery{values: []any{&yes}}
+	admitted, err := rafReadActivityAdmission(ctx, q)
+	if err != nil || !admitted || q.calls != 1 || q.sql != rafActivityAdmissionSQL || len(q.args) != 0 {
+		t.Fatal("fixed no-argument activity boundary changed")
+	}
+	q.values = []any{&no}
+	if admitted, err := rafReadActivityAdmission(ctx, q); admitted || err != nil {
+		t.Fatal("explicit synthetic negative was not preserved")
+	}
+	q.values = []any{nil}
+	if admitted, err := rafReadActivityAdmission(ctx, q); admitted || err == nil {
+		t.Fatal("SQL NULL accepted as admission or confirmed negative")
+	}
+	q.values = []any{&yes}
+	q.err = errors.New("redacted transport")
+	if admitted, err := rafReadActivityAdmission(ctx, q); admitted || err == nil {
+		t.Fatal("failed read accepted")
+	}
+	before := q.calls
+	if _, err := rafReadActivityAdmission(context.Background(), q); err == nil || q.calls != before {
+		t.Fatal("unbounded activity call reached database")
+	}
+	cancel()
+	if _, err := rafReadActivityAdmission(ctx, q); err == nil || q.calls != before {
+		t.Fatal("cancelled activity call reached database")
 	}
 }

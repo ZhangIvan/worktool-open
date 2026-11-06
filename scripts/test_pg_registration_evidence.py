@@ -38,7 +38,10 @@ def binding(raw):
             "image": evidence.IMAGE, "server_version": 180006, "database": "wt_test_offline_evidence",
             "database_oid": 17000, "schema_oid": 17001, "issuer_oid": 17002, "consumer_oid": 17003,
             "routine_definition_sha256": "5"*64, "provisioning_evidence_sha256": "6"*64,
-            "host": "127.0.0.1", "port": 55432, "cleanup": "CONFIRMED", "bootstrap_closed": True, "go_invocations": 1}
+            "host": "127.0.0.1", "port": 55432, "cleanup": "CONFIRMED", "bootstrap_closed": True, "go_invocations": 1,
+            "bootstrap_role": "wt_admin_" + "a"*32, "bootstrap_oid": 10, "activity_guard_oid": 17004,
+            "admission_schema_oid": 17005, "admission_function_oid": 17006,
+            "admission_function_definition_sha256": "7"*64, "admission_sha256": "8"*64}
 
 
 class EvidenceTests(unittest.TestCase):
@@ -139,7 +142,9 @@ class EvidenceTests(unittest.TestCase):
                    "timed_out": True, "interrupted": True, "image": "postgres:18", "server_version": 180005,
                    "database": "production", "host": "localhost", "port": 543, "database_oid": 0,
                    "schema_oid": True, "consumer_oid": 17002, "cleanup": "UNCONFIRMED", "bootstrap_closed": False,
-                   "go_invocations": 2, "run_id": "not_synthetic", "command_sha256": "0"*64}
+                   "go_invocations": 2, "run_id": "not_synthetic", "command_sha256": "0"*64, "bootstrap_role": "postgres", "bootstrap_oid": True,
+                   "activity_guard_oid": 17002, "admission_schema_oid": 0, "admission_function_oid": True,
+                   "admission_function_definition_sha256": "0"*64, "admission_sha256": "bad"}
         for field, value in changes.items():
             bad = binding(self.raw)
             bad[field] = value

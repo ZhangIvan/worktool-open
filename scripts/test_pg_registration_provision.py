@@ -26,15 +26,27 @@ def fake_catalog(bundle):
         if set(row) != set(P.FIELDS[kind].split()) | {"kind"}:
             raise AssertionError((kind,set(P.FIELDS[kind].split())-set(row),set(row)-set(P.FIELDS[kind].split())-{'kind'}))
         rows.append(row)
-    add("identity", database=DB,database_oid=70001,database_owner=P.OWNER,schema_oid=70002,schema_owner=P.OWNER,version=P.VERSION,session_user=P.OWNER,current_user=P.OWNER,other_clients=0,unexpected_schemas=0,public_objects=0,default_acls=0,role_settings=0,event_triggers=0,extensions=["plpgsql"],rewrites=0,policies=0)
+    add("identity", database=DB,database_oid=70001,database_owner=P.OWNER,schema_oid=70002,schema_owner=P.OWNER,version=P.VERSION,session_user=P.OWNER,current_user=P.OWNER,activity_admitted=True,unexpected_schemas=0,public_objects=0,default_acls=0,role_settings=0,event_triggers=0,extensions=["plpgsql"],rewrites=0,policies=0)
     for i,r in enumerate(P.ROLES):
-        add("role",name=r,oid=70003+i,superuser=False,createdb=False,createrole=False,replication=False,bypassrls=False,inherit=False,login=r!=P.ROUTINE,connection_limit=2,valid_until=None,config=None)
-    add("membership",member=P.OWNER,role=P.ROUTINE,admin=False,inherit=False,set=True)
+        add("role",name=r,oid=70003+i,superuser=False,createdb=False,createrole=False,replication=False,bypassrls=False,inherit=False,login=r in P.LOGIN_ROLES,connection_limit=0 if r==P.ACTIVITY_GUARD else 2,valid_until=None,config=None)
+    for membership in P.expected_membership_rows({r:70003+i for i,r in enumerate(P.ROLES)}):
+        add("membership", **{k:v for k,v in membership.items() if k != "kind"})
+    for name,oid in P.BUILTIN_STATS_ROLES.items():
+        add("builtin_role",name=name,oid=oid,superuser=False,createdb=False,createrole=False,replication=False,bypassrls=False,login=False)
+    add("bootstrap", name=ADMIN, oid=10, superuser=True, login=True)
+    add("admission_schema", name=P.ADMISSION_SCHEMA, oid=70020, owner=ADMIN, owner_oid=10, other_objects=0)
     for table,cols in c["tables"].items():
         for n,(name,info) in enumerate(cols.items(),1):
             add("column",table=table,name=name,position=n,type={"timestamptz":"timestamp with time zone","epoch_ms":P.SCHEMA+".epoch_ms"}.get(info["type"],info["type"]),not_null=info["not_null"],identity=info["identity"],generated=info["generated"],default=info["default_source"] or None,dropped=False,collation="default" if info["type"] in ("text","text[]") else None)
     for i,(name,e) in enumerate(c["functions"].items()):
-        add("function",name=name,oid=71000+i,owner=e["owner"],body=e["body"],definition=f"CREATE OR REPLACE FUNCTION {P.SCHEMA}.{name}() AS $function${e['body']}$function$\n",arguments=", ".join(e["args"]),argument_names=e["argnames"] or None,argument_modes=None,argument_defaults=0,result=e["result"],security_definer=e["security_definer"],language="plpgsql",volatility="v",parallel="u",strict=False,leakproof=False,function_kind="f",set_returning=False,config=e["config"] or None,support=0,variadic=0,cost=100,rows=0,binary=None)
+        add("function",name=name,oid=71000+i,owner=e["owner"],body=e["body"],definition=f"CREATE OR REPLACE FUNCTION {P.SCHEMA}.{name}() AS $function${e['body']}$function$\n",arguments=", ".join(e["args"]),argument_names=e["argnames"] or None,argument_modes=None,argument_defaults=0,all_argument_types=None,argument_default_expression=None,transform_types=None,result=e["result"],security_definer=e["security_definer"],language="plpgsql",volatility="v",parallel="u",strict=False,leakproof=False,function_kind="f",set_returning=False,config=e["config"] or None,support=0,variadic=0,cost=100,rows=0,binary=None)
+    name,e=P.ADMISSION_FUNCTION,c["admission"]
+    add("admission_function",name=name,oid=72000,owner=e["owner"],body=e["body"],definition=f"CREATE OR REPLACE FUNCTION {P.ADMISSION_SCHEMA}.{name}() AS $function${e['body']}$function$\n",arguments=", ".join(e["args"]),argument_names=e["argnames"] or None,argument_modes=None,argument_defaults=0,all_argument_types=None,argument_default_expression=None,transform_types=None,result=e["result"],security_definer=e["security_definer"],language="plpgsql",volatility="v",parallel="u",strict=False,leakproof=False,function_kind="f",set_returning=False,config=e["config"] or None,support=0,variadic=0,cost=100,rows=0,binary=None)
+    for scope,obj,owner,grantee,priv in (("schema",P.ADMISSION_SCHEMA,ADMIN,ADMIN,"USAGE"),
+        ("schema",P.ADMISSION_SCHEMA,ADMIN,ADMIN,"CREATE"),("schema",P.ADMISSION_SCHEMA,ADMIN,P.OWNER,"USAGE"),
+        ("function",P.ADMISSION_FUNCTION,P.ACTIVITY_GUARD,P.ACTIVITY_GUARD,"EXECUTE"),
+        ("function",P.ADMISSION_FUNCTION,P.ACTIVITY_GUARD,P.OWNER,"EXECUTE")):
+        add("admission_acl", scope=scope,object=obj,column="",owner=owner,grantee=grantee,grantor=owner,privilege=priv,grantable=False)
     for e in c["triggers"]:
         add("trigger",table=e["table"],name=e["name"],function=e["function"],function_schema=P.SCHEMA,trigger_kind=e["kind"],enabled="O",arguments=0,argument_bytes="",qualification=None,columns="",constraint=0,deferrable=False,deferred=False,old_table=None,new_table=None)
     constraints = P.expected_constraints(c)
@@ -77,7 +89,9 @@ class FakeExecutor:
         if step.phase==self.fail_phase:
             raise RuntimeError("private credential / SQL must not escape")
         if step.phase=="bootstrap_preflight":
-            return [dict(version=P.VERSION,session_user=ADMIN,current_user=ADMIN,database_absent=True,roles_absent=True,other_clients=0,bootstrap_superuser=True,event_triggers=0)]
+            return [dict(version=P.VERSION,session_user=ADMIN,current_user=ADMIN,database_absent=True,roles_absent=True,activity_admitted=True,bootstrap_oid=10,bootstrap_superuser=True,event_triggers=0)]
+        if step.phase=="bootstrap_helper":
+            return [{"guard_password_is_null":True}]
         if step.phase=="catalog_readback":
             return copy.deepcopy(self.catalog) if self.catalog is not None else fake_catalog(self.bundle)
         return []
@@ -114,12 +128,12 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(x.calls,[])
 
     def test_baseline_atomic_boundaries_and_actual_owner(self):
-        self.assertEqual(len(self.plan),18)
-        for s in self.plan[4:15]:
+        self.assertEqual(len(self.plan),19)
+        for s in self.plan[5:16]:
             self.assertTrue(s.sql.startswith('BEGIN;\nSET LOCAL search_path TO wt_synthetic_registry, pg_catalog, pg_temp;'))
             self.assertTrue(s.sql.endswith('\nCOMMIT;\n'))
             self.assertEqual(s.login_role,P.OWNER)
-        boundary=self.plan[15]
+        boundary=self.plan[16]
         self.assertTrue(boundary.sql.endswith(dict(self.bundle.texts)[P.BOUNDARY_PATH]))
         self.assertEqual(sum(x=='BEGIN' for x in P._split(boundary.sql)),1)
         self.assertNotIn('SET ROLE wt_registration_lab_owner', ''.join(s.sql for s in self.plan))
@@ -140,7 +154,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn('CREATE ROLE wt_registration_lab_routine NOLOGIN',step.sql)
 
     def test_seed_is_minimal_disabled_and_inert(self):
-        seed=P.seed_sql(DB)
+        seed=P.seed_sql(DB,self.bundle,ADMIN)
         self.assertEqual(seed.count('INSERT INTO'),4)
         self.assertIn("'!disabled-inert-synthetic-not-a-password!',false",seed)
         self.assertIn("'!inert-synthetic-no-auth-token!',true,0,0,'[]'::jsonb,NULL",seed)
@@ -150,7 +164,7 @@ class ProvisionTests(unittest.TestCase):
     def test_fake_full_provision_and_private_redaction(self):
         x=FakeExecutor(self.bundle)
         receipt=P.provision(x,self.bundle,DB,ADMIN,PASSWORDS)
-        self.assertEqual(len(x.calls),18)
+        self.assertEqual(len(x.calls),19)
         self.assertEqual(receipt.public_evidence['acceptance_tests'],'NOT_RUN')
         self.assertEqual(receipt.public_evidence['constraint_semantic_normalization'],'NOT_PROVEN')
         self.assertEqual(receipt.private_metadata['routine_oid'], next(r['oid'] for r in self.catalog if r['kind']=='function' and r['name']==P.CONSUME))
@@ -183,7 +197,7 @@ class ProvisionTests(unittest.TestCase):
                 P.validate_catalog(self.catalog,self.bundle,DB,receipts)
 
     def test_catalog_mutation_matrix(self):
-        mutations=[('identity','other_clients',1),('identity','database_owner',P.CONSUMER),('identity','extensions',['plpgsql','dblink']),('role','superuser',True),('role','inherit',True),('membership','set',False),('column','type','integer'),('column','not_null',False),('column','collation','C'),('function','body','BEGIN RETURN NULL; END'),('function','owner',P.CONSUMER),('function','strict',True),('function','config',['search_path=public']),('trigger','enabled','D'),('trigger','trigger_kind',9),('internal_trigger','enabled','D'),('internal_trigger','function','RI_FKey_cascade_del'),('constraint','validated',False),('constraint','enforced',False),('constraint','keys',['unexpected']),('index','valid',False),('index','method','hash'),('relation','rls',True),('relation','persistence','u'),('type','owner',P.CONSUMER),('sequence','cycle',True),('acl','grantee','PUBLIC'),('acl','grantable',True),('row_count','count',2),('seed','exact',False)]
+        mutations=[('identity','activity_admitted',False),('identity','database_owner',P.CONSUMER),('identity','extensions',['plpgsql','dblink']),('role','superuser',True),('role','inherit',True),('membership','set',False),('column','type','integer'),('column','not_null',False),('column','collation','C'),('function','body','BEGIN RETURN NULL; END'),('function','owner',P.CONSUMER),('function','strict',True),('function','config',['search_path=public']),('trigger','enabled','D'),('trigger','trigger_kind',9),('internal_trigger','enabled','D'),('internal_trigger','function','RI_FKey_cascade_del'),('constraint','validated',False),('constraint','enforced',False),('constraint','keys',['unexpected']),('index','valid',False),('index','method','hash'),('relation','rls',True),('relation','persistence','u'),('type','owner',P.CONSUMER),('sequence','cycle',True),('acl','grantee','PUBLIC'),('acl','grantable',True),('row_count','count',2),('seed','exact',False)]
         for kind,key,value in mutations:
             raw=copy.deepcopy(self.catalog)
             row=next(r for r in raw if r['kind']==kind and (kind!='column' or r['name']=='id'))
@@ -248,7 +262,8 @@ class ProvisionTests(unittest.TestCase):
         with self.assertRaises(P.ProvisionError):P._bounded_rows([{'kind':'unknown'}])
         sql=P.catalog_query(self.bundle)
         self.assertNotIn('rolpassword',sql);self.assertNotIn('SELECT *',sql)
-        self.assertIn("backend_type IS NULL",sql)
+        self.assertIn("DO $admission_catalog$",sql)
+        self.assertIn("a.allowed IS NOT TRUE",sql)
         self.assertIn('t.tgisinternal',sql)
         self.assertIn('pg_catalog.json_build_array',self.plan[0].sql)
 
@@ -267,7 +282,7 @@ class PreflightDiagnosticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.expected = [dict(version=P.VERSION, session_user=ADMIN, current_user=ADMIN,
-            database_absent=True, roles_absent=True, other_clients=0,
+            database_absent=True, roles_absent=True, activity_admitted=True, bootstrap_oid=10,
             bootstrap_superuser=True, event_triggers=0)]
         cls.bundle = P.load_and_verify_sources(ROOT)
 
@@ -320,12 +335,13 @@ class PreflightDiagnosticTests(unittest.TestCase):
                     self.assertEqual(d['checks'][key], 'INVALID_SHAPE')
                     self.assertNotIn('private-password', json.dumps(d))
 
-    def test_diagnostic_does_not_replace_python_equality_acceptance(self):
-        # Preserve the existing predicate exactly, including its Python equality
-        # semantics. A diagnostic type warning cannot revoke an existing match.
+    def test_preflight_rejects_python_boolean_integer_alias(self):
+        # Diagnostics remain non-authoritative; the admission predicate itself
+        # now rejects Python's True == 1 alias rather than inheriting it.
         raw = copy.deepcopy(self.expected)
-        raw[0]['other_clients'] = False
+        raw[0]['activity_admitted'] = 1
         self.assertTrue(raw == self.expected)
+        self.assertFalse(P._exact_preflight_match(raw,self.expected))
         self.assertEqual(P.preflight_field_diagnostics(raw, self.expected)['classification'], 'INVALID_SHAPE')
 
     def test_sink_failure_cannot_change_existing_success_or_error(self):
@@ -346,15 +362,15 @@ class PreflightDiagnosticTests(unittest.TestCase):
         good = Sink(self.bundle, copy.deepcopy(expected))
         receipt = P.provision(good, self.bundle, DB, ADMIN, PASSWORDS)
         self.assertEqual(receipt.public_evidence['acceptance_tests'], 'NOT_RUN')
-        self.assertEqual(len(good.calls), 18)
+        self.assertEqual(len(good.calls), 19)
         self.assertEqual(len(good.diagnostics), 1)
         bad_result = copy.deepcopy(expected)
-        bad_result[0]['other_clients'] = 1
+        bad_result[0]['activity_admitted'] = False
         bad = Sink(self.bundle, bad_result)
         with self.assertRaisesRegex(P.ProvisionError, '^BOOTSTRAP_NOT_PRISTINE$'):
             P.provision(bad, self.bundle, DB, ADMIN, PASSWORDS)
         self.assertEqual(len(bad.calls), 1)
-        self.assertEqual(bad.diagnostics[0]['checks']['other_clients'], 'MISMATCH')
+        self.assertEqual(bad.diagnostics[0]['checks']['activity_admitted'], 'MISMATCH')
 
     def test_executor_failure_retains_original_fixed_error_and_no_extra_call(self):
         class Sink(FakeExecutor):
@@ -365,7 +381,7 @@ class PreflightDiagnosticTests(unittest.TestCase):
             P.provision(executor, self.bundle, DB, ADMIN, PASSWORDS)
         self.assertEqual(len(executor.calls), 1)
 
-    def test_existing_acceptance_expression_is_unchanged(self):
+    def test_acceptance_expression_uses_strict_typed_preflight(self):
         import ast
         tree = ast.parse(Path(SPEC.origin).read_text())
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'provision')
@@ -373,7 +389,7 @@ class PreflightDiagnosticTests(unittest.TestCase):
                  and n.func.id == 'require' and len(n.args) == 2
                  and isinstance(n.args[1], ast.Constant) and n.args[1].value == 'BOOTSTRAP_NOT_PRISTINE']
         self.assertEqual(len(calls), 1)
-        self.assertEqual(ast.dump(calls[0].args[0]), ast.dump(ast.parse('result == expected', mode='eval').body))
+        self.assertEqual(ast.dump(calls[0].args[0]), ast.dump(ast.parse('_exact_preflight_match(result, expected)', mode='eval').body))
 
 
 class ActivityCensusTests(unittest.TestCase):
@@ -561,29 +577,328 @@ class ActivityCensusTests(unittest.TestCase):
         with mock.patch.object(P,'ACTIVITY_CENSUS_MAX_BYTES',1):
             self.assert_rejected(self.wire(),'JSON_SIZE_LIMIT')
 
-    def test_existing_eighteen_install_sql_hashes_unchanged(self):
+    def test_fixed_nineteen_step_source_plan_hashes(self):
         expected=(
-            'f26206320a3df4e6f9a1f8510cabfeeb5c19725b4f3eb8d82b8b773a03b6ccc4',
-            'bd474b5a9e9f942116d145c87e82af8327eba84acb39ca5a41c68632ea3c8d4b',
+            '9ce38a062ee795ff996256751ed4d03d9a7c1b7a5405a659ad76c2d92ea93ab8',
+            'a0e0c60a2c5a4204b3e39e6ed85b51c0e4231c7ec3e3cc110e702f2752e8965c',
             '636f190f4973fee0c383fb9f8f790bcbf82af78d99a5adf5345462c617277bf3',
-            '321444fe29ddc6aeced8c92dc69c0ebcf056ad46895c2ac792979a870f5753bf',
-            'cac75684319ef7e6fbff6d6309781fedf8b707e8d4742cb01740d361fe8ed471',
-            'efee1b1c342044d8df0cb09ae03808edebd9662e1da4fb3478865c1fa491931e',
-            '3577a197e359ed8c44f08bab5d0cb0473e2cf74ece979c5f239740c867abd6be',
-            '98daa1d6457fcd8374c99055f7c264eac8b958477d394d2561e3e450210a19e5',
-            'eca47ff469757fd91718e39b35ee2eb4f7ae94981cde9fa2de5166ef3756da9a',
-            'fdf30dc64d4fff90f8a9491a1b576c1ec1a488ccf782c05af5a2f61532a23d11',
-            '7f54753b04463240a27f95f74586b90e7dad660b9272706b05edb75453836ac5',
-            'a15d29fb7ffe4492f6bfc8fab8bd4dc616bc9ee586be72ea49254f2ee67312a6',
-            '3154396db36c82e101fa1694e83ed3772cfd129f73669ffc06785caf8844d3a0',
-            '71d316e14fe662dcb3f0bdbe25258e7fa27cf2fd97d6eef88a62ae490bcf9b6f',
-            '87042b04b7177db3c59ba217feef6145abe05ad1dceb172645008d98b46b61e6',
-            '2e7eaaab7bcc45762349ff4f265bc8b019360667a015028cb57899368310b4cb',
-            'bbb20b5f343f3595cec03f0af21a7541ec9006b4c426456baacc2e37d41eb003',
-            'dc09ac8ae3f6e43a026e36b615571f42b658713b6d9b81f7b21401ba57aff66a')
+            'c26fc5a70dcd973b58efca125ed591cf68338a5d87aa8365f696bc8025e60c01',
+            'f3db1188b7fb140755f572fb4c2a1a5b51922e40e61ba07c41e99e0e90dcbc6f',
+            '9876f7a6325d2f8853186e5104fc1e817f21b767b3708d2efcd98750179495a8',
+            '0279b53e0f47932423b9146475dfb8a26a875112984e2134f1ce6dae8b17ed55',
+            'f5dd0b8656a230cea8ee253221f2184bfa8dac39d2678506b71890950dea8f88',
+            'f8fd492a8e5452ecfd4059c96c5e9a58fa060782db1bc83f0d8412282bc893ba',
+            '44031d4187413cfe597f6bc255356bdaf7aa568e8e4137b05f8b67d71deeca10',
+            '40af898faa55837e759a802cf95ed9b2356f03c75443f52ebbca321a4b712c96',
+            'cb18942f79a7bf703deb06aa111e657efb466f8f3b3867e349a9cbcec57771dd',
+            '9f649e04074603da39b73f573c2f6f5e27c8d3e196187c4b883957ec47de00bb',
+            'd8061b3a5aa0c38d8bb44e386eb58c4f624c96e410cdd73a29cd3b3243d90625',
+            'aa47f36ef4e8afc1d850a38adf7e8c4bf64751e0d5bb13c58c474e2369b95f9b',
+            '982db91f0984025ba9f44906dcedbac84efa2b45221f41111f5c3dbffbd23f33',
+            'c99f6ab3ce5a3ffc793544235925cd8ae8c07fb5cea5fd92e66fc338fefd7550',
+            'fee3e64428c75ed5dac1f5fb6b2526d578b518453283098731188d51c5993a9e',
+            'f509965f9b5c38a1168c921a209d2af285a5cdca01dc97a06eb5dc52afcf040d')
         plan=P.build_provision_plan(P.load_and_verify_sources(ROOT),DB,ADMIN,PASSWORDS)
         self.assertEqual(tuple(P.sha(step.sql.encode()) for step in plan),expected)
         self.assertTrue(all(P.activity_census_query() not in step.sql for step in plan))
+
+
+class ActivityAdmissionTests(unittest.TestCase):
+    """Offline specification/model checks only, not PostgreSQL acceptance."""
+    limits = {'checkpointer':1, 'background writer':1, 'walwriter':1,
+              'autovacuum launcher':1, 'logical replication launcher':1, 'io worker':3}
+    presence = ('usesysid','usename','datid','datname','client_addr','client_hostname','client_port','leader_pid')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle=P.load_and_verify_sources(ROOT)
+        cls.plan=P.build_provision_plan(cls.bundle,DB,ADMIN,PASSWORDS)
+        cls.source=dict(cls.bundle.texts)[P.ADMISSION_PATH]
+        cls.catalog=fake_catalog(cls.bundle)
+        cls.receipts=[dict(phase=s.phase,login_role=s.login_role,database=s.database,
+            sql_sha256=P.sha(s.sql.encode()),acknowledged=True) for s in cls.plan]
+
+    @classmethod
+    def background(cls, kind, pid=2):
+        row={key:None for key in cls.presence}
+        row.update(pid=pid,backend_type=kind)
+        if kind=='logical replication launcher':row.update(usesysid=10,usename=ADMIN)
+        return row
+
+    @classmethod
+    def self_row(cls):
+        row=cls.background('client backend',1)
+        row.update(usesysid=70003,usename=P.OWNER,datid=70001,datname=DB,
+                   client_addr='127.0.0.1',client_port=45678)
+        return row
+
+    @classmethod
+    def model(cls, rows, session=P.OWNER, current=P.ACTIVITY_GUARD, version=180006,
+              database=DB, owner_oid=70003, database_oid=70001, bootstrap_oid=10,
+              bootstrap_name=ADMIN, schema_owner=10):
+        # Independent truth-table specification. No database, no SQL evaluator.
+        import re
+        if not (session==P.OWNER and current==P.ACTIVITY_GUARD and version==180006
+            and re.fullmatch(r'wt_test_[a-z0-9_]{8,48}',database)
+            and bootstrap_oid==10 and schema_owner==10
+            and re.fullmatch(r'wt_admin_[a-z0-9_]{16,40}',bootstrap_name)):
+            return False
+        own=[r for r in rows if r['pid']==1]
+        if len(own)!=1:return False
+        r=own[0]
+        if not (r['backend_type']=='client backend' and r['usesysid']==owner_oid
+            and r['usename']==P.OWNER and r['datid']==database_oid and r['datname']==database
+            and r['leader_pid'] is None):return False
+        counts={k:0 for k in cls.limits}
+        for r in rows:
+            if r['pid']==1:continue
+            kind=r['backend_type']
+            if kind not in cls.limits:return False
+            counts[kind]+=1
+            if kind=='logical replication launcher':
+                if r['usesysid']!=10 or r['usename']!=bootstrap_name:return False
+                fields=cls.presence[2:]
+            else:fields=cls.presence
+            if any(r[field] is not None for field in fields):return False
+        return all(counts[k]<=cap for k,cap in cls.limits.items())
+
+    def reject_catalog(self, raw):
+        with self.assertRaises(P.ProvisionError):
+            P.validate_catalog(raw,self.bundle,DB,self.receipts)
+
+    def test_source_pin_function_shape_and_no_runtime_expectations(self):
+        import re
+        self.assertEqual(P.sha(self.source.encode()),P.SOURCE_PINS[P.ADMISSION_PATH])
+        self.assertEqual(self.source.count('$registration_activity_guard_v1$'),2)
+        body=self.source.split('$registration_activity_guard_v1$')[1]
+        self.assertEqual(self.bundle.contract['admission']['body'],body)
+        self.assertRegex(self.source,r'CREATE FUNCTION wt_registration_admission\.isolated_owner_session_v1\(\)\s+RETURNS boolean')
+        self.assertIn('LANGUAGE plpgsql SECURITY DEFINER VOLATILE PARALLEL UNSAFE',self.source)
+        self.assertIn('SET search_path = pg_catalog, pg_temp',self.source)
+        self.assertEqual(body.count('FROM pg_catalog.pg_stat_activity'),1)
+        self.assertEqual(body.count('PERFORM pg_catalog.pg_stat_clear_snapshot();'),1)
+        self.assertLess(body.index('pg_stat_clear_snapshot'),body.index('activity AS MATERIALIZED'))
+        self.assertIn('a.allowed IS NOT TRUE',body)
+        self.assertIn('RETURN admitted IS TRUE;',body)
+        self.assertNotIn('SELECT *',body)
+        self.assertNotRegex(body,r'\b(EXECUTE|INSERT|UPDATE|DELETE|COPY|CALL)\b')
+        self.assertNotIn('pg_authid',body)
+        self.assertNotIn(ADMIN,body)
+        self.assertNotIn(DB,body)
+        # Every referenced persistent relation/function is explicitly qualified.
+        self.assertEqual(re.findall(r'FROM (pg_[a-z_]+)(?:\s|$)',body),[])
+        for field in self.presence:self.assertIn('a.'+field,body)
+        for kind,cap in self.limits.items():
+            self.assertIn("WHERE a.backend_type = '"+kind+"') <= "+str(cap),body)
+        for suffix in ('\n','-- changed\n'):
+            bad=copy.deepcopy(self.bundle)
+            object.__setattr__(bad,'texts',tuple((p,t+suffix if p==P.ADMISSION_PATH else t) for p,t in bad.texts))
+            with self.assertRaisesRegex(P.ProvisionError,'SOURCE_HASH_MISMATCH'):
+                P.build_provision_plan(bad,DB,ADMIN,PASSWORDS)
+
+    def test_roles_acl_and_install_order_are_narrow(self):
+        self.assertEqual(len(self.plan),19)
+        self.assertEqual([s.phase for s in self.plan[:5]],['bootstrap_preflight','bootstrap_roles','bootstrap_database','bootstrap_helper','owner_schema'])
+        roles=self.plan[1].sql;helper=self.plan[3]
+        self.assertIn('CREATE ROLE wt_registration_lab_activity_guard NOLOGIN PASSWORD NULL NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT 0;',roles)
+        self.assertIn('GRANT pg_read_all_stats TO wt_registration_lab_activity_guard WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;',roles)
+        self.assertIn('GRANT wt_registration_lab_routine TO wt_registration_lab_owner WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;',roles)
+        self.assertEqual(roles.count('GRANT '),2)
+        self.assertEqual(P.LOGIN_ROLES,(P.OWNER,P.ISSUER,P.CONSUMER,P.UNRELATED))
+        self.assertEqual(helper.login_role,ADMIN);self.assertEqual(helper.database,DB);self.assertTrue(helper.query)
+        self.assertTrue(helper.sql.startswith('BEGIN;'));self.assertTrue(helper.sql.endswith('COMMIT;\n'))
+        self.assertIn(self.source,helper.sql)
+        self.assertIn('CREATE SCHEMA wt_registration_admission AUTHORIZATION CURRENT_USER;',self.source)
+        self.assertIn('REVOKE ALL ON FUNCTION wt_registration_admission.isolated_owner_session_v1() FROM PUBLIC;',self.source)
+        self.assertIn('GRANT EXECUTE ON FUNCTION wt_registration_admission.isolated_owner_session_v1() TO wt_registration_lab_owner;',self.source)
+        self.assertIn('GRANT USAGE ON SCHEMA wt_registration_admission TO wt_registration_lab_owner;',self.source)
+        self.assertNotIn('GRANT OPTION',self.source)
+        self.assertIn("'guard_password_is_null',(SELECT rolpassword IS NULL",helper.sql)
+        self.assertEqual(sum('pg_authid' in x.sql for x in self.plan),1)
+        for step in self.plan:
+            self.assertNotIn('DROP ROLE',step.sql)
+            self.assertNotIn('ALTER ROLE '+ADMIN,step.sql)
+        for step in self.plan[4:]:self.assertNotIn('pg_authid',step.sql)
+
+    def test_bootstrap_uses_same_materialized_classifier_and_verified_directory(self):
+        sql=self.plan[0].sql
+        self.assertIn(P._activity_classification(self.bundle),sql)
+        self.assertIn(P._activity_classification(self.bundle),self.bundle.contract['admission']['body'])
+        self.assertEqual(sql.count('FROM pg_catalog.pg_stat_activity'),1)
+        self.assertLess(sql.index('pg_stat_clear_snapshot'),sql.index('activity AS MATERIALIZED'))
+        self.assertIn("a.datname='postgres' AND a.usename='"+ADMIN+"'",sql)
+        self.assertIn('AND r.oid=10 AND d.datdba=10',sql)
+        self.assertIn("'bootstrap_oid',(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='"+ADMIN+"')",sql)
+        self.assertIn("pg_catalog.current_setting('shared_preload_libraries')=''",sql)
+        self.assertNotIn("backend_type='client backend' OR usename IS NOT NULL",sql)
+        self.assertNotIn('min(',sql)
+
+    def test_classifier_accepts_only_listed_normal_shapes_with_upper_limits(self):
+        self.assertTrue(self.model([self.self_row()]))
+        rows=[self.self_row()]
+        for kind,limit in self.limits.items():
+            rows.extend(self.background(kind,len(rows)+i+1) for i in range(limit))
+        self.assertTrue(self.model(rows))
+        for kind in self.limits:
+            with self.subTest(overflow=kind):
+                self.assertFalse(self.model(rows+[self.background(kind,999)]))
+        for kind in self.limits:
+            for field in self.presence:
+                row=self.background(kind)
+                if kind=='logical replication launcher' and field in ('usesysid','usename'):
+                    row[field]=None
+                else:row[field]='unexpected'
+                with self.subTest(kind=kind,field=field):
+                    self.assertFalse(self.model([self.self_row(),row]))
+
+    def test_unknown_null_starting_clients_and_second_same_role_always_rejected(self):
+        for kind in (None,'unrecognized','not initialized','startup','client backend','dead-end client backend',
+                     'autovacuum worker','parallel worker','walsender','walreceiver','background worker','logger','archiver'):
+            with self.subTest(kind=kind):self.assertFalse(self.model([self.self_row(),self.background(kind)]))
+        peer=self.self_row();peer['pid']=2
+        self.assertFalse(self.model([self.self_row(),peer]))
+        masked=self.background(None)
+        self.assertFalse(self.model([self.self_row(),masked]))
+        for oid,name in ((11,ADMIN),(10,'another_admin'),(None,ADMIN),(10,None)):
+            row=self.background('logical replication launcher');row.update(usesysid=oid,usename=name)
+            self.assertFalse(self.model([self.self_row(),row]))
+
+    def test_self_and_directory_identity_are_fail_closed(self):
+        self.assertFalse(self.model([]));self.assertFalse(self.model([self.self_row(),self.self_row()]))
+        for key,value in (('backend_type',None),('backend_type','io worker'),('usesysid',10),('usename',ADMIN),
+                          ('datid',70002),('datname','postgres'),('leader_pid',9)):
+            row=self.self_row();row[key]=value
+            with self.subTest(field=key):self.assertFalse(self.model([row]))
+        for key,value in (('session',P.CONSUMER),('current',P.OWNER),('version',180005),('database','postgres'),
+                          ('owner_oid',90000),('database_oid',90000),('bootstrap_oid',11),
+                          ('bootstrap_name','postgres'),('schema_owner',70003)):
+            with self.subTest(field=key):self.assertFalse(self.model([self.self_row()],**{key:value}))
+
+    def test_helper_catalog_mutation_matrix(self):
+        changes=[('admission_schema','name','public'),('admission_schema','owner',P.OWNER),
+            ('admission_schema','owner_oid',70003),('admission_schema','oid',None),('admission_schema','other_objects',1),
+            ('bootstrap','name','wt_admin_other_abcdefghijklmnop'),('bootstrap','oid',11),('bootstrap','superuser',False),('bootstrap','login',False),
+            ('admission_function','name','other'),('admission_function','oid',None),
+            ('admission_function','body','BEGIN RETURN true; END;'),('admission_function','owner',P.OWNER),
+            ('admission_function','arguments','text'),('admission_function','argument_names',['x']),
+            ('admission_function','argument_defaults',1),('admission_function','all_argument_types',[25]),
+            ('admission_function','argument_modes',['o']),('admission_function','argument_default_expression',"'x'::text"),
+            ('admission_function','transform_types',[25]),('admission_function','result','record'),
+            ('admission_function','security_definer',False),('admission_function','language','sql'),
+            ('admission_function','volatility','s'),('admission_function','parallel','s'),
+            ('admission_function','strict',True),('admission_function','leakproof',True),
+            ('admission_function','function_kind','p'),('admission_function','set_returning',True),
+            ('admission_function','config',['search_path=public']),('admission_function','support',123),
+            ('admission_function','variadic',25),('admission_function','cost',1),('admission_function','rows',100),
+            ('admission_function','binary','unreviewed'),('admission_function','definition','changed'),
+            ('admission_acl','grantee','PUBLIC'),('admission_acl','grantable',True),
+            ('admission_acl','grantor',P.OWNER),('admission_acl','privilege','CREATE'),
+            ('identity','default_acls',1),('identity','role_settings',1)]
+        for kind,key,value in changes:
+            raw=copy.deepcopy(self.catalog);next(r for r in raw if r['kind']==kind)[key]=value
+            with self.subTest(kind=kind,key=key):self.reject_catalog(raw)
+        for key,value in (('login',True),('inherit',True),('connection_limit',2),('superuser',True),
+                          ('createdb',True),('createrole',True),('replication',True),('bypassrls',True),
+                          ('valid_until','infinity'),('config',['search_path=public'])):
+            raw=copy.deepcopy(self.catalog);next(r for r in raw if r['kind']=='role' and r['name']==P.ACTIVITY_GUARD)[key]=value
+            with self.subTest(guard_attribute=key):self.reject_catalog(raw)
+        # Exact fixed source stays independent when observation and receipt body disagree.
+        raw=copy.deepcopy(self.catalog);raw.append(copy.deepcopy(next(r for r in raw if r['kind']=='admission_function')))
+        raw[-1]['arguments']='text';self.reject_catalog(raw)
+
+    def test_memberships_reject_every_extra_path_and_builtin_mutation(self):
+        self.assertEqual(P.BUILTIN_STATS_ROLES,{'pg_monitor':3373,'pg_read_all_settings':3374,'pg_read_all_stats':3375,'pg_stat_scan_tables':3377})
+        for member,role in ((P.OWNER,P.ACTIVITY_GUARD),(P.ISSUER,'pg_read_all_stats'),
+                            (P.CONSUMER,'pg_monitor'),('unreviewed','pg_monitor'),
+                            (P.ROUTINE,P.ACTIVITY_GUARD),(P.UNRELATED,'pg_read_all_stats')):
+            raw=copy.deepcopy(self.catalog)
+            raw.append(dict(kind='membership',member=member,role=role,member_oid=75000,role_oid=75001,
+                            grantor_oid=10,admin=False,inherit=True,set=True))
+            with self.subTest(member=member,role=role):self.reject_catalog(raw)
+        for member in (P.ACTIVITY_GUARD,'pg_monitor',P.OWNER):
+            for key,value in (('admin',True),('inherit',False if member!=P.OWNER else True),
+                              ('set',True if member==P.ACTIVITY_GUARD else False),
+                              ('grantor_oid',70003),('member_oid',99999),('role_oid',99998)):
+                raw=copy.deepcopy(self.catalog);next(r for r in raw if r['kind']=='membership' and r['member']==member)[key]=value
+                with self.subTest(member=member,key=key):self.reject_catalog(raw)
+
+    def test_safe_call_validates_source_catalog_before_definer_and_binds_receipt(self):
+        receipt=P.validate_catalog(self.catalog,self.bundle,DB,self.receipts)
+        meta=receipt.private_metadata
+        self.assertEqual(meta['bootstrap_role'],ADMIN);self.assertEqual(meta['bootstrap_oid'],10)
+        self.assertEqual(meta['admission_sha256'],P.SOURCE_PINS[P.ADMISSION_PATH])
+        sql=P.owner_admission_query(self.bundle,DB,meta)
+        self.assertEqual(len(P._split(sql)),2)
+        self.assertIn("'activity_admitted'",sql)
+        statements=P._split(sql)
+        self.assertTrue(statements[0].startswith('DO $admission_catalog$'))
+        self.assertNotIn('wt_registration_admission.isolated_owner_session_v1()',statements[0])
+        self.assertIn('wt_registration_admission.isolated_owner_session_v1()',statements[1])
+        predicate=P.admission_catalog_predicate(self.bundle)
+        self.assertIn(predicate,sql)
+        for fragment in ('p.prosrc=',"p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']",'p.protrftypes IS NULL',
+                         'pg_catalog.pg_default_acl','pg_catalog.pg_db_role_setting','pg_catalog.aclexplode',
+                         'pg_catalog.pg_auth_members)=5','EXCEPT VALUES','m.grantor'):
+            self.assertIn(fragment,predicate)
+        self.assertIn(meta['admission_function_definition_sha256'],sql)
+        for key in ('database_oid','schema_oid','admission_schema_oid','admission_function_oid','owner_oid','activity_guard_oid'):
+            self.assertIn(str(meta[key]),sql)
+        for step in self.plan[4:-1]:
+            self.assertIn(predicate,step.sql)
+            identity=step.sql.split('DO $identity$')[1].split('END $identity$')[0]
+            first,second=identity.split('END IF;',1)
+            self.assertNotIn('wt_registration_admission.isolated_owner_session_v1()',first)
+            self.assertIn('IF wt_registration_admission.isolated_owner_session_v1() IS NOT TRUE',second)
+        self.assertIn(predicate,self.plan[-1].sql)
+        self.assertNotIn('pg_authid',sql)
+        for key,value in (('bootstrap_role','postgres'),('bootstrap_oid',11),('database_oid',False),
+                          ('admission_sha256','0'*64),('admission_function_definition_sha256','not-a-hash')):
+            with self.subTest(key=key),self.assertRaises(P.ProvisionError):
+                P.owner_admission_query(self.bundle,DB,{**meta,key:value})
+
+    def test_immutable_tamper_has_a_separate_preplanning_rejection_statement(self):
+        raw=copy.deepcopy(self.catalog)
+        next(r for r in raw if r['kind']=='admission_function')['volatility']='i'
+        self.reject_catalog(raw)
+        statements=P._split(P.catalog_query(self.bundle))
+        self.assertEqual(len(statements),3)
+        self.assertTrue(statements[1].startswith('DO $admission_catalog$'))
+        self.assertIn("p.provolatile='v'",statements[1])
+        self.assertNotIn('wt_registration_admission.isolated_owner_session_v1()',statements[1])
+        self.assertIn('wt_registration_admission.isolated_owner_session_v1()',statements[2])
+        for name in P.BUILTIN_STATS_ROLES:
+            for flag in ('superuser','createdb','createrole','replication','bypassrls','login'):
+                raw=copy.deepcopy(self.catalog)
+                next(r for r in raw if r['kind']=='builtin_role' and r['name']==name)[flag]=True
+                with self.subTest(name=name,flag=flag):self.reject_catalog(raw)
+
+    def test_preflight_every_scalar_type_is_authoritative(self):
+        good=FakeExecutor(self.bundle).execute(self.plan[0])
+        for key,value in good[0].items():
+            substitutes=(int(value),) if type(value) is bool else (float(value), True) if type(value) is int else (1,None)
+            for substitute in substitutes:
+                raw=copy.deepcopy(good);raw[0][key]=substitute
+                class Bad(FakeExecutor):
+                    def execute(self,step):
+                        self.calls.append(step)
+                        return raw
+                executor=Bad(self.bundle)
+                with self.subTest(field=key,substitute=substitute),self.assertRaisesRegex(P.ProvisionError,'BOOTSTRAP_NOT_PRISTINE'):
+                    P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+                self.assertEqual(len(executor.calls),1)
+
+    def test_bootstrap_password_boolean_is_exact_and_failure_stops(self):
+        for result in ([],[{'guard_password_is_null':False}],[{'guard_password_is_null':1}],
+                       [{'guard_password_is_null':None}],[{'guard_password_is_null':True,'extra':'private'}]):
+            class Bad(FakeExecutor):
+                def execute(self, step):
+                    if step.phase=='bootstrap_helper':self.calls.append(step);return result
+                    return super().execute(step)
+            executor=Bad(self.bundle)
+            with self.subTest(shape=result),self.assertRaisesRegex(P.ProvisionError,'ACTIVITY_GUARD_PASSWORD_NOT_NULL'):
+                P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+            self.assertEqual(executor.calls[-1].phase,'bootstrap_helper')
+            self.assertEqual(len(executor.calls),4)
 
 
 if __name__ == '__main__':
