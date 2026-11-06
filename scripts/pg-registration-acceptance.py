@@ -46,6 +46,76 @@ PROVISION_DIAGNOSTIC_CLASSES = frozenset(('SQL_PROCESS_PENDING', 'SQL_PROCESS_AC
     'UNEXPECTED_NONQUERY_OUTPUT', 'EMPTY_RESULT_ACKNOWLEDGED'))
 PREFLIGHT_CHECKS = ('version', 'session_user', 'current_user', 'database_absent', 'roles_absent',
                     'activity_admitted', 'bootstrap_oid', 'bootstrap_superuser', 'event_triggers')
+# Independent fixed allowlist: never adopt a helper's exception text or expand
+# this vocabulary from a received diagnostic. It has no acceptance authority.
+CATALOG_VALIDATION_DIAGNOSTIC_CODES = frozenset((
+    'CATALOG_ACL_EXACT_GRANTS',
+    'CATALOG_ACL_GRANTOR',
+    'CATALOG_ADMISSION_ACL',
+    'CATALOG_ADMISSION_FUNCTION_COUNT',
+    'CATALOG_ADMISSION_FUNCTION_NAME',
+    'CATALOG_ADMISSION_SCHEMA',
+    'CATALOG_ADMISSION_SCHEMA_COUNT',
+    'CATALOG_BOOTSTRAP_COUNT',
+    'CATALOG_BOOTSTRAP_IDENTITY',
+    'CATALOG_BUILTIN_ROLE_ATTRIBUTES',
+    'CATALOG_BUILTIN_ROLE_INVENTORY',
+    'CATALOG_COLUMN_COLLATION',
+    'CATALOG_COLUMN_CONTRACT',
+    'CATALOG_COLUMN_COUNT',
+    'CATALOG_COLUMN_DEFAULT',
+    'CATALOG_COLUMN_MISSING',
+    'CATALOG_CONSTRAINT_ATTRIBUTES',
+    'CATALOG_CONSTRAINT_CONTRACT',
+    'CATALOG_CONSTRAINT_IDENTITY',
+    'CATALOG_CONSTRAINT_INDEX',
+    'CATALOG_CONSTRAINT_INDEX_NAME',
+    'CATALOG_CONSTRAINT_INHERITANCE',
+    'CATALOG_CONSTRAINT_NAME',
+    'CATALOG_DUPLICATE_COLUMN',
+    'CATALOG_FK_ACTION',
+    'CATALOG_FUNCTION_ATTRIBUTES',
+    'CATALOG_FUNCTION_DEFINITION',
+    'CATALOG_FUNCTION_INVENTORY',
+    'CATALOG_FUNCTION_SOURCE',
+    'CATALOG_IDENTITY',
+    'CATALOG_IDENTITY_COUNT',
+    'CATALOG_INDEX_CONTRACT',
+    'CATALOG_INDEX_INVENTORY',
+    'CATALOG_INTERNAL_TRIGGER_CONTRACT',
+    'CATALOG_MEMBERSHIP',
+    'CATALOG_NON_FK_ATTRIBUTES',
+    'CATALOG_NON_PRISTINE_DATA',
+    'CATALOG_OWNER_ACL',
+    'CATALOG_OWNER_ACL_INVENTORY',
+    'CATALOG_RELATION_ATTRIBUTES',
+    'CATALOG_RELATION_INVENTORY',
+    'CATALOG_RESULT_ENCODING',
+    'CATALOG_RESULT_SHAPE',
+    'CATALOG_RESULT_TOO_LARGE',
+    'CATALOG_ROLE_ATTRIBUTES',
+    'CATALOG_ROLE_INVENTORY',
+    'CATALOG_ROLE_OIDS',
+    'CATALOG_ROW_COUNT_INVENTORY',
+    'CATALOG_ROW_FIELDS',
+    'CATALOG_ROW_KIND',
+    'CATALOG_SEQUENCE_CONTRACT',
+    'CATALOG_SYNTHETIC_SEED',
+    'CATALOG_TRIGGER_ATTRIBUTES',
+    'CATALOG_TRIGGER_COUNT',
+    'CATALOG_TRIGGER_INVENTORY',
+    'CATALOG_TYPE_CONTRACT',
+    'CATALOG_TYPE_INVENTORY',
+    'CATALOG_UNEXPECTED_POSTURE',
+    'INSTALL_OWNER_AUTHENTICATION',
+    'INSTALL_RECEIPT_INVALID',
+    'INSTALL_RECEIPT_ORDER',
+    'INSTALL_RECEIPT_SOURCE',
+    'INSTALL_RECEIPT_TARGET',
+    'UNKNOWN',
+))
+
+
 CENSUS_MAX_BYTES = 128 << 10
 CENSUS_STATUSES = frozenset(('OBSERVED', 'SKIPPED_BUDGET', 'SKIPPED_INTERRUPTED',
     'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_FAILED', 'SQL_PROCESS_OUTPUT_LIMIT',
@@ -673,6 +743,7 @@ class Supervisor:
         self.resource_diagnostics = {}
         self.provision_diagnostics = {}
         self.preflight_diagnostics = None
+        self.catalog_validation_diagnostic = None
         self.activity_census = None
         self.activity_diagnostic_trigger = None
         self.census_attempted = False
@@ -869,6 +940,23 @@ class Supervisor:
                 'shape': {key: shape[key] for key in ('root', 'row_count', 'row', 'fields')},
                 'checks': {key: checks[key] for key in PREFLIGHT_CHECKS}}
         except Exception:
+            return
+
+    def record_catalog_validation_diagnostic(self, diagnostic):
+        # Copy only this independently allowlisted fixed schema. No catalog,
+        # observed names, SQL, exception text, or arbitrary fields may escape.
+        try:
+            if type(diagnostic) is not dict or set(diagnostic) != {"format", "authority", "failure_code"}:
+                return
+            if not all(type(value) is str for value in diagnostic.values()):
+                return
+            if (diagnostic["format"] != "worktool-registration-catalog-validation-v1"
+                    or diagnostic["authority"] != "DIAGNOSTIC_ONLY"
+                    or diagnostic["failure_code"] not in CATALOG_VALIDATION_DIAGNOSTIC_CODES):
+                return
+            self.catalog_validation_diagnostic = {"format":"worktool-registration-catalog-validation-v1",
+                "authority":"DIAGNOSTIC_ONLY", "failure_code":diagnostic["failure_code"]}
+        except BaseException:
             return
 
     def activity_census_eligible(self, outcome):
@@ -1075,6 +1163,7 @@ class Supervisor:
             raise
         except Exception:
             raise Fault('PROVISION_FAILED') from None
+        self.stage = 'install_receipt'
         self.retain_install_receipt()
         # Every setup subprocess exited, therefore all setup/psql sessions have
         # closed. Independently inspect real activity before opening fixture.
@@ -1341,6 +1430,8 @@ class Supervisor:
                         'authority': 'DIAGNOSTIC_ONLY', 'phases': dict(self.provision_diagnostics)}
                 if self.preflight_diagnostics is not None:
                     outcome['preflight_diagnostics'] = self.preflight_diagnostics
+                if self.catalog_validation_diagnostic is not None:
+                    outcome['catalog_validation_diagnostic'] = self.catalog_validation_diagnostic
                 if self.activity_census is not None:
                     outcome['activity_census'] = self.activity_census
                 if self.activity_diagnostic_trigger is not None:

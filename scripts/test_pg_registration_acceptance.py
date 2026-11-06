@@ -306,6 +306,7 @@ class SupervisorTests(unittest.TestCase):
         with patch.object(m.subprocess, 'Popen', side_effect=AssertionError('MUST_NOT_LAUNCH')):
             result = supervisor.run(handle_signals=False)
         self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE', result)
+        self.assertNotIn('catalog_validation_diagnostic',result)
         self.assertEqual(result['evidence']['leaves'], manifest['leaves'])
         self.assertEqual(len(result['installation']['execution']), 19)
         self.assertEqual(set(result['provision_diagnostics']['phases']), set(m.PROVISION_PHASES))
@@ -322,6 +323,130 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(envelope_seen[0]['executable_sha256'], result['executable_sha256'])
         self.assertNotIn('owner_dsn', json.dumps(result))
         self.assertFalse((supervisor.folder / 'envelope.json').exists())
+
+    def test_catalog_diagnostic_sink_independently_accepts_every_fixed_code(self):
+        helper=m.load_helper('pg-registration-provision.py')
+        self.assertEqual(m.CATALOG_VALIDATION_DIAGNOSTIC_CODES,helper.CATALOG_VALIDATION_DIAGNOSTIC_CODES)
+        self.assertEqual(len(m.CATALOG_VALIDATION_DIAGNOSTIC_CODES),64)
+        # This equality check is a test only. Production owns its static tuple;
+        # modifying the helper vocabulary cannot expand the supervisor's sink.
+        for code in sorted(m.CATALOG_VALIDATION_DIAGNOSTIC_CODES):
+            payload={'format':'worktool-registration-catalog-validation-v1',
+                     'authority':'DIAGNOSTIC_ONLY','failure_code':code}
+            self.s.record_catalog_validation_diagnostic(payload)
+            self.assertEqual(self.s.catalog_validation_diagnostic,payload)
+            self.assertIsNot(self.s.catalog_validation_diagnostic,payload)
+            payload['failure_code']='PRIVATE_AFTER_COPY'
+            self.assertEqual(self.s.catalog_validation_diagnostic['failure_code'],code)
+        with patch.object(helper,'CATALOG_VALIDATION_DIAGNOSTIC_CODES',frozenset({'PRIVATE_NEW_CODE'})):
+            before=copy.deepcopy(self.s.catalog_validation_diagnostic)
+            self.s.record_catalog_validation_diagnostic({'format':'worktool-registration-catalog-validation-v1',
+                'authority':'DIAGNOSTIC_ONLY','failure_code':'PRIVATE_NEW_CODE'})
+            self.assertEqual(self.s.catalog_validation_diagnostic,before)
+
+    def test_catalog_diagnostic_sink_refuses_extra_shape_unknown_and_dynamic_values(self):
+        valid={'format':'worktool-registration-catalog-validation-v1',
+               'authority':'DIAGNOSTIC_ONLY','failure_code':'CATALOG_IDENTITY'}
+        class DerivedString(str):pass
+        cases=(None,False,[],[valid],'PRIVATE_EXCEPTION',{},
+            {**valid,'raw_catalog':'PRIVATE_CATALOG'},
+            {**valid,'format':'PRIVATE_FORMAT'},{**valid,'authority':'ACCEPTANCE'},
+            {**valid,'failure_code':'CATALOG_IDENTITY PRIVATE_SQL'},
+            {**valid,'failure_code':'SOURCE_HASH_MISMATCH'},
+            {**valid,'failure_code':DerivedString('CATALOG_IDENTITY')},
+            {**valid,'failure_code':None},{**valid,'failure_code':[]},
+            {key:value for key,value in valid.items() if key!='authority'})
+        for payload in cases:
+            self.s.record_catalog_validation_diagnostic(payload)
+            self.assertIsNone(self.s.catalog_validation_diagnostic)
+        self.s.record_catalog_validation_diagnostic(valid)
+        snapshot=copy.deepcopy(self.s.catalog_validation_diagnostic)
+        for payload in cases:
+            self.s.record_catalog_validation_diagnostic(payload)
+            self.assertEqual(self.s.catalog_validation_diagnostic,snapshot)
+        self.assertNotIn('PRIVATE',json.dumps(self.s.catalog_validation_diagnostic))
+
+    def test_cross_module_catalog_validation_failures_are_redacted_and_cleanup_unchanged(self):
+        actual_root=path.resolve().parents[1]
+        for scenario in ('real_catalog_mismatch','fixed_error','unknown_exception','sink_failure','receipt_retention_failure'):
+            case=SupervisorTests(methodName='runTest');case.setUp()
+            try:
+                provision_tests=m.load_helper('test_pg_registration_provision.py')
+                provision=m.load_helper('pg-registration-provision.py')
+                evidence=m.load_helper('pg-registration-evidence.py')
+                class IntegratedExecutor(FakeExecutor):
+                    def phase(self,args):
+                        if args[0]==m.DOCKER and args[1]=='exec' and '-i' in args and self.supervisor.stage.startswith('provision_'):
+                            return 'sql_'+self.supervisor.stage.removeprefix('provision_')
+                        return super().phase(args)
+                    def call(self,args,**kwargs):
+                        result=super().call(args,**kwargs);current=self.phase(args)
+                        if current=='sql_bootstrap_preflight':
+                            return m.Result(0,m.canonical([dict(version=180006,session_user=self.supervisor.admin,
+                                current_user=self.supervisor.admin,database_absent=True,roles_absent=True,
+                                activity_admitted=True,bootstrap_oid=10,bootstrap_superuser=True,event_triggers=0)]))
+                        if current=='sql_bootstrap_helper':
+                            return m.Result(0,m.canonical([{'guard_password_is_null':True}]))
+                        if current=='sql_catalog_readback':
+                            rows=provision_tests.fake_catalog(self.supervisor.bundle)
+                            for row in rows:
+                                for key,value in row.items():
+                                    if value==provision_tests.ADMIN:row[key]=self.supervisor.admin
+                            next(row for row in rows if row['kind']=='identity')['database']=(
+                                'PRIVATE_CATALOG_DATABASE' if scenario=='real_catalog_mismatch' else self.supervisor.database)
+                            return m.Result(0,m.canonical(rows))
+                        return result
+                source_bytes=m.make_pin(actual_root)
+                case.source_pin.write_bytes(source_bytes)
+                case.config.source_root=actual_root
+                case.config.source_pin_sha256=m.sha(source_bytes)
+                executor=IntegratedExecutor()
+                supervisor=m.Supervisor(case.config,executor,provision,evidence,sleep=lambda _:None)
+                executor.supervisor=supervisor
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.object(m.subprocess,'Popen',side_effect=AssertionError('MUST_NOT_LAUNCH')))
+                    if scenario not in ('real_catalog_mismatch','receipt_retention_failure'):
+                        error=RuntimeError('PRIVATE_EXCEPTION_SQL_PASSWORD') if scenario=='unknown_exception' else provision.ProvisionError('CATALOG_MEMBERSHIP')
+                        stack.enter_context(patch.object(provision,'validate_catalog',side_effect=error))
+                    if scenario=='receipt_retention_failure':
+                        original_validator=provision.validate_catalog
+                        def valid_catalog_bad_receipt(*args):
+                            receipt=original_validator(*args)
+                            receipt.public_evidence['status']='PRIVATE_RECEIPT_STATUS'
+                            return receipt
+                        stack.enter_context(patch.object(provision,'validate_catalog',side_effect=valid_catalog_bad_receipt))
+                    if scenario=='sink_failure':
+                        stack.enter_context(patch.object(supervisor,'record_catalog_validation_diagnostic',side_effect=RuntimeError('PRIVATE_SINK_FAILURE')))
+                    result=supervisor.run(handle_signals=False)
+                with self.subTest(scenario=scenario):
+                    self.assertEqual(result['failure_code'],'PROVISION_FAILED')
+                    self.assertEqual(result['failure_stage'],'install_receipt' if scenario=='receipt_retention_failure' else 'provision_catalog_readback')
+                    self.assertEqual(result['run'],'FAIL')
+                    self.assertEqual(result['cleanup'],'CONFIRMED')
+                    self.assertEqual(executor.invocations,0)
+                    self.assertEqual(executor.removals,1)
+                    phases=result['provision_diagnostics']['phases']
+                    self.assertEqual(set(phases),set(m.PROVISION_PHASES))
+                    self.assertEqual(phases['catalog_readback'],'QUERY_RESULT_RETURNED')
+                    self.assertNotIn('installation',result)
+                    self.assertNotIn('catalog_proof_sha256',result)
+                    self.assertNotIn('activity_census',result)
+                    self.assertFalse((supervisor.folder/'envelope.json').exists())
+                    self.assertFalse((supervisor.folder/'catalog-proof.json').exists())
+                    if scenario in ('sink_failure','receipt_retention_failure'):self.assertNotIn('catalog_validation_diagnostic',result)
+                    else:
+                        expected='CATALOG_IDENTITY' if scenario=='real_catalog_mismatch' else 'UNKNOWN' if scenario=='unknown_exception' else 'CATALOG_MEMBERSHIP'
+                        self.assertEqual(result['catalog_validation_diagnostic'],{
+                            'format':'worktool-registration-catalog-validation-v1','authority':'DIAGNOSTIC_ONLY','failure_code':expected})
+                    retained=json.loads((supervisor.folder/'outcome.json').read_text())
+                    self.assertEqual(retained,result)
+                    encoded=json.dumps(result)
+                    for private in ('PRIVATE_',supervisor.admin,supervisor.database,*supervisor.credentials.values()):
+                        self.assertNotIn(private,encoded)
+                    supervisor.verify_standalone_cleanup_source()
+            finally:
+                case.tearDown()
+
 
     def make_stage_source(self):
         cache = self.root / 'shared-cache'

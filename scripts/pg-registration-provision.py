@@ -1276,6 +1276,93 @@ def _record_preflight_diagnostics(executor, result, expected):
         pass
 
 
+# Static diagnostic vocabulary only. This is not an acceptance policy and is
+# independently repeated by the supervisor. Unknown exceptions never add codes.
+CATALOG_VALIDATION_DIAGNOSTIC_CODES = frozenset((
+    'CATALOG_ACL_EXACT_GRANTS',
+    'CATALOG_ACL_GRANTOR',
+    'CATALOG_ADMISSION_ACL',
+    'CATALOG_ADMISSION_FUNCTION_COUNT',
+    'CATALOG_ADMISSION_FUNCTION_NAME',
+    'CATALOG_ADMISSION_SCHEMA',
+    'CATALOG_ADMISSION_SCHEMA_COUNT',
+    'CATALOG_BOOTSTRAP_COUNT',
+    'CATALOG_BOOTSTRAP_IDENTITY',
+    'CATALOG_BUILTIN_ROLE_ATTRIBUTES',
+    'CATALOG_BUILTIN_ROLE_INVENTORY',
+    'CATALOG_COLUMN_COLLATION',
+    'CATALOG_COLUMN_CONTRACT',
+    'CATALOG_COLUMN_COUNT',
+    'CATALOG_COLUMN_DEFAULT',
+    'CATALOG_COLUMN_MISSING',
+    'CATALOG_CONSTRAINT_ATTRIBUTES',
+    'CATALOG_CONSTRAINT_CONTRACT',
+    'CATALOG_CONSTRAINT_IDENTITY',
+    'CATALOG_CONSTRAINT_INDEX',
+    'CATALOG_CONSTRAINT_INDEX_NAME',
+    'CATALOG_CONSTRAINT_INHERITANCE',
+    'CATALOG_CONSTRAINT_NAME',
+    'CATALOG_DUPLICATE_COLUMN',
+    'CATALOG_FK_ACTION',
+    'CATALOG_FUNCTION_ATTRIBUTES',
+    'CATALOG_FUNCTION_DEFINITION',
+    'CATALOG_FUNCTION_INVENTORY',
+    'CATALOG_FUNCTION_SOURCE',
+    'CATALOG_IDENTITY',
+    'CATALOG_IDENTITY_COUNT',
+    'CATALOG_INDEX_CONTRACT',
+    'CATALOG_INDEX_INVENTORY',
+    'CATALOG_INTERNAL_TRIGGER_CONTRACT',
+    'CATALOG_MEMBERSHIP',
+    'CATALOG_NON_FK_ATTRIBUTES',
+    'CATALOG_NON_PRISTINE_DATA',
+    'CATALOG_OWNER_ACL',
+    'CATALOG_OWNER_ACL_INVENTORY',
+    'CATALOG_RELATION_ATTRIBUTES',
+    'CATALOG_RELATION_INVENTORY',
+    'CATALOG_RESULT_ENCODING',
+    'CATALOG_RESULT_SHAPE',
+    'CATALOG_RESULT_TOO_LARGE',
+    'CATALOG_ROLE_ATTRIBUTES',
+    'CATALOG_ROLE_INVENTORY',
+    'CATALOG_ROLE_OIDS',
+    'CATALOG_ROW_COUNT_INVENTORY',
+    'CATALOG_ROW_FIELDS',
+    'CATALOG_ROW_KIND',
+    'CATALOG_SEQUENCE_CONTRACT',
+    'CATALOG_SYNTHETIC_SEED',
+    'CATALOG_TRIGGER_ATTRIBUTES',
+    'CATALOG_TRIGGER_COUNT',
+    'CATALOG_TRIGGER_INVENTORY',
+    'CATALOG_TYPE_CONTRACT',
+    'CATALOG_TYPE_INVENTORY',
+    'CATALOG_UNEXPECTED_POSTURE',
+    'INSTALL_OWNER_AUTHENTICATION',
+    'INSTALL_RECEIPT_INVALID',
+    'INSTALL_RECEIPT_ORDER',
+    'INSTALL_RECEIPT_SOURCE',
+    'INSTALL_RECEIPT_TARGET',
+    'UNKNOWN',
+))
+
+
+def _record_catalog_validation_diagnostic(executor, error):
+    # Do not stringify exceptions, expose their arguments, or inspect catalogs.
+    # Even a broken optional sink cannot replace the original validation error.
+    try:
+        code = "UNKNOWN"
+        if type(error) is ProvisionError and type(error.args) is tuple and len(error.args) == 1:
+            candidate = error.args[0]
+            if type(candidate) is str and candidate in CATALOG_VALIDATION_DIAGNOSTIC_CODES:
+                code = candidate
+        recorder = getattr(executor, "record_catalog_validation_diagnostic", None)
+        if callable(recorder):
+            recorder({"format":"worktool-registration-catalog-validation-v1",
+                      "authority":"DIAGNOSTIC_ONLY", "failure_code":code})
+    except BaseException:
+        pass
+
+
 def _exact_preflight_match(result, expected):
     if type(result) is not list or len(result) != 1 or type(result[0]) is not dict:
         return False
@@ -1312,7 +1399,11 @@ def provision(executor, bundle, database, bootstrap_role, role_passwords):
             require(result == [], "PROVISION_UNEXPECTED_OUTPUT_STOP_NO_RETRY")
         receipts.append({"phase":step.phase,"login_role":step.login_role,"database":step.database,"sql_sha256":sha(step.sql.encode()),"acknowledged":True})
     require(catalog is not None, "CATALOG_NOT_READ")
-    return validate_catalog(catalog, bundle, database, receipts)
+    try:
+        return validate_catalog(catalog, bundle, database, receipts)
+    except BaseException as error:
+        _record_catalog_validation_diagnostic(executor, error)
+        raise
 
 
 def _definition_vocabulary(texts):

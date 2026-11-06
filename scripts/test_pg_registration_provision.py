@@ -1022,5 +1022,123 @@ class OIDWireTypeTests(unittest.TestCase):
         self.assertIs(type(receipt.private_metadata['admission_function_oid']),int)
 
 
+class CatalogValidationDiagnosticTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle=P.load_and_verify_sources(ROOT)
+        cls.plan=P.build_provision_plan(cls.bundle,DB,ADMIN,PASSWORDS)
+
+    def test_every_static_code_and_only_existing_catalog_install_checks(self):
+        import ast
+        tree=ast.parse(Path(SPEC.origin).read_text())
+        expected=set()
+        for fn in tree.body:
+            if isinstance(fn,ast.FunctionDef) and fn.name in ('validate_catalog','validate_function','_bounded_rows'):
+                expected.update(node.value for node in ast.walk(fn)
+                    if isinstance(node,ast.Constant) and type(node.value) is str
+                    and node.value.startswith(('CATALOG_','INSTALL_')))
+        self.assertEqual(len(expected),63)
+        self.assertEqual(P.CATALOG_VALIDATION_DIAGNOSTIC_CODES,expected|{'UNKNOWN'})
+        for code in sorted(expected|{'UNKNOWN'}):
+            records=[]
+            sink=type('Sink',(),{'record_catalog_validation_diagnostic':lambda _,record:records.append(record)})()
+            P._record_catalog_validation_diagnostic(sink,P.ProvisionError(code))
+            self.assertEqual(records,[{'format':'worktool-registration-catalog-validation-v1',
+                'authority':'DIAGNOSTIC_ONLY','failure_code':code}])
+            self.assertLess(len(P.canonical(records[0])),180)
+
+    def test_unknown_exceptions_and_spoofed_codes_cannot_escape(self):
+        class Hostile(RuntimeError):
+            def __str__(self):raise AssertionError('Never stringify an exception')
+        class Derived(P.ProvisionError):pass
+        class DerivedString(str):pass
+        secret='PRIVATE_PASSWORD_SQL_ROLE_DATABASE_SESSION'
+        errors=(RuntimeError(secret),Hostile(secret),RuntimeError('CATALOG_IDENTITY'),
+                Derived('CATALOG_IDENTITY'),P.ProvisionError(DerivedString('CATALOG_IDENTITY')),
+                P.ProvisionError(),P.ProvisionError('CATALOG_IDENTITY',secret),
+                P.ProvisionError('CATALOG_IDENTITY '+secret),P.ProvisionError(secret),
+                P.ProvisionError({'CATALOG_IDENTITY':secret}),KeyboardInterrupt(secret))
+        for error in errors:
+            records=[]
+            sink=type('Sink',(),{'record_catalog_validation_diagnostic':lambda _,record:records.append(record)})()
+            P._record_catalog_validation_diagnostic(sink,error)
+            with self.subTest(error_type=type(error).__name__):
+                self.assertEqual(records,[{'format':'worktool-registration-catalog-validation-v1',
+                    'authority':'DIAGNOSTIC_ONLY','failure_code':'UNKNOWN'}])
+                self.assertNotIn(secret,json.dumps(records))
+
+    def test_failed_validation_preserves_exception_and_all_nineteen_calls(self):
+        for error in (P.ProvisionError('CATALOG_IDENTITY'),RuntimeError('PRIVATE_SQL_PASSWORD'),KeyboardInterrupt()):
+            class Sink(FakeExecutor):
+                def __init__(self,bundle):super().__init__(bundle);self.records=[]
+                def record_catalog_validation_diagnostic(self,record):self.records.append(record)
+            executor=Sink(self.bundle)
+            with mock.patch.object(P,'validate_catalog',side_effect=error):
+                with self.assertRaises(BaseException) as caught:
+                    P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+            self.assertIs(caught.exception,error)
+            self.assertEqual(executor.calls,list(self.plan))
+            self.assertEqual(executor.records,[{'format':'worktool-registration-catalog-validation-v1',
+                'authority':'DIAGNOSTIC_ONLY','failure_code':'CATALOG_IDENTITY' if type(error) is P.ProvisionError else 'UNKNOWN'}])
+
+    def test_sink_failures_cannot_replace_validation_or_change_success(self):
+        original=P.ProvisionError('CATALOG_MEMBERSHIP')
+        for failure in (RuntimeError('PRIVATE_SINK_ERROR'),KeyboardInterrupt(),SystemExit(23)):
+            class Sink(FakeExecutor):
+                def record_catalog_validation_diagnostic(self,record):raise failure
+            executor=Sink(self.bundle)
+            with mock.patch.object(P,'validate_catalog',side_effect=original):
+                with self.assertRaises(P.ProvisionError) as caught:
+                    P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+            self.assertIs(caught.exception,original)
+            self.assertEqual(executor.calls,list(self.plan))
+        class GetterFailure(FakeExecutor):
+            @property
+            def record_catalog_validation_diagnostic(self):raise RuntimeError('PRIVATE_GETTER')
+        with mock.patch.object(P,'validate_catalog',side_effect=original):
+            with self.assertRaises(P.ProvisionError) as caught:
+                P.provision(GetterFailure(self.bundle),self.bundle,DB,ADMIN,PASSWORDS)
+        self.assertIs(caught.exception,original)
+        class Never(FakeExecutor):
+            def record_catalog_validation_diagnostic(self,record):raise AssertionError('No success diagnostic')
+        receipt=P.provision(Never(self.bundle),self.bundle,DB,ADMIN,PASSWORDS)
+        self.assertEqual(receipt.public_evidence['status'],'VERIFIED_TRUSTED_INSTALLATION_PROVENANCE')
+
+    def test_real_catalog_rejection_reports_only_code_and_earlier_failure_has_no_record(self):
+        class Sink(FakeExecutor):
+            def __init__(self,bundle,**kwargs):super().__init__(bundle,**kwargs);self.records=[]
+            def record_catalog_validation_diagnostic(self,record):self.records.append(record)
+        raw=fake_catalog(self.bundle)
+        next(r for r in raw if r['kind']=='identity')['database']='PRIVATE_DYNAMIC_DATABASE'
+        executor=Sink(self.bundle,catalog=raw)
+        with self.assertRaisesRegex(P.ProvisionError,'^CATALOG_IDENTITY$'):
+            P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+        self.assertEqual(executor.records[0]['failure_code'],'CATALOG_IDENTITY')
+        self.assertNotIn('PRIVATE_DYNAMIC_DATABASE',json.dumps(executor.records))
+        for phase in ('bootstrap_preflight','bootstrap_helper','catalog_readback'):
+            executor=Sink(self.bundle,fail_phase=phase)
+            with self.assertRaises(P.ProvisionError):P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+            self.assertEqual(executor.records,[])
+
+    def test_original_acceptance_and_sql_functions_are_ast_identical(self):
+        import ast
+        expected={'build_provision_plan': 'd94ccddf6fbd7bab61182ec57176d8d97711b12951a801b138e0f94f4c8a460a', '_session_guard': 'f55cf7d8eab23979f89ba5a461b23a7dfba7db31e1409ded1b470fed5ec66afa', '_bootstrap_query': '3f47d6eb120c746a5c8baa28076be6ac16ad4c1d7dd08968f6ba383dc2649864', '_admission_catalog_predicate': 'ab432717202915d7715e1469f94d9a4c03b3ab2f08fc234739df043556536967', 'admission_catalog_predicate': '418d56fb0e2a7d2d8a8454cf490fc118e9672636a5b13b26cc32c882eef7b620', 'owner_admission_query': 'b49214efabe09fe6e71c3c653be3633694ce09d96ce5e29a29934f3bdcb26cba', 'catalog_query': '3938f2c476ab7a2e0465b4f2a81a736369e21024a592fce707347f42f5c8aeee', '_bounded_rows': 'ef0ae6801d00e98ddfe4750f3f8af17b913025849478118fc00e2d389001cde3', 'validate_function': 'c27e19b356f75c48f69d480c6c1c75df5a2000a9db376210e5aef4f8a30cc6a2', 'validate_catalog': 'ca4620cd99dc6b6a786ad4f172e0caab6117ee577a8643b5679b70d45436851e', '_exact_preflight_match': '99347a24fc2c7b072b2293eeb63ca3012835bbecb35e62e5a16204046d0b9bc4', 'provision': 'c1f3d6f7ab0986f06539937ff1a25d5736f5197cc21680ebe77b8674ec6f38f8'}
+        tree=ast.parse(Path(SPEC.origin).read_text())
+        actual={}
+        for fn in tree.body:
+            if isinstance(fn,ast.FunctionDef) and fn.name in expected:
+                if fn.name=='provision':
+                    wrapper=fn.body[-1]
+                    self.assertIsInstance(wrapper,ast.Try)
+                    self.assertEqual(len(wrapper.body),1)
+                    self.assertIsInstance(wrapper.body[0],ast.Return)
+                    self.assertEqual(len(wrapper.handlers),1)
+                    self.assertIsInstance(wrapper.handlers[0].body[-1],ast.Raise)
+                    self.assertIsNone(wrapper.handlers[0].body[-1].exc)
+                    fn.body[-1:]=wrapper.body
+                actual[fn.name]=P.sha(ast.dump(fn).encode())
+        self.assertEqual(actual,expected)
+
+
 if __name__ == '__main__':
     unittest.main()
