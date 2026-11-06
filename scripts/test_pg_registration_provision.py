@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest import mock
@@ -95,6 +96,86 @@ class FakeExecutor:
         if step.phase=="catalog_readback":
             return copy.deepcopy(self.catalog) if self.catalog is not None else fake_catalog(self.bundle)
         return []
+
+
+class RegistrationKeyReferenceRegexTests(unittest.TestCase):
+    """Offline language/specification checks, not execution of PostgreSQL regex.
+
+    PostgreSQL ARE repetition bounds are at most 255. One mandatory printable
+    ASCII character plus 0..255 more preserves the intended 1..256 contract.
+    """
+    expected_pattern = r'^[!-~][!-~]{0,255}$'
+    expected_sources = {
+        'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql':
+            'a24513e16cce809e21666ab43e2cb782b08eef44b0cbc092cdf75ff245a87c42',
+        'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql':
+            '7687a2546f75c9aedb1d6176ab466d259da8e7b4e929fe03f1e5693fd3e4bf1a',
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle = P.load_and_verify_sources(ROOT)
+        cls.patterns = {}
+        for path in cls.expected_sources:
+            text = dict(cls.bundle.texts)[path]
+            matches = re.findall(r'''key_ref text NOT NULL CHECK \(key_ref COLLATE pg_catalog\."C" ~ '([^']+)'\)''', text)
+            if len(matches) != 1:
+                raise AssertionError((path, 'expected exactly one key_ref check'))
+            cls.patterns[path] = matches[0]
+
+    def test_exact_source_pattern_collation_and_pins(self):
+        for path, digest in self.expected_sources.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.patterns[path], self.expected_pattern)
+                self.assertEqual(P.SOURCE_PINS[path], digest)
+                self.assertEqual(P.sha((ROOT / path).read_bytes()), digest)
+
+    def test_lengths_and_all_printable_ascii_against_independent_contract(self):
+        # Expected acceptance is computed without any regular expression.
+        printable = ''.join(chr(codepoint) for codepoint in range(33, 127))
+        samples = [char * length for char in printable
+                   for length in (0, 1, 2, 254, 255, 256, 257, 512)]
+        samples += [(printable * 3)[:length] for length in (1, 94, 255, 256, 257)]
+        for path, pattern in self.patterns.items():
+            for sample in samples:
+                expected = 1 <= len(sample) <= 256 and all(33 <= ord(c) <= 126 for c in sample)
+                with self.subTest(path=path, length=len(sample), prefix=sample[:1]):
+                    self.assertEqual(re.fullmatch(pattern, sample) is not None, expected)
+
+    def test_controls_space_non_ascii_and_embedded_illegal_characters_rejected(self):
+        forbidden = [chr(c) for c in range(33)] + [chr(c) for c in range(127, 256)]
+        forbidden += ['\u0100', '\u200b', '\u2028', '\u4e2d', '\U0001f600', '\U0010ffff']
+        for path, pattern in self.patterns.items():
+            for character in forbidden:
+                for sample in (character, character+'a', 'a'+character, 'a'+character+'z',
+                               'a'*255+character):
+                    with self.subTest(path=path, sample=repr(sample)):
+                        self.assertIsNone(re.fullmatch(pattern, sample))
+
+    def test_all_pinned_sql_repetition_bounds_are_within_postgresql_limit(self):
+        # Scan only the fixed SQL sources, including dollar-quoted function/DDL
+        # bodies. This deliberately does not constrain Go/Python regex syntax.
+        bounds = []
+        for path, text in self.bundle.texts:
+            for match in re.finditer(r'\{([0-9]+)(?:,([0-9]*))?\}', text):
+                for value in match.groups():
+                    if value is not None and value != '':
+                        bounds.append((path, int(value)))
+                        self.assertLessEqual(int(value), 255, (path, match.group()))
+        self.assertTrue(bounds)
+        self.assertEqual(sum(value == 255 for _, value in bounds), 2)
+
+    def test_old_and_weakened_patterns_are_rejected_by_source_binding(self):
+        for path in self.expected_sources:
+            for pattern in (r'^[!-~]{1,256}$', r'^[!-~]{0,255}$',
+                            r'^[!-~][!-~]{0,254}$', r'^[ -~][ -~]{0,255}$'):
+                bad = P.SourceBundle(tuple((p, text.replace(self.expected_pattern, pattern) if p == path else text)
+                                           for p, text in self.bundle.texts),
+                                     self.bundle.sql_manifest_sha256, self.bundle.contract)
+                executor = FakeExecutor(bad)
+                with self.subTest(path=path, pattern=pattern), self.assertRaisesRegex(P.ProvisionError, 'SOURCE_HASH_MISMATCH'):
+                    P.provision(executor, bad, DB, ADMIN, PASSWORDS)
+                self.assertEqual(executor.calls, [])
 
 
 class ProvisionTests(unittest.TestCase):
@@ -594,8 +675,8 @@ class ActivityCensusTests(unittest.TestCase):
             '9f649e04074603da39b73f573c2f6f5e27c8d3e196187c4b883957ec47de00bb',
             'd8061b3a5aa0c38d8bb44e386eb58c4f624c96e410cdd73a29cd3b3243d90625',
             'aa47f36ef4e8afc1d850a38adf7e8c4bf64751e0d5bb13c58c474e2369b95f9b',
-            '982db91f0984025ba9f44906dcedbac84efa2b45221f41111f5c3dbffbd23f33',
-            'c99f6ab3ce5a3ffc793544235925cd8ae8c07fb5cea5fd92e66fc338fefd7550',
+            '51bc3bdaba568ff09cf682d101373ec94c809998e01abb314b36270ae0cc1184',
+            '8a12ebd1e454aadb923ea3c6e03193f0ba260125164ab592c90c15d10fdfca90',
             'fee3e64428c75ed5dac1f5fb6b2526d578b518453283098731188d51c5993a9e',
             'd154a1d63f166dd17c7625e7b9068f22139a1c13211f6847895978677b883fd9')
         plan=P.build_provision_plan(P.load_and_verify_sources(ROOT),DB,ADMIN,PASSWORDS)

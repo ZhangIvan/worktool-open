@@ -102,7 +102,7 @@ BEGIN
       destination_id text NOT NULL CHECK (destination_id COLLATE pg_catalog."C" ~ '^[A-Za-z0-9_-]{1,128}$'),
       key_version bigint NOT NULL CHECK (key_version > 0),
       key_identity text NOT NULL CHECK (key_identity COLLATE pg_catalog."C" ~ '^worktool-destination-key-v1:sha256:[0-9a-f]{64}$'),
-      key_ref text NOT NULL CHECK (key_ref COLLATE pg_catalog."C" ~ '^[!-~]{1,256}$'),
+      key_ref text NOT NULL CHECK (key_ref COLLATE pg_catalog."C" ~ '^[!-~][!-~]{0,255}$'),
       provider_authority_id text NOT NULL CHECK (provider_authority_id COLLATE pg_catalog."C" ~ '^[A-Za-z0-9_-]{1,128}$'),
       revision_kind text NOT NULL CHECK (revision_kind = 'exact'),
       revision_id text NOT NULL CHECK (revision_id COLLATE pg_catalog."C" ~ '^[A-Za-z0-9_-]{1,128}$'),

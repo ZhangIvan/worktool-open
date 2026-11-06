@@ -172,7 +172,7 @@ CREATE TABLE wt_synthetic_registry.registration_prepared_grants (
     AND pg_catalog.array_lower(cidrs, 1) = 1 AND pg_catalog.cardinality(cidrs) BETWEEN 1 AND 32
     AND pg_catalog.array_position(cidrs, NULL::text) IS NULL),
   signature_profile text NOT NULL CHECK (signature_profile = 'worktool-callback-hmac-sha256-v1'),
-  key_ref text NOT NULL CHECK (key_ref COLLATE pg_catalog."C" ~ '^[!-~]{1,256}$'),
+  key_ref text NOT NULL CHECK (key_ref COLLATE pg_catalog."C" ~ '^[!-~][!-~]{0,255}$'),
   provider_authority_id text NOT NULL CHECK (provider_authority_id COLLATE pg_catalog."C" ~ '^[A-Za-z0-9_-]{1,128}$'),
   revision_kind text NOT NULL CHECK (revision_kind = 'exact'),
   revision_id text NOT NULL CHECK (revision_id COLLATE pg_catalog."C" ~ '^[A-Za-z0-9_-]{1,128}$'),

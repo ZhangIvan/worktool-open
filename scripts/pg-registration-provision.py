@@ -50,8 +50,8 @@ SOURCE_PINS = {
  'backend-go/migrations/0008_gateway_session_result.sql': 'eaabf4b1d6605590acde493aab141e2efd0649ddf922cb94fead35592838f6c7',
  'backend-go/migrations/0009_callback_destination_versions.sql': '68519d55a29dee075ba5ec541a98de2cfeb7c2e6bdcf6f8396f83bc264cfcfd6',
  'backend-go/migrations/0010_callback_replay_receipts.sql': '0b19aa77527642a9452365bde8631176c9241b2fb682a784e94cf92933d954fd',
- 'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql': '042a674dc4cff90ffbdbb28ce43c29c1d6b1c4378803572a308b516c4daaccfc',
- 'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql': '8407530ba3b382ddea3b81ef4bdc4185792a87a9b6d6ac1a6e0e475f962bba6a',
+ 'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql': 'a24513e16cce809e21666ab43e2cb782b08eef44b0cbc092cdf75ff245a87c42',
+ 'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql': '7687a2546f75c9aedb1d6176ab466d259da8e7b4e929fe03f1e5693fd3e4bf1a',
  ADMISSION_PATH: 'e8f5bf0e7d4db1315303c20a9bacb17fdc3d1c6943602176c33fc445444c2382',
 }
 REGISTRY_PATH, BOUNDARY_PATH = tuple(SOURCE_PINS)[-3:-1]
