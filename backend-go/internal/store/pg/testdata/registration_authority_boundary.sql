@@ -356,8 +356,8 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'REGISTRATION_CONSUMER_IDENTITY';
   END IF;
   IF g.database_name IS DISTINCT FROM pg_catalog.current_database()
-     OR g.database_oid IS DISTINCT FROM (SELECT d.oid FROM pg_catalog.pg_database AS d
-          WHERE d.datname = pg_catalog.current_database())
+     OR g.database_oid IS DISTINCT FROM (SELECT catalog_db.oid FROM pg_catalog.pg_database AS catalog_db
+          WHERE catalog_db.datname = pg_catalog.current_database())
      OR g.schema_oid IS DISTINCT FROM (SELECT n.oid FROM pg_catalog.pg_namespace AS n
           JOIN pg_catalog.pg_roles AS r ON r.oid = n.nspowner
           WHERE n.nspname = 'wt_synthetic_registry' AND r.rolname = 'wt_registration_lab_owner')
@@ -607,8 +607,8 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'REGISTRATION_CONSUMER_IDENTITY';
   END IF;
   IF g.database_name IS DISTINCT FROM pg_catalog.current_database()
-     OR g.database_oid IS DISTINCT FROM (SELECT d.oid FROM pg_catalog.pg_database AS d
-          WHERE d.datname = pg_catalog.current_database())
+     OR g.database_oid IS DISTINCT FROM (SELECT catalog_db.oid FROM pg_catalog.pg_database AS catalog_db
+          WHERE catalog_db.datname = pg_catalog.current_database())
      OR g.schema_oid IS DISTINCT FROM (SELECT n.oid FROM pg_catalog.pg_namespace AS n
           JOIN pg_catalog.pg_roles AS r ON r.oid = n.nspowner
           WHERE n.nspname = 'wt_synthetic_registry' AND r.rolname = 'wt_registration_lab_owner')

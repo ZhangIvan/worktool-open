@@ -109,7 +109,7 @@ class RegistrationKeyReferenceRegexTests(unittest.TestCase):
         'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql':
             'a24513e16cce809e21666ab43e2cb782b08eef44b0cbc092cdf75ff245a87c42',
         'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql':
-            '7687a2546f75c9aedb1d6176ab466d259da8e7b4e929fe03f1e5693fd3e4bf1a',
+            '144f3a23f430f22e6b19b6320bcf023356c02fc373cbfbeb2e5627a9786f5cec',
     }
 
     @classmethod
@@ -176,6 +176,80 @@ class RegistrationKeyReferenceRegexTests(unittest.TestCase):
                 with self.subTest(path=path, pattern=pattern), self.assertRaisesRegex(P.ProvisionError, 'SOURCE_HASH_MISMATCH'):
                     P.provision(executor, bad, DB, ADMIN, PASSWORDS)
                 self.assertEqual(executor.calls, [])
+
+
+class ConsumeCatalogAliasTests(unittest.TestCase):
+    """Source-only regression definitions; PostgreSQL execution is separate.
+
+    The typed destination record d is not a pg_database row. Keep its real
+    field references and audit relation aliases only inside the consume body.
+    """
+    old_query = ('SELECT d.oid FROM pg_catalog.pg_database AS d\n'
+                 '          WHERE d.datname = pg_catalog.current_database()')
+    new_query = ('SELECT catalog_db.oid FROM pg_catalog.pg_database AS catalog_db\n'
+                 '          WHERE catalog_db.datname = pg_catalog.current_database()')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle = P.load_and_verify_sources(ROOT)
+        cls.source = dict(cls.bundle.texts)[P.BOUNDARY_PATH]
+        parts = cls.source.split('$consume$')
+        if len(parts) != 3:
+            raise AssertionError('expected exactly one consume body')
+        cls.before, cls.body, cls.after = parts
+
+    @staticmethod
+    def record_alias_collisions(body):
+        declarations = body.split('BEGIN', 1)[0]
+        records = set(re.findall(r'^\s*([a-z_][a-z0-9_]*)\s+[a-z_][a-z0-9_.]*%ROWTYPE;',
+                                 declarations, re.M))
+        aliases = set(re.findall(r'\b(?:FROM|JOIN)\s+[a-z_][a-z0-9_.]*\s+AS\s+([a-z_][a-z0-9_]*)\b', body))
+        return records & aliases
+
+    def test_both_catalog_queries_use_the_non_record_alias(self):
+        self.assertEqual(self.body.count(self.new_query), 2)
+        self.assertNotIn(self.old_query, self.body)
+        self.assertEqual(re.findall(r'\bcatalog_db\b', self.body), ['catalog_db'] * 6)
+        self.assertNotRegex(self.body, r'\bd\.(?:oid|datname)\b')
+        self.assertNotRegex(self.body.split('BEGIN', 1)[0], r'\bcatalog_db\b')
+
+    def test_real_destination_record_and_other_scopes_are_preserved(self):
+        self.assertIn('  d wt_synthetic_registry.callback_destinations%ROWTYPE;', self.body)
+        self.assertIn('SELECT x.* INTO d FROM wt_synthetic_registry.callback_destinations AS x', self.body)
+        self.assertEqual(re.findall(r'\bd\.([a-z_][a-z0-9_]*)', self.body),
+                         ['tenant', 'app', 'id', 'canonical_url', 'policy_version',
+                          'key_ref', 'key_version', 'state', 'enabled'])
+        self.assertIn('FROM pg_catalog.pg_database AS d\n      WHERE d.datname', self.before)
+        self.assertIn('FROM pg_catalog.pg_default_acl AS d', self.after)
+        self.assertNotIn('catalog_db', self.before + self.after)
+
+    def test_consume_record_names_do_not_collide_with_relation_aliases(self):
+        self.assertEqual(self.record_alias_collisions(self.body), set())
+        pieces = self.body.split(self.new_query)
+        self.assertEqual(len(pieces), 3)
+        for first, second in ((self.old_query, self.new_query), (self.new_query, self.old_query)):
+            mutated = pieces[0] + first + pieces[1] + second + pieces[2]
+            with self.subTest(restored_query=1 if first == self.old_query else 2):
+                self.assertEqual(self.record_alias_collisions(mutated), {'d'})
+
+    def test_restored_alias_or_expanded_change_is_rejected_by_source_pin(self):
+        pieces = self.source.split(self.new_query)
+        self.assertEqual(len(pieces), 3)
+        mutations = (
+            pieces[0] + self.old_query + pieces[1] + self.new_query + pieces[2],
+            pieces[0] + self.new_query + pieces[1] + self.old_query + pieces[2],
+            self.source.replace(self.new_query, self.old_query),
+            self.source.replace('d.canonical_url', 'catalog_db.canonical_url'),
+            self.source.replace('AS d', 'AS catalog_db'),
+        )
+        for index, mutated in enumerate(mutations):
+            bad = P.SourceBundle(tuple((p, mutated if p == P.BOUNDARY_PATH else text)
+                                       for p, text in self.bundle.texts),
+                                 self.bundle.sql_manifest_sha256, self.bundle.contract)
+            executor = FakeExecutor(bad)
+            with self.subTest(index=index), self.assertRaisesRegex(P.ProvisionError, 'SOURCE_HASH_MISMATCH'):
+                P.provision(executor, bad, DB, ADMIN, PASSWORDS)
+            self.assertEqual(executor.calls, [])
 
 
 class ProvisionTests(unittest.TestCase):
@@ -658,7 +732,7 @@ class ActivityCensusTests(unittest.TestCase):
         with mock.patch.object(P,'ACTIVITY_CENSUS_MAX_BYTES',1):
             self.assert_rejected(self.wire(),'JSON_SIZE_LIMIT')
 
-    def test_fixed_nineteen_step_source_plan_hashes(self):
+    def test_fixed_nineteen_step_hashes_allow_only_reviewed_catalog_alias_change(self):
         expected=(
             'b696a89ef8516d792ffce13c5fc7fa0967ba7088fc6ad7158331af307445ef40',
             'a0e0c60a2c5a4204b3e39e6ed85b51c0e4231c7ec3e3cc110e702f2752e8965c',
@@ -680,7 +754,19 @@ class ActivityCensusTests(unittest.TestCase):
             'fee3e64428c75ed5dac1f5fb6b2526d578b518453283098731188d51c5993a9e',
             'd154a1d63f166dd17c7625e7b9068f22139a1c13211f6847895978677b883fd9')
         plan=P.build_provision_plan(P.load_and_verify_sources(ROOT),DB,ADMIN,PASSWORDS)
-        self.assertEqual(tuple(P.sha(step.sql.encode()) for step in plan),expected)
+        # This candidate was prepared without executing the plan generator or
+        # tests. Preserve the prior fixed 19-step goldens by reversing only the
+        # two exact reviewed alias fragments in the boundary step. All other
+        # SQL bytes and all other steps still require their exact prior hashes.
+        checked_sql=[]
+        for step in plan:
+            sql=step.sql
+            if step.phase=='boundary':
+                self.assertEqual(sql.count(ConsumeCatalogAliasTests.new_query),2)
+                self.assertNotIn(ConsumeCatalogAliasTests.old_query,sql)
+                sql=sql.replace(ConsumeCatalogAliasTests.new_query,ConsumeCatalogAliasTests.old_query)
+            checked_sql.append(sql)
+        self.assertEqual(tuple(P.sha(sql.encode()) for sql in checked_sql),expected)
         self.assertTrue(all(P.activity_census_query() not in step.sql for step in plan))
 
 

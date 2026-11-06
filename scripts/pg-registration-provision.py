@@ -51,7 +51,7 @@ SOURCE_PINS = {
  'backend-go/migrations/0009_callback_destination_versions.sql': '68519d55a29dee075ba5ec541a98de2cfeb7c2e6bdcf6f8396f83bc264cfcfd6',
  'backend-go/migrations/0010_callback_replay_receipts.sql': '0b19aa77527642a9452365bde8631176c9241b2fb682a784e94cf92933d954fd',
  'backend-go/internal/store/pg/testdata/fresh_registration_registry_candidate.sql': 'a24513e16cce809e21666ab43e2cb782b08eef44b0cbc092cdf75ff245a87c42',
- 'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql': '7687a2546f75c9aedb1d6176ab466d259da8e7b4e929fe03f1e5693fd3e4bf1a',
+ 'backend-go/internal/store/pg/testdata/registration_authority_boundary.sql': '144f3a23f430f22e6b19b6320bcf023356c02fc373cbfbeb2e5627a9786f5cec',
  ADMISSION_PATH: 'e8f5bf0e7d4db1315303c20a9bacb17fdc3d1c6943602176c33fc445444c2382',
 }
 REGISTRY_PATH, BOUNDARY_PATH = tuple(SOURCE_PINS)[-3:-1]
