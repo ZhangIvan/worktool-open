@@ -1009,6 +1009,13 @@ def expected_constraints(contract):
     result.append({"table":"@epoch_ms","kind":"c","keys":(),"ref_table":"","ref_keys":(),"deferrable":False,"deferred":False,"name":"","source":"CHECK(VALUE>=0 AND VALUE<=9007199254740991)","expr":"VALUE>=0 AND VALUE<=9007199254740991"})
     used = set()
     for c in result:
+        # Fixed REL_18_6 semantics for the pinned non-partitioned, non-inherited
+        # DDL: index.c:index_constraint_create and tablecmds.c:addFkConstraint
+        # mark PK/UNIQUE/FK non-inheritable. Plain CHECK, domain CHECK, explicit
+        # NOT NULL and makeNotNullConstraint (PK/IDENTITY) default to inheritable.
+        # The narrow source parser rejects NO INHERIT; never learn this from a
+        # catalog row or choose the expected value from its observed kind.
+        c["no_inherit"] = {"c": False, "p": True, "u": True, "f": True, "n": False}[c["kind"]]
         if c["name"]:
             name = c["name"]
         else:
@@ -1142,12 +1149,11 @@ def validate_catalog(raw, bundle, database, execution_receipt):
     named = {(c["table"],c["catalog_name"]):_constraint_key(c) for c in expected}
     actual_named = {(c["table"],c["name"]):_constraint_key(c,True) for c in groups["constraint"]}
     require(len(actual_named) == len(groups["constraint"]) and all(actual_named.get(k) == v for k,v in named.items()), "CATALOG_CONSTRAINT_IDENTITY")
+    expected_no_inherit = {(c["table"],c["catalog_name"]):c["no_inherit"] for c in expected}
     for c in groups["constraint"]:
         require(type(c["name"]) is str and re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", c["name"]), "CATALOG_CONSTRAINT_NAME")
         require(c["validated"] is True and c["enforced"] is True and c["local"] is True and c["inherit_count"] == 0 and _bounded_definition(c["definition"]), "CATALOG_CONSTRAINT_ATTRIBUTES")
-        # NOT NULL is not inheritable in the same way as table CHECK; PG18 may
-        # set connoinherit true. CHECK must retain the source default false.
-        require(c["constraint_kind"] == 'n' or c["no_inherit"] is False, "CATALOG_CONSTRAINT_INHERITANCE")
+        require(c["no_inherit"] is expected_no_inherit[(c["table"],c["name"])], "CATALOG_CONSTRAINT_INHERITANCE")
         if c["constraint_kind"] == "f":
             require(c["ref_schema"] == SCHEMA and c["match"] == "s" and c["update_action"] == "a" and c["delete_action"] == "a", "CATALOG_FK_ACTION")
         else:

@@ -54,7 +54,7 @@ def fake_catalog(bundle):
     for i,e in enumerate(constraints):
         name = e["catalog_name"]
         idx = name if e["kind"] in ("p","u") else None
-        add("constraint",table=e["table"],name=name,constraint_kind=e["kind"],keys=list(e["keys"]),ref_table=e["ref_table"] or None,ref_schema=P.SCHEMA if e["kind"]=="f" else None,ref_keys=list(e["ref_keys"]),deferrable=e["deferrable"],deferred=e["deferred"],validated=True,enforced=True,local=True,inherit_count=0,no_inherit=False,match="s" if e["kind"]=="f" else " ",update_action="a" if e["kind"]=="f" else " ",delete_action="a" if e["kind"]=="f" else " ",definition=e["source"],index=idx)
+        add("constraint",table=e["table"],name=name,constraint_kind=e["kind"],keys=list(e["keys"]),ref_table=e["ref_table"] or None,ref_schema=P.SCHEMA if e["kind"]=="f" else None,ref_keys=list(e["ref_keys"]),deferrable=e["deferrable"],deferred=e["deferred"],validated=True,enforced=True,local=True,inherit_count=0,no_inherit={"c":False,"p":True,"u":True,"f":True,"n":False}[e["kind"]],match="s" if e["kind"]=="f" else " ",update_action="a" if e["kind"]=="f" else " ",delete_action="a" if e["kind"]=="f" else " ",definition=e["source"],index=idx)
         if idx:
             indexes.append(dict(name=idx,table=e["table"],keys=e["keys"],options=(0,)*len(e["keys"]),unique=True,primary=e["kind"]=="p",predicate_source=""))
         if e["kind"]=="f":
@@ -1120,9 +1120,9 @@ class CatalogValidationDiagnosticTests(unittest.TestCase):
             with self.assertRaises(P.ProvisionError):P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
             self.assertEqual(executor.records,[])
 
-    def test_original_acceptance_and_sql_functions_are_ast_identical(self):
+    def test_diagnostic_wrapper_and_reviewed_sql_validation_ast(self):
         import ast
-        expected={'build_provision_plan': 'd94ccddf6fbd7bab61182ec57176d8d97711b12951a801b138e0f94f4c8a460a', '_session_guard': 'f55cf7d8eab23979f89ba5a461b23a7dfba7db31e1409ded1b470fed5ec66afa', '_bootstrap_query': '3f47d6eb120c746a5c8baa28076be6ac16ad4c1d7dd08968f6ba383dc2649864', '_admission_catalog_predicate': 'ab432717202915d7715e1469f94d9a4c03b3ab2f08fc234739df043556536967', 'admission_catalog_predicate': '418d56fb0e2a7d2d8a8454cf490fc118e9672636a5b13b26cc32c882eef7b620', 'owner_admission_query': 'b49214efabe09fe6e71c3c653be3633694ce09d96ce5e29a29934f3bdcb26cba', 'catalog_query': '3938f2c476ab7a2e0465b4f2a81a736369e21024a592fce707347f42f5c8aeee', '_bounded_rows': 'ef0ae6801d00e98ddfe4750f3f8af17b913025849478118fc00e2d389001cde3', 'validate_function': 'c27e19b356f75c48f69d480c6c1c75df5a2000a9db376210e5aef4f8a30cc6a2', 'validate_catalog': 'ca4620cd99dc6b6a786ad4f172e0caab6117ee577a8643b5679b70d45436851e', '_exact_preflight_match': '99347a24fc2c7b072b2293eeb63ca3012835bbecb35e62e5a16204046d0b9bc4', 'provision': 'c1f3d6f7ab0986f06539937ff1a25d5736f5197cc21680ebe77b8674ec6f38f8'}
+        expected={'build_provision_plan': 'd94ccddf6fbd7bab61182ec57176d8d97711b12951a801b138e0f94f4c8a460a', '_session_guard': 'f55cf7d8eab23979f89ba5a461b23a7dfba7db31e1409ded1b470fed5ec66afa', '_bootstrap_query': '3f47d6eb120c746a5c8baa28076be6ac16ad4c1d7dd08968f6ba383dc2649864', '_admission_catalog_predicate': 'ab432717202915d7715e1469f94d9a4c03b3ab2f08fc234739df043556536967', 'admission_catalog_predicate': '418d56fb0e2a7d2d8a8454cf490fc118e9672636a5b13b26cc32c882eef7b620', 'owner_admission_query': 'b49214efabe09fe6e71c3c653be3633694ce09d96ce5e29a29934f3bdcb26cba', 'catalog_query': '3938f2c476ab7a2e0465b4f2a81a736369e21024a592fce707347f42f5c8aeee', '_bounded_rows': 'ef0ae6801d00e98ddfe4750f3f8af17b913025849478118fc00e2d389001cde3', 'validate_function': 'c27e19b356f75c48f69d480c6c1c75df5a2000a9db376210e5aef4f8a30cc6a2', 'validate_catalog': '1b944d43e3fc077c7c6ff8b02e25d5a9c7143ebdda9d167ef533b8ae4995c012', '_exact_preflight_match': '99347a24fc2c7b072b2293eeb63ca3012835bbecb35e62e5a16204046d0b9bc4', 'provision': 'c1f3d6f7ab0986f06539937ff1a25d5736f5197cc21680ebe77b8674ec6f38f8'}
         tree=ast.parse(Path(SPEC.origin).read_text())
         actual={}
         for fn in tree.body:
@@ -1138,6 +1138,110 @@ class CatalogValidationDiagnosticTests(unittest.TestCase):
                     fn.body[-1:]=wrapper.body
                 actual[fn.name]=P.sha(ast.dump(fn).encode())
         self.assertEqual(actual,expected)
+
+
+class ConstraintInheritanceTests(unittest.TestCase):
+    """Fixed PG18.6/source-DDL expectations, never learned from catalog output.
+
+    REL_18_6: catalog/index.c:index_constraint_create sets noinherit=true when
+    there is no parent constraint; commands/tablecmds.c:addFkConstraint does so
+    for ordinary tables. nodes/makefuncs.c:makeNotNullConstraint initializes
+    false, also used for PK/IDENTITY-generated NOT NULL. parser/gram.y defaults
+    opt_no_inherit to false. commands/typecmds.c stores domain CHECK with false.
+    """
+    expected_by_kind={'c':False,'p':True,'u':True,'f':True,'n':False}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle=P.load_and_verify_sources(ROOT)
+        cls.plan=P.build_provision_plan(cls.bundle,DB,ADMIN,PASSWORDS)
+        cls.catalog=fake_catalog(cls.bundle)
+        cls.receipts=[dict(phase=s.phase,login_role=s.login_role,database=s.database,
+            sql_sha256=P.sha(s.sql.encode()),acknowledged=True) for s in cls.plan]
+        cls.expected=P.expected_constraints(cls.bundle.contract)
+
+    def assert_inheritance_rejected(self,table,name,value):
+        raw=copy.deepcopy(self.catalog)
+        next(c for c in raw if c['kind']=='constraint' and c['table']==table and c['name']==name)['no_inherit']=value
+        with self.assertRaisesRegex(P.ProvisionError,'^CATALOG_CONSTRAINT_INHERITANCE$'):
+            P.validate_catalog(raw,self.bundle,DB,self.receipts)
+
+    def test_source_inventory_has_exact_boolean_for_every_constraint(self):
+        from collections import Counter
+        self.assertEqual(Counter(c['kind'] for c in self.expected),{'c':216,'p':37,'u':33,'f':69,'n':386})
+        self.assertEqual(Counter(c['no_inherit'] for c in self.expected),{False:602,True:139})
+        self.assertEqual(len(self.expected),741)
+        for c in self.expected:
+            self.assertIs(type(c['no_inherit']),bool)
+            self.assertIs(c['no_inherit'],self.expected_by_kind[c['kind']])
+        # The independently invented fixture does not obtain this flag from the
+        # expected contract, so an old all-false model cannot conceal the bug.
+        for c in self.catalog:
+            if c['kind']=='constraint':self.assertIs(c['no_inherit'],self.expected_by_kind[c['constraint_kind']])
+        receipt=P.validate_catalog(self.catalog,self.bundle,DB,self.receipts)
+        self.assertEqual(receipt.public_evidence['constraint_count'],741)
+        self.assertEqual(receipt.public_evidence['acceptance_tests'],'NOT_RUN')
+
+    def test_each_type_rejects_opposite_boolean_without_not_null_exemption(self):
+        for kind,expected in self.expected_by_kind.items():
+            c=next(c for c in self.expected if c['kind']==kind and not c['table'].startswith('@'))
+            with self.subTest(kind=kind):
+                self.assert_inheritance_rejected(c['table'],c['catalog_name'],not expected)
+        domain=next(c for c in self.expected if c['table']=='@epoch_ms')
+        self.assertIs(domain['no_inherit'],False)
+        self.assert_inheritance_rejected(domain['table'],domain['catalog_name'],True)
+
+    def test_each_type_rejects_non_boolean_wire_values(self):
+        for kind in self.expected_by_kind:
+            c=next(c for c in self.expected if c['kind']==kind)
+            for value in (0,1,0.0,1.0,'false','true',None,[],{}):
+                with self.subTest(kind=kind,value=value):
+                    self.assert_inheritance_rejected(c['table'],c['catalog_name'],value)
+
+    def test_explicit_primary_key_identity_and_domain_defaults_are_independent(self):
+        baseline=dict(self.bundle.texts)['backend-go/migrations/0001_base19.sql']
+        self.assertIn('id text PRIMARY KEY',baseline)
+        self.assertIn('login text NOT NULL',baseline)
+        self.assertIn('id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY',baseline)
+        self.assertIn('CREATE DOMAIN epoch_ms AS bigint CHECK',baseline)
+        expected={(c['table'],c['catalog_name']):c for c in self.expected}
+        for key in (('tenants','tenants_id_not_null'),('users','users_login_not_null'),
+                    ('outbox','outbox_id_not_null'),('@epoch_ms','epoch_ms_check')):
+            with self.subTest(constraint=key):
+                self.assertIs(expected[key]['no_inherit'],False)
+                self.assert_inheritance_rejected(*key,True)
+        # The parent PK is non-inheritable; its implicit NOT NULL is not.
+        self.assertIs(expected['tenants','tenants_pkey']['no_inherit'],True)
+        self.assertIs(expected['outbox','outbox_pkey']['no_inherit'],True)
+
+    def test_observed_constraint_kind_cannot_choose_the_expected_value(self):
+        for kind in self.expected_by_kind:
+            raw=copy.deepcopy(self.catalog)
+            c=next(c for c in raw if c['kind']=='constraint' and c['constraint_kind']==kind)
+            changed='p' if kind!='p' else 'n'
+            c['constraint_kind']=changed
+            c['no_inherit']=self.expected_by_kind[changed]
+            with self.subTest(kind=kind),self.assertRaisesRegex(P.ProvisionError,'^CATALOG_CONSTRAINT_CONTRACT$'):
+                P.validate_catalog(raw,self.bundle,DB,self.receipts)
+        # Extra expected fields cannot be smuggled into the verified bundle.
+        bad=copy.deepcopy(self.bundle)
+        bad.contract['constraints'][0]['no_inherit']=True
+        with self.assertRaisesRegex(P.ProvisionError,'^SOURCE_CONTRACT_MISMATCH$'):
+            P.build_provision_plan(bad,DB,ADMIN,PASSWORDS)
+
+    def test_source_no_inherit_syntax_remains_rejected_and_code_remains_diagnostic(self):
+        with self.assertRaisesRegex(P.ProvisionError,'^SOURCE_CHECK_TAIL$'):
+            P._constraint('sample','CHECK(value > 0) NO INHERIT')
+        contract={'tables':{'sample':{}},'constraints':[]}
+        with self.assertRaisesRegex(P.ProvisionError,'^SOURCE_COLUMN_TAIL$'):
+            P._column('sample','value text NOT NULL NO INHERIT',contract)
+        self.assertIn('CATALOG_CONSTRAINT_INHERITANCE',P.CATALOG_VALIDATION_DIAGNOSTIC_CODES)
+        self.assertIn('CATALOG_CONSTRAINT_INHERITANCE',Path(__file__).with_name('pg-registration-acceptance.py').read_text())
+        records=[]
+        sink=type('Sink',(),{'record_catalog_validation_diagnostic':lambda _,record:records.append(record)})()
+        P._record_catalog_validation_diagnostic(sink,P.ProvisionError('CATALOG_CONSTRAINT_INHERITANCE'))
+        self.assertEqual(records,[{'format':'worktool-registration-catalog-validation-v1',
+            'authority':'DIAGNOSTIC_ONLY','failure_code':'CATALOG_CONSTRAINT_INHERITANCE'}])
 
 
 if __name__ == '__main__':
