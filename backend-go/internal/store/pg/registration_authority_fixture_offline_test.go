@@ -744,3 +744,160 @@ func TestRegistrationAuthorityActivityAdmissionNullFailsClosed(t *testing.T) {
 		t.Fatal("cancelled activity call reached database")
 	}
 }
+
+func TestRegistrationAuthorityRollbackDiagnosticErrorClasses(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{nil, "NONE"}, {rafInvalid, "LOCAL_INVALID"}, {rafUnknown, "UNKNOWN_STOP"},
+		{&pgconn.PgError{Code: "42501"}, "INSUFFICIENT_PRIVILEGE"},
+		{&pgconn.PgError{Code: "23514"}, "CONSTRAINT_REJECTION"},
+		{&pgconn.PgError{Code: "40001"}, "SERIALIZATION_FAILURE_NOT_DENIAL"},
+		{&pgconn.PgError{Code: "57014"}, "CANCELLED_NOT_DENIAL"},
+		{&pgconn.PgError{Code: "42702"}, "SQL_AMBIGUOUS_REFERENCE"},
+		{&pgconn.PgError{Code: "42703"}, "SQL_UNDEFINED_COLUMN"},
+		{&pgconn.PgError{Code: "42883"}, "SQL_UNDEFINED_FUNCTION"},
+		{&pgconn.PgError{Code: "42P01"}, "SQL_UNDEFINED_TABLE"},
+		{&pgconn.PgError{Code: "42804"}, "SQL_DATATYPE_MISMATCH"},
+		{&pgconn.PgError{Code: "0A000"}, "SQL_FEATURE_NOT_SUPPORTED"},
+		{&pgconn.PgError{Code: "55P03"}, "SQL_LOCK_NOT_AVAILABLE"},
+		{&pgconn.PgError{Code: "40P01"}, "SQL_DEADLOCK"},
+		{&pgconn.PgError{Code: "23505"}, "SQL_UNIQUE_VIOLATION"},
+		{&pgconn.PgError{Code: "23503"}, "SQL_FOREIGN_KEY_VIOLATION"},
+		{&pgconn.PgError{Code: "XXXXX", Message: "42501 secret SQL text"}, "UNEXPECTED_SQLSTATE"},
+		{errors.New("42501 secret SQL text"), "TRANSPORT_OR_LOCAL_NOT_DENIAL"},
+		{context.DeadlineExceeded, "TRANSPORT_OR_LOCAL_NOT_DENIAL"},
+		{errors.Join(rafUnknown, &pgconn.PgError{Code: "42501"}), "TRANSPORT_OR_LOCAL_NOT_DENIAL"},
+		{errors.Join(rafUnknown, &pgconn.PgError{Code: "42702"}), "TRANSPORT_OR_LOCAL_NOT_DENIAL"},
+	} {
+		if got := rafRollbackDiagnosticClass(tc.err); got != tc.want || !rafRollbackDiagnosticClassValid(got) {
+			t.Fatal("rollback diagnostic class did not stay within the fixed error taxonomy")
+		}
+	}
+	// The existing classifier used by other leaves must not gain new behavior.
+	if rafErrorClass(&pgconn.PgError{Code: "42702"}) != "UNEXPECTED_SQLSTATE" || rafErrorClass(rafInvalid) != "TRANSPORT_OR_LOCAL_NOT_DENIAL" {
+		t.Fatal("rollback-only diagnostic changed the shared classifier")
+	}
+	secret := "SQL params database password data must never appear"
+	if got := rafRollbackDiagnosticClass(&pgconn.PgError{Code: "42702", Message: secret, Detail: secret, Hint: secret, Where: secret, InternalQuery: secret}); got != "SQL_AMBIGUOUS_REFERENCE" {
+		t.Fatal("diagnostic classification depended on error text")
+	}
+}
+
+func TestRegistrationAuthorityRollbackDiagnosticFixedMarker(t *testing.T) {
+	d := rafRollbackDiagnostic{stage: "INVOKE", errorClass: "SQL_AMBIGUOUS_REFERENCE", invokeClass: "SQL_AMBIGUOUS_REFERENCE", rollback: "UNCONFIRMED", rollbackClass: "TRANSPORT_OR_LOCAL_NOT_DENIAL"}
+	want := "WT_REGISTRATION_ROLLBACK_DIAG_V1 stage=INVOKE error_class=SQL_AMBIGUOUS_REFERENCE invoke_class=SQL_AMBIGUOUS_REFERENCE rollback=UNCONFIRMED rollback_class=TRANSPORT_OR_LOCAL_NOT_DENIAL"
+	if d.line() != want {
+		t.Fatal("fixed cross-language diagnostic ABI changed")
+	}
+	calls := 0
+	logf := func(format string, args ...any) {
+		calls++
+		if format != "%s" || len(args) != 1 || args[0] != want {
+			t.Fatal("diagnostic emitted anything except the fixed marker")
+		}
+	}
+	d.report(false, logf)
+	if calls != 0 {
+		t.Fatal("successful leaf emitted a diagnostic")
+	}
+	d.report(true, logf)
+	if calls != 1 {
+		t.Fatal("failed leaf did not emit exactly one marker per report")
+	}
+	for field := 0; field < reflect.TypeOf(d).NumField(); field++ {
+		for _, value := range []string{"", "42501", "SQL text secret", "NONE\nWT_REGISTRATION_ROLLBACK_DIAG_V1", "NONE extra=value"} {
+			invalid := d
+			switch field {
+			case 0:
+				invalid.stage = value
+			case 1:
+				invalid.errorClass = value
+			case 2:
+				invalid.invokeClass = value
+			case 3:
+				invalid.rollback = value
+			case 4:
+				invalid.rollbackClass = value
+			}
+			if invalid.line() != "" {
+				t.Fatal("non-enum diagnostic value leaked")
+			}
+			invalid.report(true, logf)
+			if calls != 1 {
+				t.Fatal("malformed diagnostic reached the output")
+			}
+		}
+	}
+}
+
+func TestRegistrationAuthorityRollbackDiagnosticPreservesSequence(t *testing.T) {
+	body, err := os.ReadFile("registration_authority_fixture_test.go")
+	if err != nil {
+		t.Fatal("fixture source unavailable for offline diagnostic scope check")
+	}
+	source := string(body)
+	start := strings.Index(source, "func rafOtherGrantRollback(")
+	end := strings.Index(source, "\nfunc TestRegistrationAuthorityIsolatedPostgreSQL(")
+	if start < 0 || end <= start {
+		t.Fatal("rollback-control source boundary changed")
+	}
+	leaf := source[start:end]
+	sequence := []string{"rafBuildPrepared(i, a, grant)", "rafImportPrepared(f.ctx, f.issuer, g, i, a, grant, now)", "rafSeedControl(f.ctx, f.owner, g)", "rafSnapshot(t, f)", "f.consumer.BeginTx(f.ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})", "rafInvoke(f.ctx, tx, grant, i.operationID)", "context.WithTimeout(context.Background(), 3*time.Second)", "tx.Rollback(clean)", "cancel()", "rafSnapshot(t, f)"}
+	rest := leaf
+	for _, call := range sequence {
+		at := strings.Index(rest, call)
+		if at < 0 {
+			t.Fatal("rollback-control resource sequence changed")
+		}
+		rest = rest[at+len(call):]
+	}
+	for _, call := range sequence {
+		want := 1
+		if call == "rafSnapshot(t, f)" {
+			want = 2
+		}
+		if strings.Count(leaf, call) != want {
+			t.Fatal("rollback diagnostic added a resource call or retry")
+		}
+	}
+	if !strings.Contains(leaf, "if body != nil || result != string(registrationPending) || cleanup != nil {") ||
+		!strings.Contains(leaf, "if rafSnapshot(t, f) != before {") ||
+		strings.Count(leaf, "diagnostic.report(t.Failed(), t.Logf)") != 1 ||
+		!strings.Contains(leaf, "defer func() { diagnostic.report(t.Failed(), t.Logf) }()") ||
+		strings.Contains(leaf, ".Commit(") || strings.Contains(leaf, ".Exec(") || strings.Contains(leaf, ".QueryRow(") {
+		t.Fatal("diagnostic changed an assertion, emission boundary or SQL surface")
+	}
+}
+
+// Explicitly synthetic logging specimen for the cross-language collector tests.
+// This is not the isolated test/leaf and is never admissible as run evidence.
+// It uses Go's actual testing logger without resources, SQL or a failed test.
+func TestRegistrationAuthorityRollbackDiagnosticLogSpecimen(t *testing.T) {
+	d := rafRollbackDiagnostic{stage: "SNAPSHOT_BEFORE", errorClass: "UNCLASSIFIED", invokeClass: "NOT_ATTEMPTED", rollback: "NOT_ATTEMPTED", rollbackClass: "NOT_ATTEMPTED"}
+	d.report(true, t.Logf)
+}
+
+// Deliberately non-comparable dynamic error value. None of its methods is safe
+// to call; classification must use only direct type/sentinel inspection.
+type rafPanicDiagnosticError []string
+
+func (rafPanicDiagnosticError) Error() string { panic("diagnostic called Error") }
+func (rafPanicDiagnosticError) Is(error) bool { panic("diagnostic called Is") }
+func (rafPanicDiagnosticError) As(any) bool   { panic("diagnostic called As") }
+func (rafPanicDiagnosticError) Unwrap() error { panic("diagnostic called Unwrap") }
+
+func TestRegistrationAuthorityRollbackDiagnosticNeverInvokesErrorMethods(t *testing.T) {
+	var typedNil *pgconn.PgError
+	for _, hostile := range []error{rafPanicDiagnosticError{"private SQL"}, typedNil} {
+		rollbackReached := false
+		class := rafRollbackDiagnosticClass(hostile)
+		// This local marker represents the immediately following original rollback
+		// step. No DB/driver operation is executed by this offline test.
+		rollbackReached = true
+		if !rollbackReached || class != "TRANSPORT_OR_LOCAL_NOT_DENIAL" {
+			t.Fatal("diagnostic classification interrupted the rollback path")
+		}
+	}
+}

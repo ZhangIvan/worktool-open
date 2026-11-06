@@ -1161,11 +1161,108 @@ func rafDenyUnchanged(t *testing.T, f *rafFixture, c *pgx.Conn, query, state str
 	}
 }
 
+// Diagnostic-only output for the rollback-control leaf. It cannot change an
+// assertion, SQL call, privilege, retry, or acceptance result. Every public value
+// is a fixed enum; never include error text, SQLSTATE text, SQL, IDs or row data.
+type rafRollbackDiagnostic struct {
+	stage, errorClass, invokeClass, rollback, rollbackClass string
+}
+
+func rafRollbackDiagnosticClass(err error) string {
+	// Do not call error methods or unwrap here: even diagnostic classification
+	// runs before the unchanged rollback and must not invoke arbitrary code.
+	switch err {
+	case nil:
+		return "NONE"
+	case rafInvalid:
+		return "LOCAL_INVALID"
+	case rafUnknown:
+		return "UNKNOWN_STOP"
+	}
+	pe, ok := err.(*pgconn.PgError)
+	if !ok || pe == nil {
+		return "TRANSPORT_OR_LOCAL_NOT_DENIAL"
+	}
+	switch pe.Code {
+	case "42501":
+		return "INSUFFICIENT_PRIVILEGE"
+	case "23514":
+		return "CONSTRAINT_REJECTION"
+	case "40001":
+		return "SERIALIZATION_FAILURE_NOT_DENIAL"
+	case "57014":
+		return "CANCELLED_NOT_DENIAL"
+	case "42702":
+		return "SQL_AMBIGUOUS_REFERENCE"
+	case "42703":
+		return "SQL_UNDEFINED_COLUMN"
+	case "42883":
+		return "SQL_UNDEFINED_FUNCTION"
+	case "42P01":
+		return "SQL_UNDEFINED_TABLE"
+	case "42804":
+		return "SQL_DATATYPE_MISMATCH"
+	case "0A000":
+		return "SQL_FEATURE_NOT_SUPPORTED"
+	case "55P03":
+		return "SQL_LOCK_NOT_AVAILABLE"
+	case "40P01":
+		return "SQL_DEADLOCK"
+	case "23505":
+		return "SQL_UNIQUE_VIOLATION"
+	case "23503":
+		return "SQL_FOREIGN_KEY_VIOLATION"
+	}
+	return "UNEXPECTED_SQLSTATE"
+}
+
+func rafRollbackDiagnosticClassValid(class string) bool {
+	switch class {
+	case "NOT_ATTEMPTED", "UNCLASSIFIED", "NONE", "LOCAL_INVALID", "UNKNOWN_STOP",
+		"INSUFFICIENT_PRIVILEGE", "CONSTRAINT_REJECTION", "SERIALIZATION_FAILURE_NOT_DENIAL",
+		"CANCELLED_NOT_DENIAL", "SQL_AMBIGUOUS_REFERENCE", "SQL_UNDEFINED_COLUMN",
+		"SQL_UNDEFINED_FUNCTION", "SQL_UNDEFINED_TABLE", "SQL_DATATYPE_MISMATCH",
+		"SQL_FEATURE_NOT_SUPPORTED", "SQL_LOCK_NOT_AVAILABLE", "SQL_DEADLOCK",
+		"SQL_UNIQUE_VIOLATION", "SQL_FOREIGN_KEY_VIOLATION", "UNEXPECTED_SQLSTATE",
+		"TRANSPORT_OR_LOCAL_NOT_DENIAL", "UNEXPECTED_RESULT", "SNAPSHOT_MISMATCH":
+		return true
+	}
+	return false
+}
+
+func (d rafRollbackDiagnostic) line() string {
+	switch d.stage {
+	case "BUILD", "IMPORT", "SEED", "SNAPSHOT_BEFORE", "BEGIN", "INVOKE", "ROLLBACK", "SNAPSHOT_AFTER", "COMPARE":
+	default:
+		return ""
+	}
+	switch d.rollback {
+	case "NOT_ATTEMPTED", "CONFIRMED", "UNCONFIRMED":
+	default:
+		return ""
+	}
+	if !rafRollbackDiagnosticClassValid(d.errorClass) || !rafRollbackDiagnosticClassValid(d.invokeClass) || !rafRollbackDiagnosticClassValid(d.rollbackClass) {
+		return ""
+	}
+	return "WT_REGISTRATION_ROLLBACK_DIAG_V1 stage=" + d.stage + " error_class=" + d.errorClass +
+		" invoke_class=" + d.invokeClass + " rollback=" + d.rollback + " rollback_class=" + d.rollbackClass
+}
+
+func (d rafRollbackDiagnostic) report(failed bool, logf func(string, ...any)) {
+	if line := d.line(); failed && line != "" && logf != nil {
+		logf("%s", line)
+	}
+}
+
 // A distinct valid grant proves that acceptance is not merely blanket refusal.
 // The routine verifies the complete graph inside its transaction; it is then
 // explicitly rolled back. Only inert prepared/control rows remain committed.
 func rafOtherGrantRollback(t *testing.T, f *rafFixture) {
 	t.Helper()
+	diagnostic := rafRollbackDiagnostic{stage: "BUILD", errorClass: "UNCLASSIFIED", invokeClass: "NOT_ATTEMPTED", rollback: "NOT_ATTEMPTED", rollbackClass: "NOT_ATTEMPTED"}
+	// Fatal in a nested helper (including either snapshot) runs this defer too.
+	// Exactly one diagnostic line is emitted, and only when this leaf failed.
+	defer func() { diagnostic.report(t.Failed(), t.Logf) }()
 	i := frIntent(t)
 	i.operationID = "op_synthetic_rollback_control"
 	frChangeDescriptor(t, &i, func(v *registration.Value) { v.Destination = "dest_synthetic_rollback_control" })
@@ -1173,29 +1270,59 @@ func rafOtherGrantRollback(t *testing.T, f *rafFixture) {
 	a := rafSyntheticAuthority{run: f.e, issued: now.Add(-time.Second), notBefore: now.Add(-time.Second), expires: now.Add(time.Minute)}
 	grant := "grant_synthetic_rollback_" + f.e.RunID
 	g, err := rafBuildPrepared(i, a, grant)
-	if err != nil || rafImportPrepared(f.ctx, f.issuer, g, i, a, grant, now) != nil {
+	if err != nil {
+		diagnostic.errorClass = rafRollbackDiagnosticClass(err)
 		t.Fatal("rollback-control grant import unconfirmed; no retry")
 	}
-	if rafSeedControl(f.ctx, f.owner, g) != nil {
+	diagnostic.stage = "IMPORT"
+	if err := rafImportPrepared(f.ctx, f.issuer, g, i, a, grant, now); err != nil {
+		diagnostic.errorClass = rafRollbackDiagnosticClass(err)
+		t.Fatal("rollback-control grant import unconfirmed; no retry")
+	}
+	diagnostic.stage = "SEED"
+	if err := rafSeedControl(f.ctx, f.owner, g); err != nil {
+		diagnostic.errorClass = rafRollbackDiagnosticClass(err)
 		t.Fatal("rollback-control seed unconfirmed; no retry")
 	}
+	diagnostic.stage = "SNAPSHOT_BEFORE"
 	before := rafSnapshot(t, f)
+	diagnostic.stage = "BEGIN"
 	tx, err := f.consumer.BeginTx(f.ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
+		diagnostic.errorClass = rafRollbackDiagnosticClass(err)
 		f.halted = true
 		t.Fatal("rollback-control begin unconfirmed; no retry")
 	}
+	diagnostic.stage = "INVOKE"
 	result, body := rafInvoke(f.ctx, tx, grant, i.operationID)
+	diagnostic.invokeClass = rafRollbackDiagnosticClass(body)
 	// Consumer has no direct-table privileges. The routine performs its complete
 	// graph checks; independent owner readback after rollback proves no persistence.
+	diagnostic.stage = "ROLLBACK"
 	clean, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	cleanup := tx.Rollback(clean)
 	cancel()
+	diagnostic.rollbackClass = rafRollbackDiagnosticClass(cleanup)
+	diagnostic.rollback = "CONFIRMED"
+	if cleanup != nil {
+		diagnostic.rollback = "UNCONFIRMED"
+	}
 	if body != nil || result != string(registrationPending) || cleanup != nil {
+		// Keep both error classes when rollback and invocation fail together.
+		// The stage identifies the earliest observed failure, never its cause.
+		if body != nil {
+			diagnostic.stage, diagnostic.errorClass = "INVOKE", diagnostic.invokeClass
+		} else if result != string(registrationPending) {
+			diagnostic.stage, diagnostic.errorClass = "INVOKE", "UNEXPECTED_RESULT"
+		} else {
+			diagnostic.errorClass = diagnostic.rollbackClass
+		}
 		f.halted = true
 		t.Fatal("valid-other-grant rollback not established; no retry")
 	}
+	diagnostic.stage = "SNAPSHOT_AFTER"
 	if rafSnapshot(t, f) != before {
+		diagnostic.stage, diagnostic.errorClass = "COMPARE", "SNAPSHOT_MISMATCH"
 		f.halted = true
 		t.Fatal("rolled-back positive control persisted protected state")
 	}

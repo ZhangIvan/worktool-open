@@ -21,6 +21,18 @@ SCOPE = "focused-registration-consumer-boundary-v1"
 IMAGE = "postgres@sha256:41a369edc91d9bdd7a58be6bc71ea0f8f7a3f49e82818a9f0829021ea7840b7c"
 MAX_EVENTS_BYTES = 8 << 20
 MAX_EVENT_LINES = 12000
+ROLLBACK_DIAGNOSTIC_LEAF = "valid_other_grant_pending_rollback"
+ROLLBACK_DIAGNOSTIC_PREFIX = "WT_REGISTRATION_ROLLBACK_DIAG_"
+ROLLBACK_DIAGNOSTIC_STAGES = frozenset({"BUILD", "IMPORT", "SEED", "SNAPSHOT_BEFORE", "BEGIN", "INVOKE", "ROLLBACK", "SNAPSHOT_AFTER", "COMPARE"})
+ROLLBACK_DIAGNOSTIC_STATUSES = frozenset({"NOT_ATTEMPTED", "CONFIRMED", "UNCONFIRMED"})
+ROLLBACK_DIAGNOSTIC_CLASSES = frozenset({
+    "NOT_ATTEMPTED", "UNCLASSIFIED", "NONE", "LOCAL_INVALID", "UNKNOWN_STOP", "INSUFFICIENT_PRIVILEGE",
+    "CONSTRAINT_REJECTION", "SERIALIZATION_FAILURE_NOT_DENIAL", "CANCELLED_NOT_DENIAL",
+    "SQL_AMBIGUOUS_REFERENCE", "SQL_UNDEFINED_COLUMN", "SQL_UNDEFINED_FUNCTION", "SQL_UNDEFINED_TABLE",
+    "SQL_DATATYPE_MISMATCH", "SQL_FEATURE_NOT_SUPPORTED", "SQL_LOCK_NOT_AVAILABLE", "SQL_DEADLOCK",
+    "SQL_UNIQUE_VIOLATION", "SQL_FOREIGN_KEY_VIOLATION", "UNEXPECTED_SQLSTATE",
+    "TRANSPORT_OR_LOCAL_NOT_DENIAL", "UNEXPECTED_RESULT", "SNAPSHOT_MISMATCH",
+})
 MANIFEST_KEYS = {"format", "scope", "package", "test", "leaves", "source_files", "source_inventory_sha256", "scope_notes"}
 BINDING_KEYS = {"format", "run_id", "source_manifest_sha256", "source_before_sha256", "source_after_sha256", "executable_before_sha256", "executable_after_sha256", "command_sha256", "build_command_sha256", "events_sha256", "exit_code", "compile_exit_code", "timed_out", "interrupted", "image", "server_version", "database", "database_oid", "schema_oid", "issuer_oid", "consumer_oid", "routine_definition_sha256", "provisioning_evidence_sha256", "host", "port", "cleanup", "bootstrap_closed", "go_invocations", "bootstrap_role", "bootstrap_oid", "activity_guard_oid", "admission_schema_oid", "admission_function_oid", "admission_function_definition_sha256", "admission_sha256"}
 
@@ -162,7 +174,7 @@ def validate_events(raw_events: bytes, manifest: dict) -> dict:
         if not line or len(line) > 131072:
             _fail("EVENT_LINE_BOUNDS")
         event = strict_json(line)
-        if (not isinstance(event, dict) or set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"} or
+        if (not isinstance(event, dict) or set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output", "OutputType"} or
                 event.get("Package") != PACKAGE):
             _fail("EVENT_SCHEMA_OR_PACKAGE")
         action = event.get("Action")
@@ -175,6 +187,11 @@ def validate_events(raw_events: bytes, manifest: dict) -> dict:
             _fail("EVENT_ELAPSED")
         if "Output" in event and (not isinstance(event["Output"], str) or len(event["Output"]) > 65536):
             _fail("EVENT_OUTPUT_BOUNDS")
+        # Go 1.27.3 emits these optional classifications only on output events.
+        # They never contribute run/pass evidence; regular output omits the key.
+        if "OutputType" in event and (action != "output" or "Output" not in event or
+                type(event["OutputType"]) is not str or event["OutputType"] not in ("frame", "error", "error-continue")):
+            _fail("EVENT_OUTPUT_TYPE")
         if package_passed:
             _fail("EVENT_AFTER_PACKAGE_TERMINAL")
         if action == "start":
@@ -266,6 +283,71 @@ def validate_run(raw_events: bytes, manifest: dict, binding: dict, expected_sour
             "binding": dict(binding), "broader_acceptance": "NOT_PROVEN", "durable_recovery_authority": "NOT_IMPLEMENTED_NOT_PROVEN"}
 
 
+def _rollback_failure_diagnostic(lines):
+    """Parse one bounded fixture marker without granting it acceptance authority.
+
+    No arbitrary output, source line, package, test name or exception escapes.
+    A marker-looking line anywhere else, duplicate, or malformed stream disables
+    this optional diagnostic. A valid marker still cannot prove its own origin.
+    """
+    target = TEST + "/" + ROLLBACK_DIAGNOSTIC_LEAF
+    state = "NOT_RUN"
+    marker = None
+    for line in lines:
+        if not line or len(line) > 131072:
+            return None
+        event = strict_json(line)
+        if (type(event) is not dict or
+                set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output", "OutputType"} or
+                event.get("Package") != PACKAGE):
+            return None
+        if "Time" in event and type(event["Time"]) is not str:
+            return None
+        if "Elapsed" in event and (type(event["Elapsed"]) not in (int, float) or
+                not math.isfinite(event["Elapsed"]) or event["Elapsed"] < 0):
+            return None
+        output = event.get("Output")
+        if "Output" in event and (type(output) is not str or len(output) > 65536):
+            return None
+        action = event.get("Action")
+        if type(action) is not str or action not in ("start", "run", "output", "pass", "fail", "skip"):
+            return None
+        if "OutputType" in event and (action != "output" or "Output" not in event or
+                type(event["OutputType"]) is not str or event["OutputType"] not in ("frame", "error", "error-continue")):
+            return None
+        if event.get("Test") == target:
+            if action == "run":
+                if state != "NOT_RUN":
+                    return None
+                state = "RUNNING"
+            elif action == "fail":
+                if state != "RUNNING":
+                    return None
+                state = "FAILED"
+            elif action in ("pass", "skip"):
+                return None
+        if type(output) is not str or ROLLBACK_DIAGNOSTIC_PREFIX not in output:
+            continue
+        # The producer uses one ordinary t.Logf line, never an error or frame.
+        if (marker is not None or state != "RUNNING" or action != "output" or
+                event.get("Test") != target or "OutputType" in event or len(output) > 768):
+            return None
+        match = re.fullmatch(
+            r"    registration_authority_fixture_test\.go:[1-9][0-9]{0,5}: "
+            r"WT_REGISTRATION_ROLLBACK_DIAG_V1 stage=([A-Z_]+) error_class=([A-Z_]+) "
+            r"invoke_class=([A-Z_]+) rollback=([A-Z_]+) rollback_class=([A-Z_]+)\n", output)
+        if match is None:
+            return None
+        stage, error_class, invoke_class, rollback, rollback_class = match.groups()
+        if (stage not in ROLLBACK_DIAGNOSTIC_STAGES or rollback not in ROLLBACK_DIAGNOSTIC_STATUSES or
+                any(value not in ROLLBACK_DIAGNOSTIC_CLASSES for value in (error_class, invoke_class, rollback_class))):
+            return None
+        marker = {"format": "worktool-registration-rollback-diagnostic-v1", "authority": "DIAGNOSTIC_ONLY",
+                  "leaf": ROLLBACK_DIAGNOSTIC_LEAF, "stage": stage, "error_class": error_class,
+                  "invoke_class": invoke_class, "rollback": rollback, "rollback_class": rollback_class}
+    return marker if state == "FAILED" else None
+
+
 def failure_summary(raw_events: bytes, manifest: dict) -> dict:
     """Redacted, non-accepting diagnostics even for incomplete/failed streams.
 
@@ -324,6 +406,16 @@ def failure_summary(raw_events: bytes, manifest: dict) -> dict:
         reason = "EVENTS_COMPLETE_RUNTIME_NOT_ASSESSED"
     except EvidenceError as exc:
         reason = str(exc)
-    return {"acceptance": "NOT_ACCEPTED", "diagnostic": reason,
+    summary = {"acceptance": "NOT_ACCEPTED", "diagnostic": reason,
             "leaves": [{"id": leaf, "status": status(TEST + "/" + leaf)} for leaf in manifest["leaves"]],
             "parent": status(TEST), "package": status(None), "invalid_events": invalid, "unknown_test_events": unknown}
+    target = TEST + "/" + ROLLBACK_DIAGNOSTIC_LEAF
+    if not invalid and not unknown and target in counts and status(target) == "OBSERVED_FAIL":
+        try:
+            diagnostic = _rollback_failure_diagnostic(lines)
+            if diagnostic is not None:
+                summary["rollback_diagnostic"] = diagnostic
+        except BaseException:
+            # Best effort only: collection cannot replace or hide the failure.
+            pass
+    return summary
