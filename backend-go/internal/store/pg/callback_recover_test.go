@@ -79,7 +79,13 @@ func TestCallbackRecoveryCleanBusyAndStaleHintsSkip(t *testing.T) {
 				first.steps[4].values[1] = "delivered"
 			case "unexpired":
 				first.steps = first.steps[:8]
-				first.steps[7].values[0] = time.Date(2026, 11, 4, 3, 59, 0, 0, time.UTC)
+				// Keep the database clock after the recorded attempt start. A
+				// future lease, not a backwards clock, represents an unexpired row.
+				future := first.steps[7].values[0].(time.Time).Add(time.Second)
+				first.steps[4].values[7], first.steps[4].values[9] = &future, &future
+				for i := range first.steps[6].rows {
+					first.steps[6].rows[i][8] = future
+				}
 			}
 			second := callbackRecoveryTx(t, "destination_b", "delivery_b", false)
 			s, p := callbackClaimStore(t, discovery, first, second)
@@ -173,11 +179,130 @@ func TestCallbackRecoveryNoopIsNotRecovered(t *testing.T) {
 			first.steps[4].values[1] = "delivered"
 		} else {
 			first.steps = first.steps[:8]
-			first.steps[7].values[0] = time.Date(2026, 11, 4, 3, 59, 0, 0, time.UTC)
+			future := first.steps[7].values[0].(time.Time).Add(time.Second)
+			first.steps[4].values[7], first.steps[4].values[9] = &future, &future
+			for i := range first.steps[6].rows {
+				first.steps[6].rows[i][8] = future
+			}
 		}
 		s, _ := callbackClaimStore(t, discovery, first)
 		if ok, err := s.RecoverOneExpired(context.Background()); ok || err != nil {
 			t.Fatal("no-op counted as committed recovery")
+		}
+	}
+}
+
+// Contradictory unfinished evidence must not be rewritten into a fresh retry.
+// Each script ends before the first DML statement, so even an attempted write
+// fails the test. These are pgx control-flow doubles, not PostgreSQL execution.
+func TestCallbackRecoveryRejectsContradictoryEvidenceBeforeMutation(t *testing.T) {
+	for _, path := range []string{"explicit", "selector"} {
+		for _, mode := range []string{"missing_claim", "zero_start", "start_before_claim", "start_after_now", "prepare_before_start", "prepare_after_now", "status_present", "error_present", "empty_error_present", "leased_delivered", "negative_db_time", "unsafe_db_time", "unexpired_bad_status"} {
+			t.Run(path+"/"+mode, func(t *testing.T) {
+				first := callbackRecoveryTx(t, "destination_a", "delivery_a", false)
+				first.steps = first.steps[:8] // No attempt, delivery, slot or audit DML.
+				now := first.steps[7].values[0].(time.Time)
+				switch mode {
+				case "missing_claim":
+					first.steps[4].values[8] = nil
+				case "zero_start":
+					first.steps[5].values[3] = time.Time{}
+				case "start_before_claim":
+					first.steps[5].values[3] = now.Add(-4 * time.Second)
+				case "start_after_now":
+					first.steps[5].values[3] = now.Add(time.Microsecond)
+				case "prepare_before_start":
+					first.steps[5].values[4] = callbackTime(now.Add(-4 * time.Second))
+				case "prepare_after_now":
+					first.steps[5].values[4] = callbackTime(now.Add(time.Microsecond))
+				case "status_present":
+					status := 204
+					first.steps[5].values[7] = &status
+				case "error_present":
+					first.steps[5].values[8] = callbackString("PRIVATE prior outcome")
+				case "empty_error_present":
+					first.steps[5].values[8] = callbackString("")
+				case "leased_delivered":
+					first.steps[4].values[11] = callbackTime(now.Add(-2 * time.Second))
+				case "negative_db_time":
+					first.steps[7].values[0] = time.UnixMilli(-1)
+				case "unsafe_db_time":
+					first.steps[7].values[0] = time.UnixMilli(maxSafeInteger + 1)
+				case "unexpired_bad_status":
+					future := now.Add(time.Second)
+					first.steps[4].values[7], first.steps[4].values[9] = &future, &future
+					for i := range first.steps[6].rows {
+						first.steps[6].rows[i][8] = future
+					}
+					status := 204
+					first.steps[5].values[7] = &status
+				}
+				var s *CallbackStore
+				var pool *callbackClaimPool
+				var err error
+				var recovered bool
+				wantAcquires := 1
+				if path == "explicit" {
+					first.steps[1].sql = callbackLockTenant
+					first.steps[2].sql = callbackLockDestination
+					s, pool = callbackClaimStore(t, first)
+					err = s.RecoverExpired(context.Background(), "tenant_cb", "delivery_a")
+				} else {
+					discovery := callbackRecoveryDiscovery(t, [][]any{{"tenant_cb", "destination_a", "delivery_a"}, {"tenant_cb", "destination_b", "delivery_b"}})
+					unused := callbackRecoveryTx(t, "destination_b", "delivery_b", false)
+					s, pool = callbackClaimStore(t, discovery, first, unused)
+					recovered, err = s.RecoverOneExpired(context.Background())
+					wantAcquires = 2
+					if unused.next != 0 || unused.commits != 0 {
+						t.Fatal("contradictory evidence skipped to another delivery")
+					}
+				}
+				if !errors.Is(err, cb.ErrStale) || recovered || pool.next != wantAcquires || first.commits != 0 || first.next != 8 || first.rollbacks != 1 || first.releases != 1 || first.discards != 0 {
+					t.Fatalf("contradictory recovery was not refused cleanly: recovered=%v err=%v", recovered, err)
+				}
+				if strings.Contains(err.Error(), "PRIVATE") {
+					t.Fatal("private stored evidence escaped the error boundary")
+				}
+			})
+		}
+	}
+}
+
+func TestCallbackRecoveryValidTimeBoundariesPreserveSettlement(t *testing.T) {
+	for _, path := range []string{"explicit", "selector"} {
+		for _, mode := range []string{"unprepared_start_equals_claim", "prepared_equals_start", "expiry_equals_now"} {
+			t.Run(path+"/"+mode, func(t *testing.T) {
+				prepared := strings.HasPrefix(mode, "prepared_")
+				first := callbackRecoveryTx(t, "destination_a", "delivery_a", prepared)
+				now := first.steps[7].values[0].(time.Time)
+				switch mode {
+				case "prepared_equals_start":
+					first.steps[5].values[4] = callbackTime(first.steps[5].values[3].(time.Time))
+				case "expiry_equals_now":
+					first.steps[4].values[7], first.steps[4].values[9] = &now, &now
+					for i := range first.steps[6].rows {
+						first.steps[6].rows[i][8] = now
+						first.steps[10+i].args[9] = now
+					}
+				}
+				var err error
+				if path == "explicit" {
+					first.steps[1].sql, first.steps[2].sql = callbackLockTenant, callbackLockDestination
+					s, _ := callbackClaimStore(t, first)
+					err = s.RecoverExpired(context.Background(), "tenant_cb", "delivery_a")
+				} else {
+					discovery := callbackRecoveryDiscovery(t, [][]any{{"tenant_cb", "destination_a", "delivery_a"}})
+					s, _ := callbackClaimStore(t, discovery, first)
+					var recovered bool
+					recovered, err = s.RecoverOneExpired(context.Background())
+					if !recovered {
+						t.Fatal("valid recovery not reported")
+					}
+				}
+				if err != nil || first.commits != 1 || first.next != len(first.steps) {
+					t.Fatal("valid expired recovery changed", err)
+				}
+			})
 		}
 	}
 }

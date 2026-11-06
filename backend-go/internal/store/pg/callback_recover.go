@@ -97,6 +97,15 @@ func (s *CallbackStore) recoverExpired(ctx context.Context, tenant, id string, s
 		if e = s.gate(ctx); e != nil {
 			return cb.ErrStale
 		}
+		// Expiry is not permission to overwrite contradictory attempt evidence.
+		// Check the locked rows against the final database time before any DML
+		// or clean unexpired skip. Retain the original evidence and slots on error.
+		if now.UnixMilli() < 0 || now.UnixMilli() > maxSafeInteger || d.claimed == nil || a.started.IsZero() || a.started.Before(*d.claimed) || a.started.After(now) || a.status != nil || a.code != nil || d.delivered != nil {
+			return cb.ErrStale
+		}
+		if a.prepared != nil && (a.prepared.Before(a.started) || a.prepared.After(now)) {
+			return cb.ErrStale
+		}
 		if now.Before(*d.lease) {
 			if skip {
 				return nil

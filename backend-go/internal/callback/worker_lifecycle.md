@@ -54,6 +54,20 @@ re-read current destination authorization to erase an already-issued attempt.
 Revoked/disabled scopes can release old leases, as explicit recovery already
 allowed. No retention quota is released and no fairness/token counters change.
 
+Before settlement or an unexpired-row skip, recovery rejects contradictory
+unfinished evidence under those same locks and the final database clock. The
+attempt must start at or after the claim and no later than the observed time;
+any preparation marker must be between the attempt start and observed time.
+An unfinished attempt must have no status/error result, and a leased delivery
+must have no delivered timestamp. Missing claim/start evidence or an out-of-range
+database timestamp also fails closed. Explicit and selected recovery leave the
+attempt, delivery, slots and audit untouched on these errors, and selected
+recovery stops rather than trying another candidate. An expired lease may
+legitimately settle after its hard deadline; this check does not require a
+recovery completion before that deadline, repair history, or infer receiver
+effects. Scripted pgx regressions cover this boundary; real PostgreSQL validation
+of these new contradiction cases is separate and remains NOT_RUN locally.
+
 Only an exact clean busy rollback skips to another bounded candidate. Joined
 rollback/discard errors and uncertain commits stop the operation. A candidate
 already terminal or with a fresh, unexpired successor lease is a clean no-op,
