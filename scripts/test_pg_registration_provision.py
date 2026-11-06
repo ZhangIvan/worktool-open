@@ -579,7 +579,7 @@ class ActivityCensusTests(unittest.TestCase):
 
     def test_fixed_nineteen_step_source_plan_hashes(self):
         expected=(
-            '9ce38a062ee795ff996256751ed4d03d9a7c1b7a5405a659ad76c2d92ea93ab8',
+            'b696a89ef8516d792ffce13c5fc7fa0967ba7088fc6ad7158331af307445ef40',
             'a0e0c60a2c5a4204b3e39e6ed85b51c0e4231c7ec3e3cc110e702f2752e8965c',
             '636f190f4973fee0c383fb9f8f790bcbf82af78d99a5adf5345462c617277bf3',
             'c26fc5a70dcd973b58efca125ed591cf68338a5d87aa8365f696bc8025e60c01',
@@ -597,7 +597,7 @@ class ActivityCensusTests(unittest.TestCase):
             '982db91f0984025ba9f44906dcedbac84efa2b45221f41111f5c3dbffbd23f33',
             'c99f6ab3ce5a3ffc793544235925cd8ae8c07fb5cea5fd92e66fc338fefd7550',
             'fee3e64428c75ed5dac1f5fb6b2526d578b518453283098731188d51c5993a9e',
-            'f509965f9b5c38a1168c921a209d2af285a5cdca01dc97a06eb5dc52afcf040d')
+            'd154a1d63f166dd17c7625e7b9068f22139a1c13211f6847895978677b883fd9')
         plan=P.build_provision_plan(P.load_and_verify_sources(ROOT),DB,ADMIN,PASSWORDS)
         self.assertEqual(tuple(P.sha(step.sql.encode()) for step in plan),expected)
         self.assertTrue(all(P.activity_census_query() not in step.sql for step in plan))
@@ -728,7 +728,7 @@ class ActivityAdmissionTests(unittest.TestCase):
         self.assertLess(sql.index('pg_stat_clear_snapshot'),sql.index('activity AS MATERIALIZED'))
         self.assertIn("a.datname='postgres' AND a.usename='"+ADMIN+"'",sql)
         self.assertIn('AND r.oid=10 AND d.datdba=10',sql)
-        self.assertIn("'bootstrap_oid',(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='"+ADMIN+"')",sql)
+        self.assertIn("'bootstrap_oid',(SELECT oid::bigint FROM pg_catalog.pg_roles WHERE rolname='"+ADMIN+"')",sql)
         self.assertIn("pg_catalog.current_setting('shared_preload_libraries')=''",sql)
         self.assertNotIn("backend_type='client backend' OR usename IS NOT NULL",sql)
         self.assertNotIn('min(',sql)
@@ -899,6 +899,127 @@ class ActivityAdmissionTests(unittest.TestCase):
                 P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
             self.assertEqual(executor.calls[-1].phase,'bootstrap_helper')
             self.assertEqual(len(executor.calls),4)
+
+
+class OIDWireTypeTests(unittest.TestCase):
+    """PG18.6 OID JSON encoding regression checks, without a database.
+
+    json_categorize_type treats OID as JSONTYPE_OTHER, not JSONTYPE_NUMERIC.
+    json/jsonb then emit its output as a string. Cast only scalar wire outputs
+    to bigint; do not coerce wire inputs or weaken identity/NULL-only checks.
+    """
+    catalog_oid_expressions={
+        'identity':{'database_oid':'d.oid::bigint','schema_oid':'n.oid::bigint'},
+        'role':{'oid':'r.oid::bigint'},
+        'membership':{'member_oid':'m.member::bigint','role_oid':'m.roleid::bigint','grantor_oid':'m.grantor::bigint'},
+        'function':{'oid':'p.oid::bigint','support':'p.prosupport::oid::bigint','variadic':'p.provariadic::oid::bigint'},
+        'admission_function':{'oid':'p.oid::bigint','support':'p.prosupport::oid::bigint','variadic':'p.provariadic::oid::bigint'},
+        'builtin_role':{'oid':'r.oid::bigint'},
+        'bootstrap':{'oid':'r.oid::bigint'},
+        'admission_schema':{'oid':'n.oid::bigint','owner_oid':'n.nspowner::bigint'},
+        'trigger':{'constraint':'t.tgconstraint::oid::bigint'},
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle=P.load_and_verify_sources(ROOT)
+        cls.plan=P.build_provision_plan(cls.bundle,DB,ADMIN,PASSWORDS)
+        cls.catalog=fake_catalog(cls.bundle)
+        cls.receipts=[dict(phase=s.phase,login_role=s.login_role,database=s.database,
+            sql_sha256=P.sha(s.sql.encode()),acknowledged=True) for s in cls.plan]
+
+    def test_all_eighteen_scalar_oid_outputs_are_explicit_bigint(self):
+        import ast
+        tree=ast.parse(Path(SPEC.origin).read_text())
+        query=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='catalog_query')
+        projected={}
+        scalar_oid_fields={'oid','support','variadic','constraint'}
+        for node in ast.walk(query):
+            if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='add'
+                    and len(node.args)>=2 and isinstance(node.args[0],ast.Constant)
+                    and isinstance(node.args[1],ast.Dict)):
+                continue
+            kind=node.args[0].value
+            fields={}
+            for key,value in zip(node.args[1].keys,node.args[1].values):
+                name=ast.literal_eval(key)
+                if name in scalar_oid_fields or name.endswith('_oid'):
+                    fields[name]=ast.literal_eval(value)
+            if fields:projected[kind]=fields
+        self.assertEqual(projected,self.catalog_oid_expressions)
+        self.assertEqual(sum(map(len,projected.values())),17)
+        sql=P.catalog_query(self.bundle)
+        for kind,fields in projected.items():
+            line=next(line for line in sql.splitlines() if line.startswith("SELECT pg_catalog.jsonb_build_object('kind','"+kind+"',"))
+            for field,expression in fields.items():
+                with self.subTest(kind=kind,field=field):
+                    self.assertIn("'"+field+"',"+expression+",",line)
+                    self.assertTrue(expression.endswith('::bigint'))
+                    self.assertNotIn('::integer',expression)
+        bootstrap=self.plan[0].sql
+        self.assertIn("'bootstrap_oid',(SELECT oid::bigint FROM pg_catalog.pg_roles WHERE rolname='"+ADMIN+"')",bootstrap)
+        self.assertNotIn("'bootstrap_oid',(SELECT oid FROM",bootstrap)
+        self.assertEqual(bootstrap.count('::bigint'),1)
+        # OID arrays remain NULL-only. Neither array/string normalization nor a
+        # cast in an identity predicate is used to hide a wire mismatch.
+        self.assertIn("'all_argument_types',p.proallargtypes",sql)
+        self.assertIn("'transform_types',p.protrftypes",sql)
+        self.assertNotIn('::bigint',P.admission_catalog_predicate(self.bundle))
+        self.assertNotIn('::bigint',P._activity_classification(self.bundle))
+
+    def test_preflight_json_oid_string_is_invalid_shape_and_stops_at_first_step(self):
+        good=FakeExecutor(self.bundle).execute(self.plan[0])
+        for bad in ('10','010',10.0,True,False,None,[],{}):
+            raw=copy.deepcopy(good);raw[0]['bootstrap_oid']=bad
+            diagnostics=P.preflight_field_diagnostics(raw,good)
+            self.assertEqual(diagnostics['classification'],'INVALID_SHAPE')
+            self.assertEqual(diagnostics['checks']['bootstrap_oid'],'INVALID_SHAPE')
+            self.assertEqual({k:v for k,v in diagnostics['checks'].items() if k!='bootstrap_oid'},
+                             {k:'MATCH' for k in good[0] if k!='bootstrap_oid'})
+            class Bad(FakeExecutor):
+                def execute(self,step):
+                    self.calls.append(step)
+                    return raw
+            executor=Bad(self.bundle)
+            with self.subTest(value=bad),self.assertRaisesRegex(P.ProvisionError,'^BOOTSTRAP_NOT_PRISTINE$'):
+                P.provision(executor,self.bundle,DB,ADMIN,PASSWORDS)
+            self.assertEqual([step.phase for step in executor.calls],['bootstrap_preflight'])
+
+    def test_catalog_every_oid_projection_rejects_same_value_json_string(self):
+        # An invented numeric catalog is not evidence of PostgreSQL encoding.
+        # Model the real OID JSON string at every one of the 17 scalar outputs.
+        for kind,fields in self.catalog_oid_expressions.items():
+            for field in fields:
+                raw=copy.deepcopy(self.catalog)
+                row=next(row for row in raw if row['kind']==kind)
+                self.assertIs(type(row[field]),int)
+                row[field]=str(row[field])
+                with self.subTest(kind=kind,field=field),self.assertRaises(P.ProvisionError):
+                    P.validate_catalog(raw,self.bundle,DB,self.receipts)
+
+    def test_oid_zero_sentinels_do_not_accept_boolean_float_or_string_aliases(self):
+        fields=(('function','support'),('function','variadic'),('admission_function','support'),
+                ('admission_function','variadic'),('trigger','constraint'))
+        for kind,field in fields:
+            for bad in (False,True,0.0,'0',None,-1,1):
+                raw=copy.deepcopy(self.catalog)
+                row=next(row for row in raw if row['kind']==kind)
+                self.assertEqual(row[field],0)
+                row[field]=bad
+                with self.subTest(kind=kind,field=field,value=bad),self.assertRaises(P.ProvisionError):
+                    P.validate_catalog(raw,self.bundle,DB,self.receipts)
+
+    def test_oid_domain_uses_unsigned_32_bit_range_without_wire_coercion(self):
+        for oid in (1,10,2147483648,4294967295):self.assertTrue(P._oid(oid))
+        for oid in (0,-1,4294967296,'10','4294967295',10.0,True,False,None):
+            with self.subTest(oid=oid):self.assertFalse(P._oid(oid))
+        # Ensure a valid high-bit OID survives the actual catalog/metadata path
+        # as an int rather than relying on PostgreSQL's signed int4 range.
+        raw=copy.deepcopy(self.catalog)
+        next(row for row in raw if row['kind']=='admission_function')['oid']=4294967295
+        receipt=P.validate_catalog(raw,self.bundle,DB,self.receipts)
+        self.assertEqual(receipt.private_metadata['admission_function_oid'],4294967295)
+        self.assertIs(type(receipt.private_metadata['admission_function_oid']),int)
 
 
 if __name__ == '__main__':
