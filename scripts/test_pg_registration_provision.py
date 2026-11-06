@@ -61,7 +61,7 @@ def fake_catalog(bundle):
             for table,fn,kind in ((e["table"],"RI_FKey_check_ins",5),(e["table"],"RI_FKey_check_upd",17),(e["ref_table"],"RI_FKey_noaction_del",9),(e["ref_table"],"RI_FKey_noaction_upd",17)):
                 add("internal_trigger",table=table,constraint_table=e["table"],constraint_name=name,function=fn,function_schema="pg_catalog",trigger_kind=kind,enabled="O",deferrable=e["deferrable"],deferred=e["deferred"],arguments=0,argument_bytes="",qualification=None,columns="")
     for e in indexes:
-        add("index",name=e["name"],table=e["table"],keys=list(e["keys"]),options=" ".join(map(str,e["options"])),unique=e["unique"],primary=e.get("primary",False),valid=True,ready=True,live=True,nulls_not_distinct=False,key_count=len(e["keys"]),attribute_count=len(e["keys"]),method="btree",expressions=None,predicate=e["predicate_source"] or None,definition=f"CREATE {'UNIQUE ' if e['unique'] else ''}INDEX {e['name']} ON {P.SCHEMA}.{e['table']} USING btree ({', '.join(e['keys'])})")
+        add("index",name=e["name"],table=e["table"],keys=list(e["keys"]),options=" ".join(map(str,e["options"])),unique=e["unique"],primary=e.get("primary",False),valid=True,ready=True,live=True,nulls_not_distinct=False,key_count=len(e["keys"]),attribute_count=len(e["keys"]),method="btree",expressions=None,predicate=e["predicate_source"] or None,definition=f"CREATE {'UNIQUE ' if e['unique'] else ''}INDEX {e['name']} ON {P.SCHEMA}.{e['table']} USING btree ({', '.join(key + (' DESC' if option == 3 else '') for key,option in zip(e['keys'],e['options']))})")
     for name,kind in list((x,"r") for x in c["tables"]) + [(x["name"],"i") for x in indexes] + [("outbox_id_seq","S")]:
         add("relation",name=name,relation_kind=kind,owner=P.OWNER,persistence="p",rls=False,force_rls=False,partition=False,options=None)
     for name,kind,rel,elem,base in [("epoch_ms","d",None,None,"int8"),("_epoch_ms","b",None,"epoch_ms",None)] + [(t,"c",t,None,None) for t in c["tables"]] + [("_"+t,"b",None,t,None) for t in c["tables"]]:
@@ -1242,6 +1242,97 @@ class ConstraintInheritanceTests(unittest.TestCase):
         P._record_catalog_validation_diagnostic(sink,P.ProvisionError('CATALOG_CONSTRAINT_INHERITANCE'))
         self.assertEqual(records,[{'format':'worktool-registration-catalog-validation-v1',
             'authority':'DIAGNOSTIC_ONLY','failure_code':'CATALOG_CONSTRAINT_INHERITANCE'}])
+
+
+class CatalogArtifactTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.bundle=P.load_and_verify_sources(ROOT)
+        cls.plan=P.build_provision_plan(cls.bundle,DB,ADMIN,PASSWORDS)
+        cls.catalog=fake_catalog(cls.bundle)
+        cls.receipts=[dict(phase=s.phase,login_role=s.login_role,database=s.database,
+            sql_sha256=P.sha(s.sql.encode()),acknowledged=True) for s in cls.plan]
+
+    def test_three_reviewed_desc_indexes_survive_complete_derived_proof_path(self):
+        expected={
+            'commands_actor':(('tenant','actor','created'),(0,0,3),
+                'CREATE INDEX commands_actor ON wt_synthetic_registry.commands USING btree (tenant, actor, created DESC)'),
+            'audit_tenant_time':(('tenant','created'),(0,3),
+                'CREATE INDEX audit_tenant_time ON wt_synthetic_registry.audit USING btree (tenant, created DESC)'),
+            'deletion_device_time':(('tenant','device','created'),(0,0,3),
+                'CREATE INDEX deletion_device_time ON wt_synthetic_registry.deletions USING btree (tenant, device, created DESC)'),
+        }
+        ordered={x['name']:x for x in self.bundle.contract['indexes'] if any(x['options'])}
+        self.assertEqual(set(ordered),set(expected))
+        for name,(keys,options,definition) in expected.items():
+            self.assertEqual((ordered[name]['keys'],ordered[name]['options']),(keys,options))
+            self.assertEqual(next(r for r in self.catalog if r['kind']=='index' and r['name']==name)['definition'],definition)
+        receipt=P.validate_catalog(self.catalog,self.bundle,DB,self.receipts)
+        proof=P.sanitized_catalog_proof(receipt)
+        self.assertEqual({r['name']:r['definition'] for r in proof['objects'] if r['kind']=='index' and r['name'] in expected},
+                         {name:value[2] for name,value in expected.items()})
+        self.assertEqual(proof['constraint_semantic_normalization'],'NOT_PROVEN')
+        self.assertEqual(len(proof['objects']),2348)
+        self.assertLess(len(P.canonical(proof)),P.MAX_RESULT_BYTES)
+
+    def test_desc_is_derived_from_contract_not_global_or_observed_words(self):
+        self.assertNotIn('desc',P._definition_vocabulary((('empty',''),))[0])
+        ascending_source='CREATE INDEX commands_actor ON wt_synthetic_registry.commands USING btree (tenant, actor, created)'
+        # With no reviewed DESC option/token, the observed word remains forbidden.
+        with self.assertRaisesRegex(P.ProvisionError,'^CATALOG_ARTIFACT_UNREVIEWED_IDENTIFIER$'):
+            P._safe_definition_text(ascending_source.replace('created)','created DESC)'),
+                (('source_without_desc_option',ascending_source),))
+        seen=[];original=P._safe_definition_text
+        def inspect(value,texts,vocabulary=None):
+            if vocabulary is not None and not seen:seen.append(vocabulary)
+            return original(value,texts,vocabulary)
+        receipt=P.validate_catalog(self.catalog,self.bundle,DB,self.receipts)
+        with mock.patch.object(P,'_safe_definition_text',side_effect=inspect):P.sanitized_catalog_proof(receipt)
+        self.assertIn('desc',seen[0][0])
+        for unknown in ('PRIVATE_UNREVIEWED_ORDER','ASC','NULLS LAST'):
+            raw=copy.deepcopy(self.catalog)
+            row=next(r for r in raw if r['kind']=='index' and r['name']=='commands_actor')
+            row['definition']=row['definition'].replace(' DESC',' '+unknown)
+            receipt=P.validate_catalog(raw,self.bundle,DB,self.receipts)
+            with self.subTest(token=unknown),self.assertRaisesRegex(P.ProvisionError,'^CATALOG_ARTIFACT_UNREVIEWED_IDENTIFIER$'):
+                P.sanitized_catalog_proof(receipt)
+
+    def test_sort_option_and_receipt_contract_tampering_remain_rejected(self):
+        for options in ('0 0 0','0 0 1','0 0 2','0 0 7'):
+            raw=copy.deepcopy(self.catalog)
+            next(r for r in raw if r['kind']=='index' and r['name']=='commands_actor')['options']=options
+            with self.subTest(options=options),self.assertRaisesRegex(P.ProvisionError,'^CATALOG_INDEX_CONTRACT$'):
+                P.validate_catalog(raw,self.bundle,DB,self.receipts)
+        receipt=P.validate_catalog(self.catalog,self.bundle,DB,self.receipts)
+        changed=copy.deepcopy(receipt)
+        next(x for x in changed.private_catalog_receipt['expected_contract']['indexes'] if x['name']=='commands_actor')['options']=(0,0,0)
+        with self.assertRaisesRegex(P.ProvisionError,'^CATALOG_ARTIFACT_RECEIPT_CHANGED$'):
+            P.sanitized_catalog_proof(changed)
+
+    def test_artifact_error_classifier_has_only_exact_fixed_helper_codes(self):
+        import ast
+        tree=ast.parse(Path(SPEC.origin).read_text())
+        expected=set()
+        for fn in tree.body:
+            if isinstance(fn,ast.FunctionDef) and fn.name in ('sanitized_catalog_proof','_safe_definition_text'):
+                expected.update(n.value for n in ast.walk(fn) if isinstance(n,ast.Constant)
+                    and type(n.value) is str and n.value.startswith('CATALOG_ARTIFACT_'))
+        self.assertEqual(len(expected),11)
+        self.assertEqual(P.CATALOG_ARTIFACT_DIAGNOSTIC_CODES,expected|{'UNKNOWN'})
+        for code in expected|{'UNKNOWN'}:
+            self.assertEqual(P.catalog_artifact_diagnostic(P.ProvisionError(code)),{
+                'format':'worktool-registration-catalog-artifact-v1','authority':'DIAGNOSTIC_ONLY','failure_code':code})
+        class Hostile(RuntimeError):
+            def __str__(self):raise AssertionError('Never stringify errors')
+        class DerivedError(P.ProvisionError):pass
+        class DerivedString(str):pass
+        for error in (Hostile('PRIVATE_ERROR'),RuntimeError('CATALOG_ARTIFACT_TOO_LARGE'),
+                      DerivedError('CATALOG_ARTIFACT_TOO_LARGE'),P.ProvisionError(DerivedString('CATALOG_ARTIFACT_TOO_LARGE')),
+                      P.ProvisionError('CATALOG_ARTIFACT_TOO_LARGE PRIVATE_ERROR'),P.ProvisionError('SOURCE_HASH_MISMATCH'),
+                      P.ProvisionError('CATALOG_IDENTITY'),P.ProvisionError('CATALOG_ARTIFACT_TOO_LARGE','PRIVATE_ERROR'),
+                      P.ProvisionError(),KeyboardInterrupt('PRIVATE_ERROR')):
+            self.assertEqual(P.catalog_artifact_diagnostic(error),{
+                'format':'worktool-registration-catalog-artifact-v1','authority':'DIAGNOSTIC_ONLY','failure_code':'UNKNOWN'})
 
 
 if __name__ == '__main__':

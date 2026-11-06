@@ -1458,6 +1458,34 @@ def _safe_definition_text(value, texts, vocabulary=None):
     return value
 
 
+# Fixed helper error vocabulary; the supervisor validates it independently.
+CATALOG_ARTIFACT_DIAGNOSTIC_CODES = frozenset((
+    'CATALOG_ARTIFACT_DEFINITION_BOUNDS',
+    'CATALOG_ARTIFACT_FUNCTION_BODY',
+    'CATALOG_ARTIFACT_RECEIPT_CHANGED',
+    'CATALOG_ARTIFACT_RECEIPT_FIELDS',
+    'CATALOG_ARTIFACT_RECEIPT_TYPE',
+    'CATALOG_ARTIFACT_SOURCE_PINS',
+    'CATALOG_ARTIFACT_TOO_LARGE',
+    'CATALOG_ARTIFACT_UNREVIEWED_IDENTIFIER',
+    'CATALOG_ARTIFACT_UNREVIEWED_LITERAL',
+    'CATALOG_ARTIFACT_UNREVIEWED_NUMBER',
+    'CATALOG_ARTIFACT_UNREVIEWED_SYNTAX',
+    'UNKNOWN',
+))
+
+
+def catalog_artifact_diagnostic(error):
+    # This classifier has no acceptance authority and never stringifies errors.
+    code = "UNKNOWN"
+    if type(error) is ProvisionError and type(error.args) is tuple and len(error.args) == 1:
+        candidate = error.args[0]
+        if type(candidate) is str and candidate in CATALOG_ARTIFACT_DIAGNOSTIC_CODES:
+            code = candidate
+    return {"format":"worktool-registration-catalog-artifact-v1",
+            "authority":"DIAGNOSTIC_ONLY", "failure_code":code}
+
+
 def sanitized_catalog_proof(receipt):
     """Produce the sole upload-safe catalog artifact; reject, never echo extras.
 
@@ -1479,7 +1507,11 @@ def sanitized_catalog_proof(receipt):
     chunks += [c["source"] for c in contract["constraints"]]
     chunks += ["CREATE FUNCTION " + name + " " + fn["body"] for name,fn in contract["functions"].items()]
     chunks += [" ".join((name,table,info["type"],info["default_source"])) for table,cols in contract["tables"].items() for name,info in cols.items()]
-    chunks += [x["name"]+" "+x["table"]+" "+" ".join(x["keys"])+" "+x["predicate_source"] for x in contract["indexes"]]
+    # Preserve reviewed sorting tokens from the source-derived index options.
+    # Never learn vocabulary from the observed definition or globally allow it.
+    chunks += [x["name"]+" "+x["table"]+" "+" ".join(
+        key + (" DESC" if option == 3 else "") for key,option in zip(x["keys"],x["options"]))
+        +" "+x["predicate_source"] for x in contract["indexes"]]
     chunks += ["CHECK(VALUE>=0 AND VALUE<=9007199254740991)"]
     chunks += [c["catalog_name"] for c in expected_constraints(contract)]
     texts = (("verified-derived-contract", "\n".join(chunks)),)

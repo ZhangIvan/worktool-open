@@ -307,6 +307,7 @@ class SupervisorTests(unittest.TestCase):
             result = supervisor.run(handle_signals=False)
         self.assertEqual(result['status'], 'PASS_FOCUSED_ISOLATED_SCOPE', result)
         self.assertNotIn('catalog_validation_diagnostic',result)
+        self.assertNotIn('catalog_artifact_diagnostic',result)
         self.assertEqual(result['evidence']['leaves'], manifest['leaves'])
         self.assertEqual(len(result['installation']['execution']), 19)
         self.assertEqual(set(result['provision_diagnostics']['phases']), set(m.PROVISION_PHASES))
@@ -446,6 +447,205 @@ class SupervisorTests(unittest.TestCase):
                     supervisor.verify_standalone_cleanup_source()
             finally:
                 case.tearDown()
+
+
+    def test_artifact_diagnostic_allowlist_is_independent_and_redacted(self):
+        helper=m.load_helper('pg-registration-provision.py')
+        self.assertTrue(helper.CATALOG_ARTIFACT_DIAGNOSTIC_CODES < m.CATALOG_ARTIFACT_DIAGNOSTIC_CODES)
+        self.assertEqual(len(m.CATALOG_ARTIFACT_DIAGNOSTIC_CODES),18)
+        valid={'format':'worktool-registration-catalog-artifact-v1','authority':'DIAGNOSTIC_ONLY','failure_code':'UNKNOWN'}
+        for code in m.CATALOG_ARTIFACT_DIAGNOSTIC_CODES:
+            payload={**valid,'failure_code':code}
+            self.s.record_catalog_artifact_diagnostic(payload)
+            self.assertEqual(self.s.catalog_artifact_diagnostic,payload)
+            payload['failure_code']='PRIVATE_MUTATION'
+            self.assertEqual(self.s.catalog_artifact_diagnostic['failure_code'],code)
+        previous=copy.deepcopy(self.s.catalog_artifact_diagnostic)
+        class DerivedString(str):pass
+        for payload in (None,[],False,'PRIVATE_ERROR',{**valid,'raw':'PRIVATE_CATALOG'},
+            {**valid,'format':'worktool-registration-catalog-validation-v1'},
+            {**valid,'authority':'ACCEPTANCE'},{**valid,'failure_code':'CATALOG_IDENTITY'},
+            {**valid,'failure_code':'CATALOG_ARTIFACT_TOO_LARGE PRIVATE_SQL'},
+            {**valid,'failure_code':DerivedString('UNKNOWN')},{**valid,'failure_code':None},
+            {key:value for key,value in valid.items() if key!='authority'}):
+            self.s.record_catalog_artifact_diagnostic(payload)
+            self.assertEqual(self.s.catalog_artifact_diagnostic,previous)
+        self.assertIsNone(self.s.catalog_validation_diagnostic)
+        with patch.object(helper,'CATALOG_ARTIFACT_DIAGNOSTIC_CODES',frozenset({'PRIVATE_NEW_CODE'})):
+            self.s.record_catalog_artifact_diagnostic({**valid,'failure_code':'PRIVATE_NEW_CODE'})
+        self.assertEqual(self.s.catalog_artifact_diagnostic,previous)
+
+    def prepare_artifact_receipt(self):
+        # A local file-only fixture. No process, database, SQL or credentials.
+        self.s.folder.mkdir(mode=0o700)
+        self.s.admin='wt_admin_offlineabcdefghijklmnop'
+        self.s.database='wt_test_offlineabcdefghijklmnop'
+        self.s.credentials={'owner':'PRIVATE_SYNTHETIC_PASSWORD_NEVER_A_CREDENTIAL'}
+        self.s.receipt=self.s.provision_helper.provision(types.SimpleNamespace(execute=lambda _:None),
+            None,self.s.database,self.s.admin,{})
+        return self.s.provision_helper.sanitized_catalog_proof(self.s.receipt)
+
+    def test_artifact_stage_errors_preserve_original_failure_and_short_circuit(self):
+        scenarios=('shape_false','shape_exception','encoding','size','secret_present','secret_scan','write')
+        expected_codes={'shape_false':'CATALOG_ARTIFACT_SHAPE_INVALID','shape_exception':'CATALOG_ARTIFACT_SHAPE_INVALID',
+            'encoding':'CATALOG_ARTIFACT_ENCODING_FAILED','size':'CATALOG_ARTIFACT_SIZE_LIMIT',
+            'secret_present':'CATALOG_ARTIFACT_SECRET_PRESENT','secret_scan':'CATALOG_ARTIFACT_SECRET_SCAN_FAILED',
+            'write':'CATALOG_ARTIFACT_WRITE_FAILED'}
+        for scenario in scenarios:
+            case=SupervisorTests(methodName='runTest');case.setUp()
+            try:
+                proof=case.prepare_artifact_receipt();failure=RuntimeError('PRIVATE_STAGE_EXCEPTION')
+                if scenario=='shape_false':proof={**proof,'unexpected':'PRIVATE_FIELD'}
+                if scenario=='shape_exception':
+                    class BadShape(dict):
+                        def __getitem__(self,key):raise failure
+                    proof=BadShape(proof)
+                contains_calls=[]
+                class BadContains(bytes):
+                    def __contains__(self,value):contains_calls.append(value);raise failure
+                original_canonical=case.s.provision_helper.canonical
+                def encode(value):
+                    if value is proof:
+                        if scenario=='encoding':raise failure
+                        if scenario=='size':return BadContains(b'x'*((1<<20)+1))
+                        if scenario=='secret_present':return next(iter(case.s.credentials.values())).encode()
+                        if scenario=='secret_scan':return BadContains(b'bounded')
+                    return original_canonical(value)
+                original_write=m.private_file;writes=[]
+                def write(target,body):
+                    writes.append(target.name)
+                    if scenario=='write' and target.name=='catalog-proof.json':raise failure
+                    return original_write(target,body)
+                with patch.object(case.s.provision_helper,'sanitized_catalog_proof',return_value=proof), \
+                     patch.object(case.s.provision_helper,'canonical',side_effect=encode), \
+                     patch.object(m,'private_file',side_effect=write):
+                    with self.assertRaises(BaseException) as caught:case.s.retain_install_receipt()
+                with self.subTest(scenario=scenario):
+                    self.assertEqual(case.s.stage,'catalog_evidence')
+                    if scenario in ('shape_false','size','secret_present'):
+                        self.assertIs(type(caught.exception),m.Fault)
+                        self.assertEqual(caught.exception.code,'PROVISION_FAILED')
+                    else:self.assertIs(caught.exception,failure)
+                    self.assertEqual(case.s.catalog_artifact_diagnostic,{
+                        'format':'worktool-registration-catalog-artifact-v1','authority':'DIAGNOSTIC_ONLY',
+                        'failure_code':expected_codes[scenario]})
+                    self.assertIsNone(case.s.catalog_validation_diagnostic)
+                    self.assertEqual(writes,['private-install-receipt.json']+(['catalog-proof.json'] if scenario=='write' else []))
+                    self.assertFalse((case.s.folder/'catalog-proof.json').exists())
+                    if scenario=='size':self.assertEqual(contains_calls,[])
+                    self.assertNotIn('PRIVATE',json.dumps(case.s.catalog_artifact_diagnostic))
+            finally:case.tearDown()
+
+    def test_artifact_original_size_boundary_and_sink_baseexceptions_are_preserved(self):
+        proof=self.prepare_artifact_receipt()
+        original_canonical=self.s.provision_helper.canonical
+        def encode(value):return b'x'*(1<<20) if value is proof else original_canonical(value)
+        with patch.object(self.s.provision_helper,'sanitized_catalog_proof',return_value=proof), \
+             patch.object(self.s.provision_helper,'canonical',side_effect=encode):
+            self.s.retain_install_receipt()
+        self.assertEqual((self.s.folder/'catalog-proof.json').stat().st_size,1<<20)
+        self.assertIsNone(self.s.catalog_artifact_diagnostic)
+        for failure in (RuntimeError('PRIVATE_SINK'),KeyboardInterrupt(),SystemExit(7)):
+            with patch.object(self.s,'record_catalog_artifact_diagnostic',side_effect=failure):
+                self.s._record_catalog_artifact_failure('CATALOG_ARTIFACT_WRITE_FAILED')
+            self.assertIsNone(self.s.catalog_artifact_diagnostic)
+        # Classifier exceptions are also diagnostic-only and cannot escape.
+        self.s.provision_helper.catalog_artifact_diagnostic=lambda error:(_ for _ in ()).throw(KeyboardInterrupt())
+        self.s._record_catalog_artifact_failure(error=RuntimeError('PRIVATE_ERROR'))
+        self.assertEqual(self.s.catalog_artifact_diagnostic['failure_code'],'UNKNOWN')
+
+    def test_artifact_baseexceptions_keep_original_propagation(self):
+        for stage in ('generation','encoding','write'):
+            for failure in (KeyboardInterrupt(),SystemExit(19)):
+                case=SupervisorTests(methodName='runTest');case.setUp()
+                try:
+                    proof=case.prepare_artifact_receipt()
+                    original_encode=case.s.provision_helper.canonical
+                    original_write=m.private_file
+                    def encode(value):
+                        if stage=='encoding' and value is proof:raise failure
+                        return original_encode(value)
+                    def write(target,body):
+                        if stage=='write' and target.name=='catalog-proof.json':raise failure
+                        return original_write(target,body)
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(patch.object(case.s.provision_helper,'sanitized_catalog_proof',
+                            side_effect=failure if stage=='generation' else None,return_value=proof))
+                        stack.enter_context(patch.object(case.s.provision_helper,'canonical',side_effect=encode))
+                        stack.enter_context(patch.object(m,'private_file',side_effect=write))
+                        stack.enter_context(patch.object(case.s,'record_catalog_artifact_diagnostic',side_effect=SystemExit(27)))
+                        with self.assertRaises(BaseException) as caught:case.s.retain_install_receipt()
+                    with self.subTest(stage=stage,error=type(failure).__name__):
+                        self.assertIs(caught.exception,failure)
+                        self.assertIsNone(case.s.catalog_artifact_diagnostic)
+                        self.assertFalse((case.s.folder/'catalog-proof.json').exists())
+                finally:case.tearDown()
+
+    def test_real_artifact_failure_and_sink_failure_do_not_enter_fixture_or_block_cleanup(self):
+        actual_root=path.resolve().parents[1]
+        for scenario in ('source_rejection','unknown_generation','sink_failure'):
+            case=SupervisorTests(methodName='runTest');case.setUp()
+            try:
+                provision_tests=m.load_helper('test_pg_registration_provision.py')
+                provision=m.load_helper('pg-registration-provision.py')
+                evidence=m.load_helper('pg-registration-evidence.py')
+                class IntegratedExecutor(FakeExecutor):
+                    def phase(self,args):
+                        if args[0]==m.DOCKER and args[1]=='exec' and '-i' in args and self.supervisor.stage.startswith('provision_'):
+                            return 'sql_'+self.supervisor.stage.removeprefix('provision_')
+                        return super().phase(args)
+                    def call(self,args,**kwargs):
+                        result=super().call(args,**kwargs);phase=self.phase(args)
+                        if phase=='sql_bootstrap_preflight':
+                            return m.Result(0,m.canonical([dict(version=180006,session_user=self.supervisor.admin,
+                                current_user=self.supervisor.admin,database_absent=True,roles_absent=True,
+                                activity_admitted=True,bootstrap_oid=10,bootstrap_superuser=True,event_triggers=0)]))
+                        if phase=='sql_bootstrap_helper':return m.Result(0,m.canonical([{'guard_password_is_null':True}]))
+                        if phase=='sql_catalog_readback':
+                            rows=provision_tests.fake_catalog(self.supervisor.bundle)
+                            for row in rows:
+                                for key,value in row.items():
+                                    if value==provision_tests.ADMIN:row[key]=self.supervisor.admin
+                            next(r for r in rows if r['kind']=='identity')['database']=self.supervisor.database
+                            if scenario!='unknown_generation':
+                                next(r for r in rows if r['kind']=='index' and r['name']=='commands_actor')['definition']+=' PRIVATE_UNREVIEWED_IDENTIFIER'
+                            return m.Result(0,m.canonical(rows))
+                        return result
+                pin=m.make_pin(actual_root);case.source_pin.write_bytes(pin)
+                case.config.source_root=actual_root;case.config.source_pin_sha256=m.sha(pin)
+                executor=IntegratedExecutor()
+                supervisor=m.Supervisor(case.config,executor,provision,evidence,sleep=lambda _:None)
+                executor.supervisor=supervisor
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.object(m.subprocess,'Popen',side_effect=AssertionError('MUST_NOT_LAUNCH')))
+                    if scenario=='unknown_generation':
+                        stack.enter_context(patch.object(provision,'sanitized_catalog_proof',side_effect=RuntimeError('PRIVATE_ERROR_SQL')))
+                    if scenario=='sink_failure':
+                        stack.enter_context(patch.object(supervisor,'record_catalog_artifact_diagnostic',side_effect=KeyboardInterrupt()))
+                    result=supervisor.run(handle_signals=False)
+                with self.subTest(scenario=scenario):
+                    self.assertEqual(result['failure_code'],'PROVISION_FAILED')
+                    self.assertEqual(result['failure_stage'],'catalog_evidence')
+                    self.assertEqual(result['cleanup'],'CONFIRMED')
+                    self.assertEqual(result['run'],'FAIL')
+                    self.assertEqual(executor.invocations,0);self.assertEqual(executor.removals,1)
+                    self.assertEqual(len(result['installation']['execution']),19)
+                    self.assertEqual(result['provision_diagnostics']['phases']['catalog_readback'],'QUERY_RESULT_RETURNED')
+                    self.assertNotIn('catalog_validation_diagnostic',result)
+                    self.assertNotIn('catalog_proof_sha256',result)
+                    self.assertFalse((supervisor.folder/'catalog-proof.json').exists())
+                    self.assertFalse((supervisor.folder/'envelope.json').exists())
+                    if scenario=='sink_failure':self.assertNotIn('catalog_artifact_diagnostic',result)
+                    else:
+                        diagnostic=result['catalog_artifact_diagnostic']
+                        self.assertEqual(diagnostic,{'format':'worktool-registration-catalog-artifact-v1',
+                            'authority':'DIAGNOSTIC_ONLY','failure_code':'UNKNOWN' if scenario=='unknown_generation' else 'CATALOG_ARTIFACT_UNREVIEWED_IDENTIFIER'})
+                        for private in (supervisor.admin,supervisor.database,'PRIVATE_',*supervisor.credentials.values()):
+                            self.assertNotIn(private,json.dumps(diagnostic))
+                    self.assertNotIn('PRIVATE_',json.dumps(result))
+                    self.assertEqual(json.loads((supervisor.folder/'outcome.json').read_text()),result)
+                    supervisor.verify_standalone_cleanup_source()
+            finally:case.tearDown()
 
 
     def make_stage_source(self):

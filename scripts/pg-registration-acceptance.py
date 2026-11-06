@@ -116,6 +116,29 @@ CATALOG_VALIDATION_DIAGNOSTIC_CODES = frozenset((
 ))
 
 
+# Independent artifact-only vocabulary; never expand it from helper output.
+CATALOG_ARTIFACT_DIAGNOSTIC_CODES = frozenset((
+    'CATALOG_ARTIFACT_DEFINITION_BOUNDS',
+    'CATALOG_ARTIFACT_ENCODING_FAILED',
+    'CATALOG_ARTIFACT_FUNCTION_BODY',
+    'CATALOG_ARTIFACT_RECEIPT_CHANGED',
+    'CATALOG_ARTIFACT_RECEIPT_FIELDS',
+    'CATALOG_ARTIFACT_RECEIPT_TYPE',
+    'CATALOG_ARTIFACT_SECRET_PRESENT',
+    'CATALOG_ARTIFACT_SECRET_SCAN_FAILED',
+    'CATALOG_ARTIFACT_SHAPE_INVALID',
+    'CATALOG_ARTIFACT_SIZE_LIMIT',
+    'CATALOG_ARTIFACT_SOURCE_PINS',
+    'CATALOG_ARTIFACT_TOO_LARGE',
+    'CATALOG_ARTIFACT_UNREVIEWED_IDENTIFIER',
+    'CATALOG_ARTIFACT_UNREVIEWED_LITERAL',
+    'CATALOG_ARTIFACT_UNREVIEWED_NUMBER',
+    'CATALOG_ARTIFACT_UNREVIEWED_SYNTAX',
+    'CATALOG_ARTIFACT_WRITE_FAILED',
+    'UNKNOWN',
+))
+
+
 CENSUS_MAX_BYTES = 128 << 10
 CENSUS_STATUSES = frozenset(('OBSERVED', 'SKIPPED_BUDGET', 'SKIPPED_INTERRUPTED',
     'SQL_PROCESS_TIMEOUT', 'SQL_PROCESS_NONZERO', 'SQL_PROCESS_FAILED', 'SQL_PROCESS_OUTPUT_LIMIT',
@@ -744,6 +767,7 @@ class Supervisor:
         self.provision_diagnostics = {}
         self.preflight_diagnostics = None
         self.catalog_validation_diagnostic = None
+        self.catalog_artifact_diagnostic = None
         self.activity_census = None
         self.activity_diagnostic_trigger = None
         self.census_attempted = False
@@ -959,6 +983,38 @@ class Supervisor:
         except BaseException:
             return
 
+    def record_catalog_artifact_diagnostic(self, diagnostic):
+        try:
+            if type(diagnostic) is not dict or set(diagnostic) != {"format", "authority", "failure_code"}:
+                return
+            if not all(type(value) is str for value in diagnostic.values()):
+                return
+            if (diagnostic["format"] != "worktool-registration-catalog-artifact-v1"
+                    or diagnostic["authority"] != "DIAGNOSTIC_ONLY"
+                    or diagnostic["failure_code"] not in CATALOG_ARTIFACT_DIAGNOSTIC_CODES):
+                return
+            self.catalog_artifact_diagnostic = {"format":"worktool-registration-catalog-artifact-v1",
+                "authority":"DIAGNOSTIC_ONLY", "failure_code":diagnostic["failure_code"]}
+        except BaseException:
+            return
+
+    def _record_catalog_artifact_failure(self, code="UNKNOWN", error=None):
+        # Optional classification and sink failures must not replace the original
+        # exception, run another action, or block the supervisor's cleanup.
+        try:
+            diagnostic = {"format":"worktool-registration-catalog-artifact-v1",
+                "authority":"DIAGNOSTIC_ONLY", "failure_code":code}
+            if error is not None:
+                try:
+                    classifier = getattr(self.provision_helper, "catalog_artifact_diagnostic", None)
+                    if callable(classifier):
+                        diagnostic = classifier(error)
+                except BaseException:
+                    pass
+            self.record_catalog_artifact_diagnostic(diagnostic)
+        except BaseException:
+            pass
+
     def activity_census_eligible(self, outcome):
         # Base eligibility is evidence of an already terminal, narrow failure.
         # Cancellation and remaining time determine attempt/skip only later.
@@ -1117,17 +1173,41 @@ class Supervisor:
         self.stage = 'catalog_evidence'
         try:
             proof = self.provision_helper.sanitized_catalog_proof(self.receipt)
-        except Exception:
+        except Exception as error:
+            self._record_catalog_artifact_failure(error=error)
             raise Fault('PROVISION_FAILED') from None
-        require(isinstance(proof, dict) and set(proof) == {'format', 'proof_model', 'constraint_semantic_normalization',
-            'sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution', 'objects'} and
-            proof['format'] == 'worktool-registration-catalog-proof-v1' and
-            proof['constraint_semantic_normalization'] == 'NOT_PROVEN' and
-            all(proof[key] == public[key] for key in ('sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution')) and
-            isinstance(proof['objects'], list) and 1 <= len(proof['objects']) <= 4096, 'PROVISION_FAILED')
-        proof_bytes = self.provision_helper.canonical(proof)
-        require(len(proof_bytes) <= 1 << 20 and not any(secret.encode() in proof_bytes for secret in self.credentials.values()), 'PROVISION_FAILED')
-        private_file(self.folder / 'catalog-proof.json', proof_bytes)
+        try:
+            require(isinstance(proof, dict) and set(proof) == {'format', 'proof_model', 'constraint_semantic_normalization',
+                'sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution', 'objects'} and
+                proof['format'] == 'worktool-registration-catalog-proof-v1' and
+                proof['constraint_semantic_normalization'] == 'NOT_PROVEN' and
+                all(proof[key] == public[key] for key in ('sql_sources', 'sql_manifest_sha256', 'install_receipt_sha256', 'catalog_observation_sha256', 'execution')) and
+                isinstance(proof['objects'], list) and 1 <= len(proof['objects']) <= 4096, 'PROVISION_FAILED')
+        except BaseException:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_SHAPE_INVALID')
+            raise
+        try:
+            proof_bytes = self.provision_helper.canonical(proof)
+            size_ok = len(proof_bytes) <= 1 << 20
+        except BaseException:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_ENCODING_FAILED')
+            raise
+        if not size_ok:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_SIZE_LIMIT')
+        require(size_ok, 'PROVISION_FAILED')
+        try:
+            secret_free = not any(secret.encode() in proof_bytes for secret in self.credentials.values())
+        except BaseException:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_SECRET_SCAN_FAILED')
+            raise
+        if not secret_free:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_SECRET_PRESENT')
+        require(secret_free, 'PROVISION_FAILED')
+        try:
+            private_file(self.folder / 'catalog-proof.json', proof_bytes)
+        except BaseException:
+            self._record_catalog_artifact_failure('CATALOG_ARTIFACT_WRITE_FAILED')
+            raise
         self.catalog_proof_sha256 = sha(proof_bytes)
 
     def provision(self):
@@ -1432,6 +1512,8 @@ class Supervisor:
                     outcome['preflight_diagnostics'] = self.preflight_diagnostics
                 if self.catalog_validation_diagnostic is not None:
                     outcome['catalog_validation_diagnostic'] = self.catalog_validation_diagnostic
+                if self.catalog_artifact_diagnostic is not None:
+                    outcome['catalog_artifact_diagnostic'] = self.catalog_artifact_diagnostic
                 if self.activity_census is not None:
                     outcome['activity_census'] = self.activity_census
                 if self.activity_diagnostic_trigger is not None:
