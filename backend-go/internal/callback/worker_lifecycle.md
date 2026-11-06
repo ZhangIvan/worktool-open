@@ -67,8 +67,16 @@ retains Claim's existing shared virtual-finish scheduling.
 
 ## Stop, uncertainty and restart limits
 
-Any recovery error, any Sender `Reconcile` result or claim failure latches a
-halt. The Sender may resolve only a completion commit uncertainty before
+Any recovery error, expired recovery budget or cancellation observed when
+recovery returns latches `RECOVERY_UNCONFIRMED`, even if the adapter returns nil.
+The loop checks the operation context and its deadline before cancelling its
+own context. It does not count a late reported recovery as confirmed, call Claim,
+retry recovery or erase the halt when Stop joins. This is conservative caller
+evidence, not proof that a database mutation did or did not commit. A pending
+Stop still retains the actual adapter call and dependencies until it returns.
+
+Any Sender `Reconcile` result or claim failure also latches a halt.
+The Sender may resolve only a completion commit uncertainty before
 returning, using the [bounded observation contract](completion_observation.md).
 It never retries Complete, Prepare or transport. Missing/conflicting evidence,
 unknown Claim/Prepare, and any cleanup uncertainty still latch the halt. The

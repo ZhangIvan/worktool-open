@@ -171,8 +171,13 @@ func (w *Worker) run(ctx context.Context) {
 	for ctx.Err() == nil {
 		recovery, cancel := context.WithTimeout(ctx, w.config.RecoveryTimeout)
 		recovered, err := w.store.RecoverOneExpired(recovery)
+		// Check before our own cancel: a late nil from an adapter cannot prove
+		// timely recovery or authorize the next Claim. Also check wall time so
+		// a delayed context timer cannot turn an expired budget into success.
+		deadline, hasDeadline := recovery.Deadline()
+		unconfirmed := recovery.Err() != nil || !hasDeadline || !time.Now().Before(deadline)
 		cancel()
-		if err != nil {
+		if err != nil || unconfirmed {
 			// Cancellation can hide an uncertain commit; do not claim clean
 			// reconciliation simply because shutdown was requested concurrently.
 			w.halt("RECOVERY_UNCONFIRMED")

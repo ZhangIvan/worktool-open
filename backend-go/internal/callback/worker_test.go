@@ -283,6 +283,95 @@ func TestWorkerOperationBudgetsAndCooperativeCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerRecoveryLateNilCannotAuthorizeNextClaim(t *testing.T) {
+	for _, mode := range []string{"deadline", "parent_cancel"} {
+		for _, recovered := range []bool{false, true} {
+			name := mode + "/empty"
+			if recovered {
+				name = mode + "/reported_recovered"
+			}
+			t.Run(name, func(t *testing.T) {
+				f, store, w := workerFixture(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				w.config.RecoveryTimeout = 10 * time.Millisecond
+				// Make an erroneous next Claim terminate instead of leaving a loop
+				// running after this assertion. Neither branch may reach it.
+				f.claimErr = ErrCommitUnknown
+				store.recover = func(recovery context.Context) (bool, error) {
+					if mode == "parent_cancel" {
+						cancel()
+					}
+					<-recovery.Done()
+					return recovered, nil
+				}
+				if err := w.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				workerWait(t, w.done)
+				if !reflect.DeepEqual(f.log, []string{"recover"}) {
+					t.Fatalf("work followed an unconfirmed recovery: %v", f.log)
+				}
+				if h := w.Health(); h.State != "halted" || h.Code != "RECOVERY_UNCONFIRMED" || h.Active || h.Recovered != 0 || h.Claimed != 0 || h.TransportInvoked != 0 {
+					t.Fatalf("late nil treated as confirmed recovery: %+v", h)
+				}
+				if err := w.Stop(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if w.Start(context.Background()) != ErrWorkerStarted {
+					t.Fatal("restarted after unconfirmed recovery")
+				}
+			})
+		}
+	}
+}
+
+func TestWorkerStopJoinsLateNilRecoveryAndPreservesHalt(t *testing.T) {
+	for _, recovered := range []bool{false, true} {
+		name := "empty"
+		if recovered {
+			name = "reported_recovered"
+		}
+		t.Run(name, func(t *testing.T) {
+			f, store, w := workerFixture(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			defer once.Do(func() { close(release) })
+			store.recover = func(context.Context) (bool, error) {
+				close(entered)
+				<-release // Simulate an adapter that ignores cancellation.
+				return recovered, nil
+			}
+			if err := w.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			workerWait(t, entered)
+			stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			if err := w.Stop(stopCtx); err != ErrWorkerJoinPending {
+				t.Fatalf("unjoined recovery was abandoned: %v", err)
+			}
+			if h := w.Health(); !h.Active || h.State != "stopping" || h.Recovered != 0 {
+				t.Fatalf("false join or confirmation: %+v", h)
+			}
+			if w.Start(context.Background()) != ErrWorkerStarted {
+				t.Fatal("replacement worker started before join")
+			}
+			once.Do(func() { close(release) })
+			if err := w.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(f.log, []string{"recover"}) {
+				t.Fatalf("work followed cancelled recovery: %v", f.log)
+			}
+			if h := w.Health(); h.State != "halted" || h.Code != "RECOVERY_UNCONFIRMED" || h.Active || h.Recovered != 0 || h.Claimed != 0 || h.TransportInvoked != 0 {
+				t.Fatalf("joined recovery erased uncertainty: %+v", h)
+			}
+		})
+	}
+}
+
 func TestWorkerPacesAndRechecksAfterWait(t *testing.T) {
 	f, store, w := workerFixture(t)
 	f.found = false
