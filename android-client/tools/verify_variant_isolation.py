@@ -35,20 +35,28 @@ INTEROP_CORE_TESTS = {
     'sharedUnackedResultSurvivesEngineReplacementWithoutEffectReplay',
 }
 
+RECONNECT_CORE_TESTS = {
+    'readySendsRecoveredAcceptedResultOnlyOnce',
+    'readyReplaysOldAndNewPendingResultsButNotAcknowledgedRows',
+    'readyStagesAll101AcceptedRowsAndSendsEachOnlyOnce',
+}
+
 def check_core_test_inventory(text):
     names=re.findall(r'@Test\s+fun\s+(\w+)\s*\(',text)
-    assert len(names)==len(set(names))==21, 'exact 21 distinct core test methods required'
-    assert text.count('@Test')==21, 'unsupported or unparsed core test annotation'
-    assert set(names)==ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS, 'original 19 and reviewed 2 interop tests required'
+    assert len(names)==len(set(names))==24, 'exact 24 distinct core test methods required'
+    assert text.count('@Test')==24, 'unsupported or unparsed core test annotation'
+    assert set(names)==ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS | RECONNECT_CORE_TESTS, 'original 19, reviewed 2 interop and 3 reconnect tests required'
 
 def core_inventory_selftest():
-    names=sorted(ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS)
+    names=sorted(ORIGINAL_CORE_TESTS | INTEROP_CORE_TESTS | RECONNECT_CORE_TESTS)
     source='\n'.join('@Test fun '+name+'() {}' for name in names)
     check_core_test_inventory(source)
-    cases=[source.replace('@Test fun '+names[0]+'() {}',''),
-           source.replace(names[0], 'unreviewedReplacement'),
-           source.replace(names[0],names[1]),
-           source+'\n@Test fun unreviewedAddition() {}']
+    cases=[source+'\n@Test fun unreviewedAddition() {}',
+           source+'\n@Test unsupportedAnnotation']
+    for index,name in enumerate(names):
+        cases.extend([source.replace('@Test fun '+name+'() {}',''),
+                      source.replace(name,'unreviewedReplacement'),
+                      source.replace(name,names[(index+1)%len(names)])])
     for bad in cases:
         try: check_core_test_inventory(bad)
         except AssertionError: pass
@@ -93,7 +101,7 @@ def verify_sources():
     assert link.index('budget.inboundFrame(epoch,decodedBytes)') < link.index('val j=JSONObject(text)')
     coretests=src/'test/java/io/worktool/open/prototype/core/NativeCommandEngineTest.kt'
     check_core_test_inventory(coretests.read_text())
-    return {'source_isolation':'PASS','core_tests_preserved':19,'interop_tests_present':2,'jvm_tests':'NOT_RUN','android_build':'NOT_RUN','apk_isolation':'NOT_RUN'}
+    return {'source_isolation':'PASS','core_tests_preserved':19,'interop_tests_present':2,'reconnect_tests_present':3,'jvm_tests':'NOT_RUN','android_build':'NOT_RUN','apk_isolation':'NOT_RUN'}
 
 def parse_resources(text):
     """Read aapt2 dump resources output, retaining exact IDs/names/default strings.
