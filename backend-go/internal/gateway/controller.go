@@ -177,25 +177,48 @@ func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.Sessio
 		_ = ws.CloseNow()
 		return
 	}
-	// Existing physical sockets remain in live until cleanup; the DB session
-	// rotation already revoked them. Only their captured tuples are retired.
-	tenant, device, session, _ := a.Identity()
+	x.run()
+}
+
+// publishLease orders local retirement by the durable per-device fence, never
+// by HTTP upgrade completion. A consumed session can already be superseded by
+// the time its handler resumes. Pending/unleased peers are left to their own
+// bounded HELLO and database checks; they may belong to a newer session.
+func (x *connection) publishLease(h pg.LeaseHandle) bool {
+	c := x.parent
 	c.mu.Lock()
+	x.mu.Lock()
+	x.lease = &h // Retain the exact acquired tuple even when already superseded.
+	x.mu.Unlock()
 	old := []*connection{}
+	newer := false
 	for y := range c.live {
 		if y == x {
 			continue
 		}
-		yt, yd, ys, _ := y.auth.Identity()
-		if yt == tenant && yd == device && ys != session {
-			old = append(old, y)
+		y.mu.Lock()
+		if yh := y.lease; yh != nil && yh.Tenant == h.Tenant && yh.DeviceID == h.DeviceID && yh.RecoveryEpoch == h.RecoveryEpoch {
+			if yh.Fence < h.Fence {
+				old = append(old, y)
+			} else if yh.Fence > h.Fence {
+				newer = true
+			}
 		}
+		y.mu.Unlock()
 	}
 	c.mu.Unlock()
+	// No close worker or database operation runs under the controller lock.
+	if newer {
+		x.stop(1000, "replaced")
+		return false
+	}
+	if x.ctx.Err() != nil {
+		return false
+	}
 	for _, y := range old {
 		y.stop(1000, "replaced")
 	}
-	x.run()
+	return x.ctx.Err() == nil
 }
 
 // Shutdown stops admission and joins all registered connection cleanup. ctx must
@@ -384,10 +407,7 @@ func (x *connection) activate(raw []byte) (bool, int64, bool) {
 		x.stop(1008, "LEASE_UNAVAILABLE")
 		return false, 0, false
 	}
-	x.mu.Lock()
-	x.lease = &h
-	x.mu.Unlock()
-	if x.ctx.Err() != nil {
+	if !x.publishLease(h) {
 		return false, 0, false
 	}
 	state, e := x.parent.store.ConnectionState(x.ctx, x.auth, h)
