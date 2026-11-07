@@ -135,6 +135,107 @@ INSPECT_TEMPLATE = '{' + ','.join('"' + k + '":{{json ' + v + '}}' for k,v in IN
 TMPFS = {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'}
 
 
+# Diagnostic observations never participate in acceptance or authorize execution.
+DIAGNOSTIC_PHASES = frozenset({
+    'WORK', 'BUILD', 'IMAGE_CHECK', 'CREATE', 'RESOURCE_INSPECT', 'READINESS',
+    'RESOURCE_RECHECK', 'PATH_CHECK', 'COPY_BINARY', 'TEST_EXECUTION',
+    'EVIDENCE_VALIDATION', 'TOOLCHAIN_RECHECK', 'CLEANUP', 'CLEANUP_PREFLIGHT',
+    'CLEANUP_STATE', 'CLEANUP_LIST', 'CLEANUP_INSPECT', 'CLEANUP_REMOVE',
+    'CLEANUP_ABSENCE', 'CLEANUP_STATE_REMOVE',
+})
+
+
+def inspect_failure(code, raw):
+    """Conservative hints, not root-cause proof; never retain arbitrary bytes."""
+    result = {'exit_code': code if type(code) is int and -127 <= code <= 255 else None,
+              'category': 'UNKNOWN', 'field': None}
+    if type(raw) is not bytes or len(raw) > 4096:
+        return result
+    try:
+        text = raw.decode('ascii')
+    except UnicodeError:
+        return result
+    # Only exact frozen projection labels can leave this classifier. A match
+    # says what the client reported, not whether that was the underlying cause.
+    for label, path in INSPECT_FIELDS.items():
+        token = path.rsplit('.', 1)[-1]
+        if ('executing at <' + path + '>') in text and ('map has no entry for key "' + token + '"') in text:
+            result.update(category='MISSING_FIELD_REPORTED', field=label)
+            return result
+    if text.startswith(('Error: No such object:', 'Error response from daemon: No such container:')):
+        result['category'] = 'OBJECT_ABSENCE_REPORTED'
+    return result
+
+
+class Diagnostics:
+    """At most 64 events and one <=16 KiB record, after cleanup only.
+
+    provenance denotes entrypoint, not proof that SQL or cleanup succeeded.
+    """
+    def __init__(self, provenance):
+        self.provenance = provenance if type(provenance) is str and provenance in ('RUN', 'RECOVERY', 'SYNTHETIC') else 'SYNTHETIC'
+        self.events = []
+        self.outcomes = {side: {'phase': side.upper(), 'status': 'NOT_STARTED', 'code': None,
+                                'inspect': None} for side in ('work', 'cleanup')}
+        self.emitted = False
+
+    def phase(self, side, phase):
+        if type(side) is not str or type(phase) is not str or side not in self.outcomes or phase not in DIAGNOSTIC_PHASES:
+            return
+        current = self.outcomes[side]
+        if current['status'] == 'RUNNING' and len(self.events) < 64:
+            self.events.append({'side': side, 'phase': current['phase'], 'event': 'COMPLETED'})
+        current.update(phase=phase, status='RUNNING')
+        if len(self.events) < 64:
+            self.events.append({'side': side, 'phase': phase, 'event': 'STARTED'})
+
+    def finish(self, side, exc=None):
+        if type(side) is not str or side not in self.outcomes:
+            return
+        current = self.outcomes[side]
+        current['status'] = 'SUCCEEDED' if exc is None else 'FAILED'
+        current['code'] = None if exc is None else (exc.code if type(exc) is Failure and type(exc.code) is str and exc.code in SAFE_CODES else 'UNEXPECTED_FAILURE')
+        if type(exc) is Failure:
+            detail = getattr(exc, 'inspect_diagnostic', None)
+            if type(detail) is dict and all(type(key) is str for key in detail) and set(detail) == {'exit_code', 'category', 'field'}:
+                code, category, field = detail['exit_code'], detail['category'], detail['field']
+                if (code is None or type(code) is int and -127 <= code <= 255) and type(category) is str and category in (
+                        'UNKNOWN', 'MISSING_FIELD_REPORTED', 'OBJECT_ABSENCE_REPORTED') and (field is None or type(field) is str and field in INSPECT_FIELDS):
+                    current['inspect'] = dict(detail)
+        if len(self.events) < 64:
+            self.events.append({'side': side, 'phase': current['phase'], 'event': current['status']})
+
+    def emit(self):
+        if self.emitted:
+            return
+        self.emitted = True
+        record = {'diagnostic_version': 1, 'provenance': self.provenance,
+                  'work': self.outcomes['work'], 'cleanup': self.outcomes['cleanup'], 'events': self.events}
+        raw = json.dumps(record, sort_keys=True, separators=(',', ':'))
+        if len(raw) <= 16384:
+            print(raw)
+
+
+def new_diagnostics(provenance):
+    try:
+        return Diagnostics(provenance)
+    except Exception as exc:
+        if isinstance(exc,Failure) and exc.code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN'):
+            raise
+        return None
+
+
+def observe(diagnostic, method, *args):
+    # Ordinary reporting faults are best-effort. Never consume supervisor
+    # cancellation or BaseException control flow (KeyboardInterrupt/SystemExit).
+    try:
+        if diagnostic is not None:
+            getattr(diagnostic, method)(*args)
+    except Exception as exc:
+        if isinstance(exc,Failure) and exc.code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN'):
+            raise
+
+
 def owned_container(v, nonce, expected_id=None):
     require(isinstance(v, dict) and set(v) == set(INSPECT_FIELDS), 'IDENTITY_MISMATCH')
     require(v['Name'] == '/wt-authority-' + nonce and type(v['Labels']) is dict
@@ -592,43 +693,74 @@ class Docker:
                        '--host','unix:///var/run/docker.sock',*args],env=self.env,**kwargs)
 
     def checked(self,args,**kwargs):
-        code,out,_=self.call(args,**kwargs)
-        require(code==0,'PROCESS_FAILED')
+        code,out,err=self.call(args,**kwargs)
+        if code != 0:
+            failure=Failure('PROCESS_FAILED')
+            if args[:3] == ['inspect','--format',INSPECT_TEMPLATE]:
+                try:
+                    failure.inspect_diagnostic=inspect_failure(code,err)
+                except Exception as exc:
+                    if isinstance(exc,Failure) and exc.code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN'):
+                        raise
+            raise failure
         return out
 
 
-def cleanup_owned(state,docker,budget):
+def cleanup_owned(state,docker,budget,diagnostic=None):
+    observe(diagnostic,'phase','cleanup','CLEANUP_STATE')
     state.verify()
     # json-per-row output is bounded by the transport before parsing.
+    observe(diagnostic,'phase','cleanup','CLEANUP_LIST')
     raw=docker.checked(['container','ls','-a','--filter','name=^/'+state.name+'$',
                         '--format','{{json .}}'],timeout=budget(10))
     rows=[strict_json(line,8192) for line in raw.splitlines() if line]
     require(len(rows)<=1,'CLEANUP_IDENTITY_MISMATCH')
     if rows:
         require(type(rows[0]) is dict and rows[0].get('Names')==state.name,'CLEANUP_IDENTITY_MISMATCH')
+        observe(diagnostic,'phase','cleanup','CLEANUP_INSPECT')
         info=strict_json(docker.checked(['inspect','--format',INSPECT_TEMPLATE,state.name],timeout=budget(10)),16384)
         expected=None
         if state.has('container.id'):
             raw=state.read('container.id',64)
             expected=raw.decode('ascii')
         cid=owned_container(info,state.nonce,expected)
+        observe(diagnostic,'phase','cleanup','CLEANUP_REMOVE')
         docker.checked(['rm','-f',cid],timeout=budget(20))
+    observe(diagnostic,'phase','cleanup','CLEANUP_ABSENCE')
     raw=docker.checked(['container','ls','-a','--filter','name=^/'+state.name+'$',
                         '--format','{{json .}}'],timeout=budget(10))
     require(not raw.strip(),'CLEANUP_UNCONFIRMED')
+    observe(diagnostic,'phase','cleanup','CLEANUP_STATE_REMOVE')
     state.remove_confirmed()
 
 
-def finalize_owned(work,cleanup_action):
-    """The same lifecycle is used by real orchestration and recording selftests."""
-    result, failure = None, None
+def finalize_owned(work,cleanup_action,diagnostic=None):
+    """Original failure precedence, with cancellation-safe diagnostic boundaries."""
+    result, failure, cleanup_failure = None, None, None
     try:
+        observe(diagnostic,'phase','work','WORK')
         result=work()
     except BaseException as exc:
         failure=exc if isinstance(exc,Failure) else Failure('UNEXPECTED_FAILURE')
+    # Reporting cancellation must stop acceptance, but must not skip the one
+    # cleanup attempt or replace an already established work failure.
+    try:
+        observe(diagnostic,'finish','work',failure)
+        observe(diagnostic,'phase','cleanup','CLEANUP')
+    except BaseException as exc:
+        if failure is None:
+            failure=exc if isinstance(exc,Failure) else Failure('UNEXPECTED_FAILURE')
     try:
         cleanup_action()
-    except BaseException:
+    except BaseException as exc:
+        cleanup_failure=exc
+    try:
+        observe(diagnostic,'finish','cleanup',cleanup_failure)
+        observe(diagnostic,'emit')
+    except BaseException as exc:
+        if failure is None:
+            failure=exc if isinstance(exc,Failure) else Failure('UNEXPECTED_FAILURE')
+    if cleanup_failure is not None:
         raise Failure('CLEANUP_UNCONFIRMED') from None
     if failure:
         raise failure
@@ -681,9 +813,11 @@ def build_test_binary(state,go,budget):
     return binary,sha(raw)
 
 
-def fixture_work(state,docker,go,tests,budget):
+def fixture_work(state,docker,go,tests,budget,diagnostic=None):
     env=go_env()
+    observe(diagnostic,'phase','work','BUILD')
     binary,binary_hash=build_test_binary(state,go,budget)
+    observe(diagnostic,'phase','work','IMAGE_CHECK')
     image_raw=docker.checked(['image','inspect','--format',
         '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}',IMAGE],timeout=budget(10))
     image=strict_json(image_raw,16384)
@@ -691,6 +825,7 @@ def fixture_work(state,docker,go,tests,budget):
             and image['Id'].startswith('sha256:') and HEX64.fullmatch(image['Id'][7:]),'IMAGE_MISMATCH')
     require(type(image['RepoDigests']) is list and all(type(x) is str for x in image['RepoDigests'])
             and any(x in image['RepoDigests'] for x in (IMAGE,'docker.io/library/'+IMAGE)),'IMAGE_MISMATCH')
+    observe(diagnostic,'phase','work','CREATE')
     nonce=state.nonce
     target=validate_target({'version':1,'run_nonce':nonce,'database':'wt_authority_test_'+nonce,
         'user':'wt_authority_owner_'+nonce,'password':secrets.token_hex(32),'host':'127.0.0.1','port':5432,
@@ -714,7 +849,9 @@ def fixture_work(state,docker,go,tests,budget):
     def inspect():
         info=strict_json(docker.checked(['inspect','--format',INSPECT_TEMPLATE,state.name],timeout=budget(10)),16384)
         require(verify_inspect(info,nonce,image['Id'])==container_id,'IDENTITY_MISMATCH')
+    observe(diagnostic,'phase','work','RESOURCE_INSPECT')
     inspect()
+    observe(diagnostic,'phase','work','READINESS')
     ready_deadline=time.monotonic()+min(60,budget(60))
     while True:
         remaining=ready_deadline-time.monotonic()
@@ -724,25 +861,31 @@ def fixture_work(state,docker,go,tests,budget):
         if code==0:
             break
         time.sleep(min(0.1,max(0,ready_deadline-time.monotonic())))
+    observe(diagnostic,'phase','work','RESOURCE_RECHECK')
     inspect()
     # These are fixed allowlisted paths/commands, not user-provided shell input.
     # Authenticated actual data_directory checks happen again in Go before DDL.
+    observe(diagnostic,'phase','work','PATH_CHECK')
     for path in ('/var/lib/postgresql/18/docker','/var/lib/postgresql/18/docker/pg_wal'):
         resolved=docker.checked(['exec',container_id,'readlink','-e',path],timeout=budget(5))
         require(resolved==path.encode()+b'\n','RESOURCE_MISMATCH')
+    observe(diagnostic,'phase','work','COPY_BINARY')
     destination='/var/lib/postgresql/authority-'+nonce+'.test'
     docker.checked(['cp',binary,container_id+':'+destination],timeout=budget(15))
     # Bootstrap Config.Env contains the synthetic password, visible to admins.
     # The test exec environment and argv contain no password or DSN.
+    observe(diagnostic,'phase','work','TEST_EXECUTION')
     test_exit,raw,_=docker.call(['exec','-i',container_id,'env','-i',
         'WORKTOOL_AUTHORITY_PG_STAGE_A=1','WORKTOOL_AUTHORITY_PG_NONCE='+nonce,
         'GOMAXPROCS=2','TZ=UTC',destination,'-test.run='+TEST_RE,
         '-test.count=1','-test.timeout=10m0s','-test.v=test2json'],
         data=json.dumps(target,separators=(',',':')).encode(),timeout=budget(600),limit=MAX_RAW)
+    observe(diagnostic,'phase','work','EVIDENCE_VALIDATION')
     converter_exit,converted,_=invoke([go,'tool','test2json','-p',PACKAGE],data=raw,
         env=env,timeout=budget(30),limit=MAX_JSON)
     result=evidence(converted,tests,test_exit,converter_exit)
     # Verify the full tree again: converter/compiler drift is not accepted.
+    observe(diagnostic,'phase','work','TOOLCHAIN_RECHECK')
     toolchain_identity(go)
     return {'schema_sha256':SCHEMA_SHA256,'binary_sha256':binary_hash,
             'manifest_sha256':MANIFEST_SHA256,'toolchain_sha256':TOOLCHAIN_SHA256,
@@ -779,6 +922,9 @@ def run_supervised(root,go,nonce,deadline):
     require(sha((ROOT/'backend-go/internal/callback/durableauthority/testdata/schema_candidate.sql').read_bytes())==SCHEMA_SHA256,'SOURCE_DRIFT')
     go=toolchain_identity(go)
     docker_identity=docker_preflight()
+    # Construct before acquiring owned state: cancellation here has nothing
+    # from this run to clean and cannot leave an acquired lease unclosed.
+    diagnostic=new_diagnostics('RUN')
     state=RunState(root,nonce,True)
     old_handlers={}
     def interrupted(signum,frame):
@@ -789,14 +935,14 @@ def run_supervised(root,go,nonce,deadline):
         docker=Docker(state,docker_identity)
         def work():
             state.record('daemon.json',json.dumps(docker_identity,sort_keys=True).encode())
-            return fixture_work(state,docker,go,tests,budget)
+            return fixture_work(state,docker,go,tests,budget,diagnostic)
         def clean():
             signal.setitimer(signal.ITIMER_REAL,max(0.001,deadline-time.monotonic()))
             # Ignore further catchable interruption while doing bounded cleanup.
             for sig in old_handlers:
                 signal.signal(sig,signal.SIG_IGN)
-            cleanup_owned(state,docker,lambda n:budget(n,0))
-        report=finalize_owned(work,clean)
+            cleanup_owned(state,docker,lambda n:budget(n,0),diagnostic)
+        report=finalize_owned(work,clean,diagnostic)
         report['status']='TESTS_AND_CLEANUP_CONFIRMED'
         print(json.dumps(report,sort_keys=True,separators=(',',':')))
     finally:
@@ -805,9 +951,11 @@ def run_supervised(root,go,nonce,deadline):
         state.close()
 
 
-def cleanup(root,nonce):
+def cleanup_recovery(root,nonce,diagnostic):
     # Explicit recovery only; there is no shell trap or unowned cleanup path.
+    observe(diagnostic,'phase','cleanup','CLEANUP_PREFLIGHT')
     current=docker_preflight()
+    observe(diagnostic,'phase','cleanup','CLEANUP_STATE')
     state=RunState(root,nonce,False)
     try:
         raw,_=bounded_file_at(state.fd,'daemon.json',4096)
@@ -818,10 +966,30 @@ def cleanup(root,nonce):
             left=deadline-time.monotonic()
             require(left>0,'CLEANUP_UNCONFIRMED')
             return min(n,left)
-        cleanup_owned(state,Docker(state,recorded),budget)
+        cleanup_owned(state,Docker(state,recorded),budget,diagnostic)
         return 'AUTHORITY_PG_CLEANUP_CONFIRMED'
     finally:
         state.close()
+
+
+def cleanup(root,nonce):
+    diagnostic=new_diagnostics('RECOVERY')
+    # Cancellation before recovery begins must not start recovery operations.
+    observe(diagnostic,'phase','cleanup','CLEANUP')
+    failure=None
+    try:
+        result=cleanup_recovery(root,nonce,diagnostic)
+    except BaseException as exc:
+        failure=exc
+    try:
+        observe(diagnostic,'finish','cleanup',failure)
+        observe(diagnostic,'emit')
+    except BaseException:
+        if failure is None:
+            raise
+    if failure is not None:
+        raise failure
+    return result
 
 
 # Frozen identities are repeated deliberately so pure tests exercise every mandatory
