@@ -26,7 +26,7 @@ PACKAGE_ROOT = 'github.com/ZhangIvan/worktool-open/backend-go/internal/'
 PACKAGES = frozenset({PACKAGE_ROOT + 'store/pg', PACKAGE_ROOT + 'gateway'})
 
 
-REQUIRED_CASES_SHA256 = '36fa2c76a55d8d5e23abfccea0f75b2057d27a28003ba77517f215fd2725b5f3'
+REQUIRED_CASES_SHA256 = '517f4819a9f69cadb5f5e6bb4f9e6dc5eb26b43c3e99c1064aabc7f9bd0de0aa'
 
 
 MAX_REQUIRED_CASES = 512
@@ -377,7 +377,27 @@ def selftest():
                for mode in prepare_modes}
     assert len(prepare) == 10 and prepare.issubset(required) and prepare.isdisjoint(recovery)
     assert all(required[key] == 'callback_prepare_evidence_integration_test.go' for key in prepare)
-    prior = [e for e in events if (e['Package'], e.get('Test')) not in prepare]
+    # Exact new retry leaves are mandatory; old 289-child evidence is insufficient.
+    retry_names = {f'TestPGCallbackCB02/retry_clock_attempt_{attempt}_delta_{delta}'
+                   for attempt in range(1, 5) for delta in (-1, 0, 1)}
+    retry_names |= {'TestPGCallbackCB02/retry_observe_' + mode for mode in (
+        'confirmed', 'unfinished', 'missing_audit', 'conflicting_audit',
+        'missing_prepare', 'wrong_schedule', 'retained_slot', 'successor_fence',
+        'successor_attempt', 'new_generation', 'wrong_status')}
+    retry_names |= {'TestPGCallbackCB02/retry_direction_' + mode for mode in (
+        'conservative_dead_to_ready', 'advanced_ready_to_dead')}
+    retry_names.add('TestPGCallbackCB02/retry_natural_lock_horizon')
+    retry_names.add('TestPGCallbackCB02/retry_natural_ready_observe_after_expiry')
+    retry_names |= {f'TestPGCallbackCB05/retry_ack_{mode}_{outcome}'
+                    for mode in ('commit', 'rollback')
+                    for outcome in ('retryable_failure', 'delivery_unknown')}
+    retry = {(PACKAGE_ROOT + 'gateway', name) for name in retry_names}
+    assert len(retry) == 31 and retry.issubset(required)
+    assert all(required[key] == 'callback_retry_settlement_integration_test.go' for key in retry)
+    preceding = [e for e in events if (e['Package'], e.get('Test')) not in retry]
+    assert sum('/' in e.get('Test', '') for e in preceding) == 289
+    rejected(encoded(preceding))
+    prior = [e for e in preceding if (e['Package'], e.get('Test')) not in prepare]
     assert sum('/' in e.get('Test', '') for e in prior) == 279
     rejected(encoded(prior))
     historical = [e for e in prior if (e['Package'], e.get('Test')) not in recovery]
@@ -386,7 +406,7 @@ def selftest():
     # Every exact required child and every original parent is independently mandatory.
     for key in TOP_CASES | set(required):
         rejected(encoded([e for e in events if (e['Package'], e.get('Test')) != key]))
-    for key in recovery | prepare:
+    for key in recovery | prepare | retry:
         for action in ('skip', 'fail'):
             rejected(encoded([dict(e, Action=action) if (e['Package'], e.get('Test')) == key else e for e in events]))
     for package in PACKAGES:

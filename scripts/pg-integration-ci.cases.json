@@ -1445,6 +1445,161 @@
       "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
       "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_supported_shared_event_no_mutation",
       "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_confirmed",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_unfinished",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_missing_audit",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_conflicting_audit",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_missing_prepare",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_wrong_schedule",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_retained_slot",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_successor_fence",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_successor_attempt",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_new_generation",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_wrong_status",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_direction_conservative_dead_to_ready",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_direction_advanced_ready_to_dead",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_natural_lock_horizon",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_commit_retryable_failure",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_commit_delivery_unknown",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_rollback_retryable_failure",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_rollback_delivery_unknown",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_natural_ready_observe_after_expiry",
+      "file": "callback_retry_settlement_integration_test.go"
     }
   ]
 }

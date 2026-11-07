@@ -218,6 +218,11 @@ func TestPGCallbackCB02(t *testing.T) {
 	gatewayGate(t)
 	callbackPrepareEvidenceIntegrationCases(t)
 	callbackObservationIntegrationCases(t)
+	callbackRetryBoundaryIntegrationCases(t)
+	callbackRetryObservationIntegrationCases(t)
+	callbackRetryDirectionIntegrationCases(t)
+	callbackRetryNaturalLockIntegrationCase(t)
+	callbackRetryNaturalReadyObservationIntegrationCase(t)
 	callbackReplayReceiptIntegrationCases(t)
 	replayReceiptCorruptionCases(t)
 	t.Run("same_delivery_single_claim_and_prepare", func(t *testing.T) {
@@ -373,6 +378,7 @@ func TestPGCallbackCB04(t *testing.T) {
 func TestPGCallbackCB05(t *testing.T) {
 	gatewayGate(t)
 	callbackObservationCommitIntegrationCases(t)
+	callbackRetryCommitIntegrationCases(t)
 	f := newGWWithStoreConstructor(t, callbackSyntheticStore)
 	store, policy := callbackSetup(t, f)
 	callbackCompletedCommand(t, f)
