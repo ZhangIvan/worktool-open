@@ -7,6 +7,11 @@ generation, release retention quota, or implement restore/PITR recovery. Startup
 and worker defaults, migration 0009's old-history refusal, destination policies,
 and all permission gates remain unchanged.
 
+The optional [authoritative retry settlement](retry_settlement.md) path handles
+retryable_failure and delivery_unknown when the store supports it. That path
+uses an immutable outcome intent and returns the database-derived retry state.
+The exact-state legacy contract described below is unchanged.
+
 ## One exact intent, one observation
 
 Sender retains its original Completion, including handle, outcome, state, code,

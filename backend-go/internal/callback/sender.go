@@ -218,6 +218,11 @@ func (s *Sender) RunOne(ctx context.Context) Result {
 }
 
 func (s *Sender) finish(d Delivery, sent bool, outcome, code string, status int) Result {
+	if outcome == "retryable_failure" || outcome == "delivery_unknown" {
+		if store, ok := s.d.Store.(RetryCompletionStore); ok {
+			return s.finishRetry(store, d, sent, outcome, code, status)
+		}
+	}
 	c := Completion{Handle: d.Handle, Outcome: outcome, Code: code, Status: status}
 	now := s.d.Clock.Now()
 	switch outcome {

@@ -121,7 +121,7 @@ func callbackClassify(err error) error {
 // finished duplicates are read-only; stale/conflicting calls cannot change rows.
 // DB writes and an audit commit together. No ledger charge is released here.
 func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) error {
-	return s.complete(ctx, c, false)
+	return s.complete(ctx, c, false, nil)
 }
 
 // ObserveCompletion confirms only an exact previously committed settlement.
@@ -130,10 +130,10 @@ func (s *CallbackCompleter) Complete(ctx context.Context, c CallbackCompletion) 
 // Runner commit/rollback/discard uncertainty is not confirmation. This creates
 // no send permission and cannot settle an unfinished attempt or successor.
 func (s *CallbackCompleter) ObserveCompletion(ctx context.Context, c CallbackCompletion) error {
-	return s.complete(ctx, c, true)
+	return s.complete(ctx, c, true, nil)
 }
 
-func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, observeOnly bool) error {
+func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, observeOnly bool, resolved *CallbackCompletion) error {
 	requirePrepared, err := validateCallbackCompletion(c)
 	if err != nil || ctx == nil {
 		return ErrCallbackCompletionInvalid
@@ -229,6 +229,11 @@ func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, 
 				return e
 			}
 		}
+		// Retry-only mode derives the original durable state before checking the
+		// audit. Observation never uses its current clock to reschedule history.
+		if resolved != nil && a.finished != nil {
+			c.State, c.NextAt = callbackRetryState(c, *a.finished, d.expires)
+		}
 		if observeOnly {
 			var actor, action, target, outcome string
 			var created int64
@@ -278,6 +283,9 @@ func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, 
 			} else if d.delivered != nil {
 				return ErrCallbackCompletionIntegrity
 			}
+			if resolved != nil {
+				*resolved = c
+			}
 			return nil // original durable completion; no repeated writes or audit
 		}
 		if d.state != "leased" || d.owner == nil || *d.owner != h.Owner || d.recovery == nil || *d.recovery != h.Recovery || d.lease == nil || a.outcome != "in_progress" {
@@ -305,7 +313,9 @@ func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, 
 			}
 		}
 		state, next := callbackRetryState(c, now, d.expires)
-		if state != c.State {
+		if resolved != nil {
+			c.State, c.NextAt = state, next
+		} else if state != c.State {
 			return ErrCallbackCompletionStale
 		}
 		var status any
@@ -345,6 +355,9 @@ func (s *CallbackCompleter) complete(ctx context.Context, c CallbackCompletion, 
 		}
 		if tag.RowsAffected() != 1 {
 			return ErrCallbackCompletionIntegrity
+		}
+		if resolved != nil {
+			*resolved = c
 		}
 		return nil
 	})
