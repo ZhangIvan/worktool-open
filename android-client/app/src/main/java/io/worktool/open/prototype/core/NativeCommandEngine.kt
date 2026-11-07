@@ -34,12 +34,14 @@ class NativeCommandEngine(
     private val confirmations = mutableSetOf<String>()
     private val fixtureConfirmations = mutableSetOf<String>()
     private val fixtureInFlight = mutableSetOf<String>()
+    private val replay=ResultReplayGate()
     private val sentResults = mutableMapOf<String, MutableSet<String>>()
     private val fixtureContent = mapOf("synthetic_demo" to "WorkTool app-owned synthetic export fixture v1",
         "synthetic_note_001" to "App-owned synthetic note 001",
         "synthetic_note_002" to "App-owned synthetic note 002")
 
     @Synchronized override fun ready(binding: Binding) {
+        replay.stop()
         try {
         listOf(binding.tenantId,binding.deviceId,binding.sessionId).forEach {
             WireValidation.id(JSONObject().put("id",it),"id")
@@ -54,7 +56,8 @@ class NativeCommandEngine(
             // Stage recovery durably before the single pending-result replay below.
             finish(JSONObject(it.body),"rejected","not_started","RECONNECT_RECONFIRMATION_REQUIRED",sendNow=false)
         }
-        journal.pendingResults().forEach { sendResult(it) }
+        replay.start()
+        pumpResults()
         events.changed()
         } catch (_: Exception) { fail("READY_OR_JOURNAL_REJECTED") }
     }
@@ -102,6 +105,8 @@ class NativeCommandEngine(
                     val commandId=body.getString("commandId")
                     require(sentResults[commandId]?.contains(body.getString("ackEventId"))==true && journal.command(commandId)?.result!=null) { "UNEXPECTED_RESULT_ACK" }
                     journal.acknowledge(commandId)
+                    replay.acknowledged(commandId,body.getString("ackEventId"))
+                    pumpResults()
                 }
                 "transport_ack" -> Unit
             }
@@ -283,11 +288,29 @@ class NativeCommandEngine(
         if(sendNow) sendResult(result)
         events.changed()
     }
-    private fun sendResult(result: JSONObject) {
-        if(binding!=null && link.connected()) {
-            val eventId=link.send("execution_result",result)
-            if(eventId!=null) sentResults.getOrPut(result.getString("commandId")) { mutableSetOf() }.add(eventId)
-        }
+    private fun sendResult(@Suppress("UNUSED_PARAMETER") result: JSONObject) {
+        replay.request()
+        pumpResults()
+    }
+    @Synchronized fun needsReplayTick():Boolean = replay.needsTick()
+    @Synchronized fun replayTick() {
+        try { pumpResults() } catch (_:Exception) { fail("RESULT_REPLAY_JOURNAL_REJECTED") }
+    }
+    private fun pumpResults() {
+        if(binding==null || !link.connected() || !workBudget.valid(permitEpoch)) { replay.stop();return }
+        val now=elapsedClock()
+        if(replay.timedOut(now)) { fail("RESULT_DELIVERY_MANUAL_RESUME_REQUIRED");return }
+        if(!replay.canSend(now))return
+        val result=journal.nextPendingResult()
+        if(result==null) { replay.empty();return }
+        val commandId=result.getString("commandId")
+        val eventId=link.send("execution_result",result)
+        if(eventId==null) { replay.stop();return }
+        // link.send is actual socket enqueue, not server ACK. Journal stays pending.
+        sentResults.getOrPut(commandId) { mutableSetOf() }.add(eventId)
+        // Start pacing/ACK deadline after enqueue, not before a potentially slow journal/link call.
+        replay.sent(commandId,eventId,elapsedClock())
+        events.changed()
     }
     private fun ack(frame: JSONObject) { link.send("transport_ack",JSONObject().put("ackEventId",frame.getString("eventId"))) }
     private fun rejectPending(code: String) {
@@ -296,9 +319,10 @@ class NativeCommandEngine(
     }
     /** Authoritative execution gate for the UI; transport connection alone is not permission. */
     @Synchronized fun isPaused(): Boolean = paused
-    @Synchronized fun pause() { paused=true; cancelFixtures("LOCAL_PAUSE"); rejectPending("LOCAL_PAUSED"); events.changed() }
+    @Synchronized fun pause() { replay.stop();paused=true; cancelFixtures("LOCAL_PAUSE"); rejectPending("LOCAL_PAUSED"); events.changed() }
     @Synchronized fun resume() { if(binding!=null && link.connected() && !revoked) paused=false; events.changed() }
     @Synchronized override fun closed(reasonCode: String) {
+        replay.stop()
         val cancelFailed=runCatching {cancelFixtures("CONNECTION_CLOSED")}.isFailure
         fixtureConfirmations.clear();fixtureInFlight.clear();binding=null;paused=true;confirmations.clear();sentResults.clear()
         try {
@@ -306,5 +330,5 @@ class NativeCommandEngine(
             if(cancelFailed)events.protocolError("FIXTURE_CANCEL_UNCONFIRMED")
         } catch (_:Exception) {events.protocolError("CLOSED_JOURNAL_RECOVERY_FAILED");link.disconnect()}
     }
-    private fun fail(code: String) { runCatching {cancelFixtures("PROTOCOL_ERROR")};fixtureConfirmations.clear();fixtureInFlight.clear(); binding=null;paused=true;confirmations.clear();events.protocolError(code);link.disconnect() }
+    private fun fail(code: String) { replay.stop();runCatching {cancelFixtures("PROTOCOL_ERROR")};fixtureConfirmations.clear();fixtureInFlight.clear(); binding=null;paused=true;confirmations.clear();events.protocolError(code);link.disconnect() }
 }

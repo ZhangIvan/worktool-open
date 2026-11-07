@@ -55,6 +55,7 @@ class SqliteJournal(context: Context, tenantId: String, deviceId: String) : Jour
         else { db.execSQL("INSERT INTO events VALUES(?,?,?)",arrayOf(sessionId,eventId,digest)); EventDecision.NEW }
     }
     @Synchronized override fun pendingResults(): List<JSONObject> = db.rawQuery("SELECT result FROM commands WHERE result IS NOT NULL AND acked=0",null).use { c -> buildList { while(c.moveToNext()) add(JSONObject(c.getString(0))) } }
+    @Synchronized override fun nextPendingResult(): JSONObject? = db.rawQuery("SELECT result FROM commands WHERE result IS NOT NULL AND acked=0 ORDER BY rowid LIMIT 1",null).use { c -> if(c.moveToFirst()) JSONObject(c.getString(0)) else null }
     @Synchronized override fun acknowledge(commandId: String) { db.execSQL("UPDATE commands SET acked=1 WHERE id=? AND result IS NOT NULL",arrayOf(commandId)) }
     @Synchronized override fun recoverInterrupted() = tx {
         val interrupted=db.rawQuery("SELECT * FROM commands WHERE stage='running' AND result IS NULL",null).use { c -> buildList { while(c.moveToNext()) add(row(c)) } }

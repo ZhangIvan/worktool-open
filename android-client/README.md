@@ -31,29 +31,51 @@ Only INTERNET appears under uses-permission. Secure variants nevertheless add a 
 
 ## Build evidence and deployment limits
 
-### Reconnect result staging candidate (JVM checks NOT_RUN locally)
+### Bounded result replay candidate (isolated JVM checks passed; Android runtime NOT_RUN)
 
-During `NativeCommandEngine.ready`, previously accepted commands are first
-durably rejected with the existing reconfirmation-required result. This recovery
-step defers sending until the final pending-result traversal, so each newly
-created result is attempted once rather than once during `finish` and again
-during replay. Older unacknowledged results are still replayed; acknowledged
-rows stay excluded. Normal command completion still attempts immediate delivery.
-Result rows remain unacknowledged until the existing exact result-event ACK
-check succeeds, and no local effect is replayed or new execution consent granted.
+The earlier reconnect staging correction durably rejected all previously accepted
+commands before result delivery, preventing double sends within one ready call.
+This candidate retains that full recovery scan and immutable terminals, then
+replaces eager replay with one outstanding result and a minimum 500 ms between
+result sends. Every completion/duplicate/stop result path uses the same pump.
+A separate ordered SQLite `LIMIT 1` lookup selects the next unacknowledged row;
+full `pendingResults()` remains unchanged for version/fixture recovery preflight.
 
-Three new JVM cases cover a single recovered accepted command, mixed old/new
-pending results with an acknowledged control, and 101 recovered rows beyond the
-UI's recent-row limit. They use an in-memory journal and link, not Android SQLite
-or actual sockets. They are authored but not executed locally because the local
-environment lacks Kotlin/Gradle and their cached test dependencies. Prior CI is
-not execution evidence for this candidate.
+Only an exact command/current-session sent-event ACK durably acknowledges the
+journal row and releases delivery credit. Repeated ACKs for an older result
+cannot release a newer one. At the 15-second ACK deadline, the next scheduled
+tick closes for manual resume without resending or deleting the terminal. Waiting ticks do not query the journal;
+one generation/engine/permit-checked delayed callback is outstanding at a time.
+Explicit pause, failure, close or permit invalidation stops the pump. Initial
+execution-paused recovery and policy-revoked evidence reporting do not grant
+permission to execute an effect.
 
-This narrow correction removes duplicate replay within one `ready` call. It
-does not add outbound pacing, an ACK window or a bounded backlog pump. Large
-reconnect backlogs can still exceed the Go gateway's ingress rate/queue bounds;
-that remains a separate compatibility and integration gate. No process-death,
-real-device, production callback or deployment acceptance is implied.
+The transport retains synchronous socket enqueue and strict sequence ordering.
+It counts HELLO and every outgoing application frame against conservative
+session limits of 240 frames/480 KiB, a 64-KiB frame maximum, 4 frames/s burst4,
+and 32 KiB/s burst128 KiB. A denied `started` never returns an enqueue event ID.
+No gateway quota is increased. A limit closes with
+`OUTBOUND_LIMIT_MANUAL_RESUME_REQUIRED`; a missing ACK uses
+`RESULT_DELIVERY_MANUAL_RESUME_REQUIRED`. Pending results remain durable for a
+fresh session explicitly started by the user, with existing consent and mode
+gates. There is no automatic reconnect or execution-consent renewal.
+
+These are conservative local limits, not a guarantee of server read timing or
+maximum throughput. Buffering can compress arrivals, competing control traffic
+can consume headroom, and connection loss still requires manual resume.
+
+Actual isolated Kotlin 2.2.21/JVM runs compile the engine, real OkHttp transport,
+pure policy/UI-stop sources and secure variant sources against the pinned JVM
+dependencies. Debug and release selections each passed 99 tests, including all
+24 legacy engine methods, the new replay/budget/socket-double cases and the
+existing stop/consent/variant tests. Socket tests use an in-memory WebSocket
+implementation; they never connect. The 257-row test drains the retained tail
+completely after explicit fresh-session setup, without an effect replay.
+
+This is not a Gradle build, APK, Android SQLite or AppGraph scheduler runtime test.
+LAB JVM tests, full three-variant builds/lint, Android lifecycle integration,
+real sockets/PG, process-death and device tests remain NOT_RUN for this candidate.
+No SDK, SDK license, emulator, service, real device or deployment was added.
 
 Pinned existing official inputs: AGP8.13.2, Kotlin2.2.21, Gradle8.13, JDK17, compile/target36, min26, Build Tools35.0.0. On an already licensed/provisioned official environment:
 

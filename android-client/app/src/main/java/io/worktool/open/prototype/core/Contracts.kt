@@ -16,6 +16,8 @@ interface Journal {
     fun requestStop(id: String, attemptId: String)
     fun event(sessionId: String, eventId: String, digest: String): EventDecision
     fun pendingResults(): List<JSONObject>
+    /** Bounded delivery lookup; full pendingResults remains recovery/version preflight. */
+    fun nextPendingResult(): JSONObject? = pendingResults().firstOrNull()
     /** All unfinished commands; must not use the UI recent-row limit. */
     fun pendingCommands(): List<StoredCommand>
     fun acknowledge(commandId: String)

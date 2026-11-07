@@ -21,10 +21,13 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /** Variant-injected origin boundary; platform TLS verification where applicable, no redirects/logging. */
-class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpointPolicy()) : DeviceLink {
+class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpointPolicy(),
+    private val elapsedClock:()->Long = { System.nanoTime()/1_000_000 }) : DeviceLink {
     private val client=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
     private val timer=Executors.newSingleThreadScheduledExecutor { r -> Thread(r,"device-heartbeat").apply { isDaemon=true } }
+    private fun elapsedMs()=elapsedClock()
+    private var outbound:OutboundSessionBudget?=null
     private var heartbeat: ScheduledFuture<*>?=null
     private var helloTimeout: ScheduledFuture<*>?=null
     private var socket: WebSocket?=null
@@ -92,8 +95,10 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
                     override fun onOpen(ws:WebSocket,response:Response) { synchronized(this@OkHttpDeviceLink) {
                         if(current!=generation || !endpointPolicy.budget.valid(epoch)) { ws.close(1000,"superseded"); return }
                         helloTimeout=timer.schedule({ synchronized(this@OkHttpDeviceLink) { if(current==generation && binding==null) { disconnect(); listener.closed("HELLO_TIMEOUT") } } },5,TimeUnit.SECONDS)
+                        outbound=OutboundSessionBudget(elapsedMs())
+                        val hello=profile.hello().toString()
                         var helloSent=false
-                        endpointPolicy.budget.runIfValid(epoch){helloSent=ws.send(profile.hello().toString())}
+                        endpointPolicy.budget.runIfValid(epoch){helloSent=outbound?.take(elapsedMs(),hello.toByteArray(Charsets.UTF_8).size)==true && ws.send(hello)}
                         if(!helloSent){disconnect();listener.closed("CLIENT_PERMIT_EXPIRED")}
                     } }
                     override fun onMessage(ws:WebSocket,text:String) { synchronized(this@OkHttpDeviceLink) {
@@ -139,12 +144,16 @@ class OkHttpDeviceLink(private val endpointPolicy: EndpointPolicy = HttpsEndpoin
         val frame=JSONObject().put("version",b.protocolVersion).put("kind",kind).put("eventId",eventId)
             .put("tenantId",b.tenantId).put("deviceId",b.deviceId).put("sessionId",b.sessionId).put("seq",++seq)
             .put("sentAt",Instant.ofEpochMilli(System.currentTimeMillis()+offset).truncatedTo(ChronoUnit.SECONDS).toString()).put("mode","synthetic").put("body",body)
+        val encoded=frame.toString()
+        if(outbound?.take(elapsedMs(),encoded.toByteArray(Charsets.UTF_8).size)!=true) {
+            val l=listener;disconnect();l?.closed("OUTBOUND_LIMIT_MANUAL_RESUME_REQUIRED");return null
+        }
         var enqueued=false
-        endpointPolicy.budget.runIfValid(permitEpoch){enqueued=socket?.send(frame.toString())==true}
+        endpointPolicy.budget.runIfValid(permitEpoch){enqueued=socket?.send(encoded)==true}
         if(!enqueued) { val l=listener; disconnect(); l?.closed("SEND_FAILED"); return null }
         return eventId
     }
     @Synchronized override fun connected():Boolean = binding!=null && endpointPolicy.budget.valid(permitEpoch)
     @Synchronized fun cancelPermit(epoch:Long) {if(permitEpoch==epoch)disconnect()}
-    @Synchronized override fun disconnect() { generation++; helloTimeout?.cancel(false);helloTimeout=null; heartbeat?.cancel(false); heartbeat=null; call?.cancel();call=null;socket?.cancel();socket=null;binding=null;seq=0;received=0 }
+    @Synchronized override fun disconnect() { generation++; helloTimeout?.cancel(false);helloTimeout=null; heartbeat?.cancel(false); heartbeat=null; call?.cancel();call=null;socket?.cancel();socket=null;binding=null;outbound=null;seq=0;received=0 }
 }

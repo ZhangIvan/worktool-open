@@ -30,6 +30,7 @@ class NativeCommandEngineTest {
         override fun close()=Unit
     }
     private class Link:DeviceLink {
+        var elapsed=0L
         var online=true;var failStarted=false;var eventIds=emptyMap<String,String>();val sent=mutableListOf<Pair<String,JSONObject>>()
         override fun enroll(endpoint:String,enrollmentId:String,enrollmentToken:String,callback:(Result<Identity>)->Unit)=error("NOT_USED")
         override fun connect(identity:Identity,listener:LinkListener)=Unit
@@ -39,7 +40,7 @@ class NativeCommandEngineTest {
     }
     private class Events:EngineEvents{val confirmations=mutableListOf<String>();val errors=mutableListOf<String>();override fun changed()=Unit;override fun confirmationRequired(commandId:String,exportId:String,scopeDigest:String){confirmations.add(commandId)};override fun protocolError(code:String){errors.add(code)}}
     private data class Harness(val engine:NativeCommandEngine,val journal:MemoryJournal,val link:Link,val events:Events)
-    private fun harness(resume:Boolean=true):Harness {val j=MemoryJournal();val l=Link();val e=Events();val engine=NativeCommandEngine(j,l,e){now};engine.ready(binding);if(resume)engine.resume();return Harness(engine,j,l,e)}
+    private fun harness(resume:Boolean=true):Harness {val j=MemoryJournal();val l=Link();val e=Events();val engine=NativeCommandEngine(j,l,e,elapsedClock={l.elapsed},clock={now});engine.ready(binding);if(resume)engine.resume();return Harness(engine,j,l,e)}
     private fun command(id:String="command_demo",export:Boolean=false):JSONObject {
         val p=if(export)JSONObject().put("exportId","export_demo").put("approvalId","approval_demo").put("scopeDigest",WireValidation.scopeDigest("device_demo",listOf("synthetic_note_001"))) else JSONObject().put("targetId","target_demo").put("text","Synthetic text only")
         val b=JSONObject().put("commandId",id).put("attemptId","attempt_demo").put("capability",if(export)"file.export" else "message.send_text").put("payload",p).put("policyVersion",1).put("requiresLocalConfirmation",export).put("expiresAt","2030-01-01T00:02:00Z")
@@ -112,10 +113,14 @@ class NativeCommandEngineTest {
         h.link.sent.clear()
         h.engine.closed("OFFLINE")
         h.engine.ready(binding.copy(sessionId="session_next"))
+        assertEquals(1,h.link.sent.count { it.first=="execution_result" })
+        val first=h.link.sent.single()
+        h.engine.frame(frame(JSONObject().put("commandId",first.second.getString("commandId")).put("ackEventId","sent_event_1"),1,"event_replay_ack","result_ack").put("sessionId","session_next"))
+        h.link.elapsed=500;h.engine.replayTick()
         val sent=h.link.sent.filter { it.first=="execution_result" }
         assertEquals(2,sent.size)
         assertEquals(setOf("command_old_pending","command_new_pending"),sent.map { it.second.getString("commandId") }.toSet())
-        assertEquals(2,h.journal.pendingResults().size)
+        assertEquals(1,h.journal.pendingResults().size)
         assertTrue(h.journal.command("command_old_acked")!!.acked)
         assertEquals(2,h.journal.effects.size)
         assertFalse(h.link.sent.any { it.first=="accepted" || it.first=="started" })
@@ -127,12 +132,19 @@ class NativeCommandEngineTest {
         repeat(101) { h.journal.accept(command("command_$it")) }
         h.engine.closed("OFFLINE")
         h.engine.ready(binding.copy(sessionId="session_next"))
+        assertEquals(1,h.link.sent.count { it.first=="execution_result" })
+        repeat(100) { index ->
+            val result=h.link.sent.last().second
+            h.engine.frame(frame(JSONObject().put("commandId",result.getString("commandId")).put("ackEventId","sent_event_${index+1}"),index+1L,"event_replay_$index","result_ack").put("sessionId","session_next"))
+            h.link.elapsed+=500;h.engine.replayTick()
+        }
         val sent=h.link.sent.filter { it.first=="execution_result" }
         assertEquals(101,sent.size)
         assertEquals(101,sent.map { it.second.getString("commandId") }.toSet().size)
         assertTrue(h.journal.pendingCommands().isEmpty())
-        assertEquals(101,h.journal.pendingResults().size)
-        assertTrue(h.journal.rows.values.all { it.stage=="rejected" && !it.acked })
+        assertEquals(1,h.journal.pendingResults().size)
+        assertTrue(h.journal.rows.values.all { it.stage=="rejected" })
+        assertEquals(100,h.journal.rows.values.count { it.acked })
         assertTrue(h.journal.effects.isEmpty())
         assertTrue(h.events.errors.isEmpty())
         // This in-memory count is not server-rate, network or SQLite acceptance.
