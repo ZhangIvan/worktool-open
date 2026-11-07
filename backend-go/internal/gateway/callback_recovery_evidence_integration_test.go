@@ -3,6 +3,14 @@ package gateway
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,7 +185,7 @@ func callbackRecoveryEvidenceEligible(t *testing.T, f *gwFixture, d cb.Delivery,
 	t.Helper()
 	if f.count(t, `SELECT count(*) FROM callback_outbox WHERE tenant=$1 AND delivery_id=$2 AND destination_id='dest_demo' AND state='leased' AND lease_recovery_epoch='recovery_demo' AND (lease_until<=clock_timestamp())=$3`, d.Handle.Tenant, d.Handle.DeliveryID, expired) != 1 ||
 		f.count(t, `SELECT count(*) FROM callback_attempts WHERE tenant=$1 AND delivery_id=$2 AND fence=$3 AND outcome='in_progress' AND finished_at IS NULL`, d.Handle.Tenant, d.Handle.DeliveryID, d.Handle.Fence) != 1 ||
-		f.count(t, `SELECT count(*) FROM scope_slots s JOIN callback_outbox o ON o.tenant=s.tenant AND o.delivery_id=s.delivery_id WHERE o.tenant=$1 AND o.delivery_id=$2 AND s.owner_instance=o.lease_owner AND s.delivery_fence=o.fence AND s.recovery_epoch=o.lease_recovery_epoch AND s.lease_until=o.lease_until AND s.slot_fence>0`) != 2 ||
+		f.count(t, `SELECT count(*) FROM scope_slots s JOIN callback_outbox o ON o.tenant=s.tenant AND o.delivery_id=s.delivery_id WHERE o.tenant=$1 AND o.delivery_id=$2 AND s.owner_instance=o.lease_owner AND s.delivery_fence=o.fence AND s.recovery_epoch=o.lease_recovery_epoch AND s.lease_until=o.lease_until AND s.slot_fence>0`, d.Handle.Tenant, d.Handle.DeliveryID) != 2 ||
 		f.count(t, `SELECT count(*) FROM audit WHERE action='callback.recovered'`) != 0 {
 		t.Fatal("recovery fixture does not meet selection and retained-evidence prerequisites")
 	}
@@ -240,4 +248,105 @@ func callbackRecoveryEvidenceStableSnapshot(t *testing.T, f *gwFixture) string {
 		t.Fatal("recovery stable snapshot failed; redacted")
 	}
 	return value
+}
+
+// Pure source regression: count queries in this fixture must bind every SQL
+// placeholder. This catches missing arguments before gated PG execution; it
+// does not parse PostgreSQL syntax or establish real database behavior.
+func TestCallbackRecoveryEvidenceCountBindings(t *testing.T) {
+	inspect := func(source []byte) (checked, slots, problems int) {
+		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", source, 0)
+		if err != nil {
+			return 0, 0, 1
+		}
+		parameter := regexp.MustCompile(`\$([0-9]+)`)
+		binding := func(expr ast.Expr, field string) bool {
+			outer, ok := expr.(*ast.SelectorExpr)
+			if !ok || outer.Sel.Name != field {
+				return false
+			}
+			inner, ok := outer.X.(*ast.SelectorExpr)
+			if !ok || inner.Sel.Name != "Handle" {
+				return false
+			}
+			name, ok := inner.X.(*ast.Ident)
+			return ok && name.Name == "d"
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			method, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || method.Sel.Name != "count" {
+				return true
+			}
+			receiver, ok := method.X.(*ast.Ident)
+			if !ok || receiver.Name != "f" {
+				return true
+			}
+			checked++
+			if len(call.Args) < 2 || call.Ellipsis.IsValid() {
+				problems++
+				return true
+			}
+			literal, ok := call.Args[1].(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				problems++
+				return true
+			}
+			sql, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				problems++
+				return true
+			}
+			if strings.Contains(sql, "s.slot_fence>0") {
+				slots++
+			}
+			indices, highest := map[int]bool{}, 0
+			for _, match := range parameter.FindAllStringSubmatch(sql, -1) {
+				n, err := strconv.Atoi(match[1])
+				if err != nil || n < 1 {
+					problems++
+					return true
+				}
+				indices[n] = true
+				if n > highest {
+					highest = n
+				}
+			}
+			if highest != len(call.Args)-2 || len(indices) != highest {
+				problems++
+				return true
+			}
+			if strings.Contains(sql, "tenant=$1") && (strings.Contains(sql, "delivery_id=$2") || strings.Contains(sql, "target=$2")) {
+				if len(call.Args) < 4 || !binding(call.Args[2], "Tenant") || !binding(call.Args[3], "DeliveryID") {
+					problems++
+				}
+			}
+			return true
+		})
+		return
+	}
+	_, path, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("fixture source location unavailable")
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("fixture source unavailable")
+	}
+	if checked, slots, problems := inspect(source); checked == 0 || slots != 1 || problems != 0 {
+		t.Fatal("fixture count SQL bindings incomplete or out of order")
+	}
+	for _, args := range []string{"", ",d.Handle.Tenant", ",d.Handle.DeliveryID,d.Handle.Tenant", ",d.Handle.Tenant,d.Handle.Tenant", ",d.Handle.Tenant,d.Handle.DeliveryID,true"} {
+		fixture := []byte("package gateway; func fixture(){ f.count(t, \"SELECT count(*) FROM scope_slots WHERE tenant=$1 AND delivery_id=$2\"" + args + ") }")
+		if checked, _, problems := inspect(fixture); checked != 1 || problems == 0 {
+			t.Fatal("invalid synthetic SQL bindings were accepted")
+		}
+	}
+	fixture := []byte(`package gateway; func fixture(){ f.count(t, "SELECT count(*) FROM scope_slots WHERE tenant=$1 AND delivery_id=$2",d.Handle.Tenant,d.Handle.DeliveryID) }`)
+	if checked, _, problems := inspect(fixture); checked != 1 || problems != 0 {
+		t.Fatal("valid synthetic SQL bindings were rejected")
+	}
 }
