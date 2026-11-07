@@ -26,7 +26,7 @@ PACKAGE_ROOT = 'github.com/ZhangIvan/worktool-open/backend-go/internal/'
 PACKAGES = frozenset({PACKAGE_ROOT + 'store/pg', PACKAGE_ROOT + 'gateway'})
 
 
-REQUIRED_CASES_SHA256 = '59ddf85cbef60a2b2aba9175e00907ca6ee9839a921f6af2859cf4b2a393fc49'
+REQUIRED_CASES_SHA256 = '44b26a1b14c74faeb783cd40ca676d7185f71be82efcd9f020efd364306e5161'
 
 
 MAX_REQUIRED_CASES = 512
@@ -355,9 +355,28 @@ def selftest():
             assert exc.args[0] in SAFE_CODES
             return
         raise AssertionError('incomplete or invalid evidence accepted')
+    # A historical 255-child success cannot certify the 24 new CB03 cases.
+    # Fixed names also detect accidental manifest omissions in this matrix.
+    recovery_modes = ('zero_start', 'start_before_claim', 'start_after_now',
+                      'prepare_before_start', 'prepare_after_now', 'status_present',
+                      'error_present', 'empty_error_present', 'leased_delivered',
+                      'unprepared_start_equals_claim', 'prepared_equals_start')
+    recovery_names = {f'TestPGCallbackCB03/recovery_evidence_{path}_{mode}'
+                      for path in ('explicit', 'selector') for mode in recovery_modes}
+    recovery_names |= {'TestPGCallbackCB03/recovery_evidence_explicit_unexpired_bad_status',
+                       'TestPGCallbackCB03/recovery_evidence_schema_rejects_missing_claim'}
+    recovery = {(PACKAGE_ROOT + 'gateway', name) for name in recovery_names}
+    assert len(recovery) == 24 and recovery.issubset(required)
+    assert all(required[key] == 'callback_recovery_evidence_integration_test.go' for key in recovery)
+    prior = [e for e in events if (e['Package'], e.get('Test')) not in recovery]
+    assert sum('/' in e.get('Test', '') for e in prior) == 255
+    rejected(encoded(prior))
     # Every exact required child and every original parent is independently mandatory.
     for key in TOP_CASES | set(required):
         rejected(encoded([e for e in events if (e['Package'], e.get('Test')) != key]))
+    for key in recovery:
+        for action in ('skip', 'fail'):
+            rejected(encoded([dict(e, Action=action) if (e['Package'], e.get('Test')) == key else e for e in events]))
     for package in PACKAGES:
         rejected(encoded([e for e in events if not (e['Package'] == package and 'Test' not in e)]))
     parent_only = [e for e in events if 'Test' not in e or '/' not in e['Test']]
@@ -407,7 +426,8 @@ def selftest():
     assert len(diagnostics['groupOutcomes']) == 43 and len(diagnostics['requiredCaseOutcomes']) == len(required)
     assert all(v['terminal'] == ['NOT_OBSERVED'] for v in diagnostics['groupOutcomes'] + diagnostics['requiredCaseOutcomes'])
     assert 'secret' not in json.dumps(diagnostics)
-    key = next(iter(sorted(required)))
+    # Exercise sanitization using the newly required source basename too.
+    key = next(iter(sorted(recovery)))
     package, name = key
     file = required[key]
     diagnostic_events = [

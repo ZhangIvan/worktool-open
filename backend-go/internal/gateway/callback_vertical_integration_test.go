@@ -290,6 +290,7 @@ func TestPGCallbackCB02(t *testing.T) {
 
 func TestPGCallbackCB03(t *testing.T) {
 	gatewayGate(t)
+	callbackRecoveryEvidenceIntegrationCases(t)
 	for _, prepared := range []bool{false, true} {
 		name := "unprepared"
 		if prepared {

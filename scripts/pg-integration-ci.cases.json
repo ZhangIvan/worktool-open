@@ -188,6 +188,126 @@
     },
     {
       "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_empty_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_leased_delivered",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepare_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepare_before_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepared_equals_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_start_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_start_before_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_status_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_unexpired_bad_status",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_unprepared_start_equals_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_zero_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_schema_rejects_missing_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_empty_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_leased_delivered",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepare_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepare_before_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepared_equals_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_start_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_start_before_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_status_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_unprepared_start_equals_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_zero_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
       "test": "TestPGCallbackCB03/unprepared",
       "file": "callback_vertical_integration_test.go"
     },

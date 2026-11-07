@@ -205,3 +205,54 @@ report cannot produce the new success record. It starts no Go process, Docker,
 database, listener or browser. A separate local gate check compiles the unchanged
 Go packages with PG authorization unset; all 43 groups skip, and the adapter
 correctly rejects that stream. Those skips are not PG execution evidence.
+
+## Callback recovery contradiction SQL matrix (source candidate, 2026-11-07)
+
+The preceding head `d4a962e08de91214501771c089c858d9f2c35e57` passed the
+43-group / 255-required-child isolated suite. Its 26-negative / 6-positive
+recovery guard matrix was scripted pgx evidence, not that matrix executed in
+PostgreSQL. Historical reports above remain scoped to their recorded heads.
+
+This candidate adds 24 mandatory CB03 children, for **279 exact required child
+identities (267 leaves and 12 nested parents), still 43 top-level groups**:
+
+- Both explicit and selector recovery reject nine SQL-representable contradictions:
+  zero start, start before claim, future start, preparation before start, future
+  preparation, present status, nonempty/empty error, and leased-but-delivered.
+- Explicit recovery also rejects an unexpired row with status evidence. A static
+  unexpired row cannot pass selector discovery. Explicit unexpired refusal is a
+  preservation control, not a discriminator for the new guard (the old code also
+  returned stale). The selector stale-discovery
+  unexpired race, negative/unsafe final database time, and exact expiry-equals-now
+  boundary remain scripted-only. No fake clock is presented as real SQL evidence.
+- A missing claim on a leased row is prevented by the existing CHECK constraint.
+  The separate schema case requires SQLSTATE 23514 and an unchanged graph; it
+  does not claim recovery observed an impossible row or disable any constraint.
+- Four valid controls cover explicit/selector recovery with start equal to claim
+  and preparation equal to start, exact outcome/error and one-second backoff,
+  cleared leases, retained fences/immutable graph/charges, one matching audit,
+  and read-only repeated recovery.
+
+Owner-only test DML injects timestamps/evidence into the existing disposable
+fixture with constraints and triggers active. Expiry uses the existing SQL
+helper; attempt start and any existing preparation marker are then normalized
+to the injected claim so the entire baseline time order remains consistent on
+fast and slow hosts. This is stored-time injection, not a natural timeout. Recovery still
+uses the ordinary store role and actual PostgreSQL clock. The existing gateway
+is joined before graph snapshots. Snapshots include tuple xmin, delivery,
+attempts, slots, audits, quotas, reservations, commands, events and receipts;
+refusals must preserve all of them. This proves durable preservation, not that
+no DML was attempted and rolled back. No callback sender/receiver is added.
+
+The manifest digest is updated; the resource harness and browser hash chain,
+workflow, migrations, business code, ACLs, connection/resource/time limits,
+network and startup behavior are unchanged. Pure adapter selftests reject a
+historical 255-child log, every missing new child, skip/fail substitutions, and
+unsafe diagnostic text from the new source basename.
+
+**Local status: real PostgreSQL / Docker / CI / browser / device / external
+callback NOT_RUN.** Offline compile/unit/race/vet/build and pure harness checks
+cannot establish SQL execution. Publishing the candidate would trigger the
+existing isolated-PG and foundation workflows; publication/execution must remain
+within separately verified authorization. This is not a production-readiness
+or completed self-hosting claim.
