@@ -94,6 +94,15 @@ func (s *CallbackStore) Prepare(ctx context.Context, p cb.Prepared) (cb.Permit, 
 		if e = s.gate(ctx); e != nil {
 			return cb.ErrStale
 		}
+		// A new send must not precede the evidence checks used by completion
+		// and recovery. Validate against the final locked database clock before
+		// recording preparation or granting a permit; preserve contradictory rows.
+		if decision.UnixMilli() < 0 || decision.UnixMilli() > maxSafeInteger || d.claimed == nil || attempt.started.IsZero() || attempt.started.Before(*d.claimed) || attempt.started.After(decision) || attempt.status != nil || attempt.code != nil || d.delivered != nil {
+			return cb.ErrStale
+		}
+		if d.lease.After(*d.hard) || d.hard.Before(*d.claimed) || d.hard.After(d.expires) {
+			return cb.ErrStale
+		}
 		if !a.valid || a.expires <= decision.UnixMilli() {
 			return cb.ErrDenied
 		}

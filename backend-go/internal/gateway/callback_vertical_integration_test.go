@@ -216,6 +216,7 @@ func callbackPrepared(d cb.Delivery) cb.Prepared {
 }
 func TestPGCallbackCB02(t *testing.T) {
 	gatewayGate(t)
+	callbackPrepareEvidenceIntegrationCases(t)
 	callbackObservationIntegrationCases(t)
 	callbackReplayReceiptIntegrationCases(t)
 	replayReceiptCorruptionCases(t)

@@ -256,3 +256,54 @@ cannot establish SQL execution. Publishing the candidate would trigger the
 existing isolated-PG and foundation workflows; publication/execution must remain
 within separately verified authorization. This is not a production-readiness
 or completed self-hosting claim.
+
+## Callback Prepare evidence SQL matrix (source candidate, 2026-11-07)
+
+The preceding head `d39634f` completed the 43-group / 279-required-child
+isolated suite, including the recovery matrix above. This candidate adds ten
+mandatory CB02 leaves, for **289 exact required child identities (277 leaves
+and 12 nested parents), still 43 top-level groups**. All 279 prior identities
+remain mandatory.
+
+- Seven real-store Prepare cases inject schema-legal contradictions: present
+  status, nonempty error, empty non-NULL error, leased-but-delivered, zero start,
+  start one microsecond before claim, and start one hour after the database
+  clock. Each requires an empty permit and the exact redacted stale refusal,
+  a still-live request deadline and database lease, the two exact held slots,
+  an unprepared/unfinished attempt and no preparation/completion/recovery audit.
+  Before/after snapshots include xmin across the same nine durable tables used
+  by the recovery matrix and must be identical.
+- A positive control uses actual Claim's start-equals-claim timestamps without
+  normalization. Prepare must grant the exact fresh permit once, write a marker
+  at or after start, and insert one audit with the matching database timestamp.
+  All other attempt fields, outbox, slots, quotas, reservations, commands,
+  events, receipts and prior audits are retained. Repeated Prepare must refuse
+  while its deadline/lease remain live and preserve the complete xmin snapshot.
+- Two representative Sender cases cover status and start-before-claim faults.
+  A test-only Claim wrapper delegates actual PostgreSQL Claim, injects owner
+  DML, then returns that exact Delivery. It does not substitute a fake claim,
+  store read or clock. Actual Prepare must be called once and refuse;
+  Complete and the no-socket synthetic transport must each have zero calls.
+  Sender must return the claimed/reconcile `PREPARE_UNCERTAIN_OR_STALE` result,
+  clear its resolved key copy, and preserve the post-injection durable graph.
+
+All owner injection runs with the existing constraints/triggers active and the
+gateway joined before snapshots; Prepare uses the unchanged store role and real
+PostgreSQL clock. Missing claim is already covered by the recovery schema case,
+not presented as an impossible row seen by Prepare. Future stored timestamps
+are fault injection, not a real server-clock regression. Exact final-clock
+equality, backward/unsafe final time and clock-range boundaries remain scripted
+coverage only. The SQL binding AST guard is a pure source check, not PostgreSQL
+syntax/execution evidence.
+
+The manifest digest and pure evidence selftests are updated. A historical
+279-child (or 255-child) stream, every missing required identity, and skip/fail
+substitutions for the new leaves are rejected. Diagnostics for the new source
+basename remain bounded and redacted. The resource harness, workflow, browser
+hash chain, migrations, privileges, resource/connection/time limits and cleanup
+are unchanged. There is no additional callback receiver or network call.
+
+**Local status: real PostgreSQL / Docker / CI / browser / device / external
+callback NOT_RUN.** This is source preparation; pure checks cannot establish
+the ten cases executed in PostgreSQL. Publication and execution remain subject
+to the parent task's verified authorization and resource boundaries.

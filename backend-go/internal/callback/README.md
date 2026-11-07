@@ -47,6 +47,24 @@ No default sender or network activity is enabled by this change.
 
 ## Validation boundary
 
+Prepare refuses contradictory unfinished evidence after its final locked DB
+clock and generation check, before the prepared marker, audit or fresh permit.
+The current attempt must have no status/error, the leased delivery must have no
+delivered marker, and claim/start/final-clock plus lease/hard/expiry chronology
+must agree. Equal claim/start/final-clock and lease/hard/expiry boundaries remain
+valid subject to the existing live-deadline checks. A retained delivery error
+from an earlier attempt is allowed. Refusal is stale/reconcile, not cancellation
+or permission to rewrite evidence. This is a local guard, not durable worker
+halt/restart policy, clock-health certification or cross-generation recovery.
+
+Scripted pgx tests invoke actual Claim/Prepare/Runner and Sender with in-memory
+DNS, keys and transport, including a valid Claim followed by a backwards Prepare
+DB clock. They assert zero Prepare DML/audit/permit, zero transport and no
+completion on rejection, bounded cleanup, and valid positive controls. The
+Sender control uses a counting completion stub and does not prove settlement.
+These tests do not execute PostgreSQL or perform network I/O. Separately authored
+real-PG cases require their own isolated run; compile/skip is not execution.
+
 Targeted pure/race tests cover projection, transport request policy, copied
 configuration, deadline mapping and existing sender/completion logic. They do
 not execute PostgreSQL SQL or prove network behavior.

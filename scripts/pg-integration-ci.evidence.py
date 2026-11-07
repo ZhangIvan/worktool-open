@@ -26,7 +26,7 @@ PACKAGE_ROOT = 'github.com/ZhangIvan/worktool-open/backend-go/internal/'
 PACKAGES = frozenset({PACKAGE_ROOT + 'store/pg', PACKAGE_ROOT + 'gateway'})
 
 
-REQUIRED_CASES_SHA256 = '44b26a1b14c74faeb783cd40ca676d7185f71be82efcd9f020efd364306e5161'
+REQUIRED_CASES_SHA256 = '36fa2c76a55d8d5e23abfccea0f75b2057d27a28003ba77517f215fd2725b5f3'
 
 
 MAX_REQUIRED_CASES = 512
@@ -368,13 +368,25 @@ def selftest():
     recovery = {(PACKAGE_ROOT + 'gateway', name) for name in recovery_names}
     assert len(recovery) == 24 and recovery.issubset(required)
     assert all(required[key] == 'callback_recovery_evidence_integration_test.go' for key in recovery)
-    prior = [e for e in events if (e['Package'], e.get('Test')) not in recovery]
-    assert sum('/' in e.get('Test', '') for e in prior) == 255
+    # The preceding 279-child success cannot certify the ten new CB02 leaves.
+    prepare_modes = ('status_present', 'error_present', 'empty_error_present',
+                     'leased_delivered', 'zero_start', 'start_before_claim',
+                     'start_after_now', 'start_equals_claim',
+                     'sender_status_present', 'sender_start_before_claim')
+    prepare = {(PACKAGE_ROOT + 'gateway', f'TestPGCallbackCB02/prepare_evidence_{mode}')
+               for mode in prepare_modes}
+    assert len(prepare) == 10 and prepare.issubset(required) and prepare.isdisjoint(recovery)
+    assert all(required[key] == 'callback_prepare_evidence_integration_test.go' for key in prepare)
+    prior = [e for e in events if (e['Package'], e.get('Test')) not in prepare]
+    assert sum('/' in e.get('Test', '') for e in prior) == 279
     rejected(encoded(prior))
+    historical = [e for e in prior if (e['Package'], e.get('Test')) not in recovery]
+    assert sum('/' in e.get('Test', '') for e in historical) == 255
+    rejected(encoded(historical))
     # Every exact required child and every original parent is independently mandatory.
     for key in TOP_CASES | set(required):
         rejected(encoded([e for e in events if (e['Package'], e.get('Test')) != key]))
-    for key in recovery:
+    for key in recovery | prepare:
         for action in ('skip', 'fail'):
             rejected(encoded([dict(e, Action=action) if (e['Package'], e.get('Test')) == key else e for e in events]))
     for package in PACKAGES:
@@ -427,7 +439,7 @@ def selftest():
     assert all(v['terminal'] == ['NOT_OBSERVED'] for v in diagnostics['groupOutcomes'] + diagnostics['requiredCaseOutcomes'])
     assert 'secret' not in json.dumps(diagnostics)
     # Exercise sanitization using the newly required source basename too.
-    key = next(iter(sorted(recovery)))
+    key = next(iter(sorted(prepare)))
     package, name = key
     file = required[key]
     diagnostic_events = [

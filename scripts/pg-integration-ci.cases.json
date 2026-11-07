@@ -43,6 +43,56 @@
     },
     {
       "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_empty_error_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_error_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_leased_delivered",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_sender_start_before_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_sender_status_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_after_now",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_before_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_equals_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_status_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_zero_start",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
       "test": "TestPGCallbackCB02/receipt_no_ack_F0_fresh_event_missing",
       "file": "replay_receipt_corruption_integration_test.go"
     },
