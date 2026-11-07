@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "mode": "isolated-synthetic",
+  "runtime": {
+    "instanceId": "instance_synthetic",
+    "bootId": "boot_synthetic",
+    "recoveryEpoch": "epoch_synthetic"
+  },
+  "admissionOpen": false,
+  "validUntil": "2000-01-01T00:00:00Z"
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enrollmentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+    },
+    "enrollmentToken": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 256
+    },
+    "deviceLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "localConfirmed": {
+      "const": true
+    }
+  },
+  "required": [
+    "enrollmentId",
+    "enrollmentToken",
+    "deviceLabel",
+    "localConfirmed"
+  ]
+}

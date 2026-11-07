@@ -1,0 +1,85 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> worktool-open-synthetic-prototype@0.1.0 verify
+> npm run typecheck && npm test && npm run build && npm run test:http-console
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> worktool-open-synthetic-prototype@0.1.0 typecheck
+> tsc --noEmit
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> worktool-open-synthetic-prototype@0.1.0 test
+> node --test tests/*.test.ts server/*.test.ts console/*.test.ts
+
+✔ same-origin write includes cookie CSRF and stable idempotency without changing payload (5.574016ms)
+✔ non-local API path rejected before network (0.521867ms)
+✔ empty 204 response is accepted (0.324659ms)
+✔ API errors preserve canonical code and requestId, not raw details (0.960707ms)
+✔ network failure is unconfirmed, never a fabricated success (1.45405ms)
+✔ expiry matches protocol whole-second RFC3339 shape (0.845584ms)
+✔ obsolete session response cannot invalidate a newer session (0.560454ms)
+✔ approved export is usable only by its requester on its approved device (1.483174ms)
+✔ malformed successful list is an error rather than an empty success (0.760005ms)
+✔ owner has no business writes or admin reads; only overview and directory routes (1.616125ms)
+✔ roles do not inherit business execution or approval powers (0.295746ms)
+✔ operator command reads and cancel gates fail closed for another or missing requester (0.415816ms)
+✔ owner route guard performs no protected fetch (0.326342ms)
+✔ real SQLite FK and unique scoped identities (3.142034ms)
+✔ auth CSRF, strict role and credential body guards (491.066577ms)
+✔ restart persists identity and invalidates browser sessions; no bootstrap reset (461.71586ms)
+✔ export approval binds requesting operator and specific tenant device (708.31215ms)
+✔ real HTTP/WS synthetic text + idempotency + RBAC/tenant + logout (1245.902998ms)
+✔ queued cancellation has no device effect (795.577223ms)
+✔ dropped result persists and reconnect reconciles without replay (837.699964ms)
+✔ modeled unknown after effect never replays on reconnect (928.832286ms)
+✔ export dual approval, wrong scope, and explicit local confirmation (926.498979ms)
+✔ stop_request at pre-effect safe point cancels without effect (983.472257ms)
+✔ server and device restart preserve completed command and inbox (1266.710711ms)
+✔ device credential revocation blocks new sessions and stops in-flight before effect (952.16ms)
+✔ local confirmation missing rejects synthetic export before effect (908.47066ms)
+✔ approved export cannot be borrowed by a different operator or moved to another device (923.155677ms)
+✔ queued command loses authorization when submitting operator is deactivated (882.211782ms)
+✔ deactivated approver invalidates both queued export and new submissions (900.510225ms)
+✔ operator object scope restricts GET list and cancellation of another operators command (875.552425ms)
+✔ owner is read-only in first batch and cannot enroll revoke or read audit (878.802461ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 13668.676824
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+npm notice To update run: npm install -g npm@12.2.1
+npm notice
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> worktool-open-synthetic-prototype@0.1.0 build
+> vite build --config console/vite.config.ts
+
+vite v8.3.5 building client environment for production...
+transforming...
+✓ 21 modules transformed.
+rendering chunks...
+computing gzip size...
+console/dist/index.html                   0.41 kB │ gzip:  0.30 kB
+console/dist/assets/index-Cnxv8IkW.css    9.56 kB │ gzip:  2.80 kB
+console/dist/assets/index-CboNP9Xd.js   280.80 kB │ gzip: 84.68 kB
+
+✓ built in 122ms
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> worktool-open-synthetic-prototype@0.1.0 test:http-console
+> node qa/http-console-check.ts
+
+5 HTTP console checks passed
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+npm notice To update run: npm install -g npm@12.2.1
+npm notice

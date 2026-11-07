@@ -1,0 +1,26 @@
+{
+  "checks": [
+    {
+      "name": "Vite serves real console index",
+      "pass": true
+    },
+    {
+      "name": "same-origin proxy real authentication",
+      "pass": true
+    },
+    {
+      "name": "proxied cookie session user",
+      "pass": true
+    },
+    {
+      "name": "proxied empty device list",
+      "pass": true
+    },
+    {
+      "name": "proxied CSRF logout invalidates session",
+      "pass": true
+    }
+  ],
+  "browser": "BLOCKED_NOT_RUN",
+  "scope": "HTTP serving/proxy integration, not rendered UI interaction"
+}

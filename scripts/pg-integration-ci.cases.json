@@ -1,0 +1,1605 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_busy_audit",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_confirmed",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_conflicting_audit",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_conflicting_status",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_missing_audit",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_new_generation",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_successor_fence",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/observe_unfinished",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_empty_error_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_error_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_leased_delivered",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_sender_start_before_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_sender_status_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_after_now",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_before_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_start_equals_claim",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_status_present",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/prepare_evidence_zero_start",
+      "file": "callback_prepare_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_fresh_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_fresh_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_prior_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_prior_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_reconnected_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F0_reconnected_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_callback_binding",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_dispatch_session",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_empty_object",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_noncanonical",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_fresh_event_wrong_type",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_prior_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_prior_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_reconnected_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F1_reconnected_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_fresh_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_fresh_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_prior_event_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_prior_event_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_reconnected_missing",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/receipt_no_ack_F4_reconnected_result_digest",
+      "file": "replay_receipt_corruption_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/replay_receipt_F0",
+      "file": "callback_replay_receipt_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/replay_receipt_F1",
+      "file": "callback_replay_receipt_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/replay_receipt_F4",
+      "file": "callback_replay_receipt_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/revocation_between_claim_and_prepare",
+      "file": "callback_vertical_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/same_delivery_single_claim_and_prepare",
+      "file": "callback_vertical_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/prepared_unknown",
+      "file": "callback_vertical_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_empty_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_leased_delivered",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepare_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepare_before_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_prepared_equals_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_start_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_start_before_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_status_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_unexpired_bad_status",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_unprepared_start_equals_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_explicit_zero_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_schema_rejects_missing_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_empty_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_error_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_leased_delivered",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepare_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepare_before_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_prepared_equals_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_start_after_now",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_start_before_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_status_present",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_unprepared_start_equals_claim",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/recovery_evidence_selector_zero_start",
+      "file": "callback_recovery_evidence_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/unprepared",
+      "file": "callback_vertical_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/worker_same_epoch_prepared_unknown",
+      "file": "callback_worker_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/worker_same_epoch_unprepared",
+      "file": "callback_worker_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB03/worker_selection_boundaries",
+      "file": "callback_worker_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/observe_after_real_commit",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/observe_after_real_rollback",
+      "file": "callback_observe_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/cross_tenant",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/expired_but_unrevoked_session",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/old_check_definition_drift",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/old_check_missing",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/old_check_name_drift",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/result_column_type_drift",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/empty_object",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/escaped_nul_object",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_array",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_boolean",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_null",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_number",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/json_string",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/malformed_json",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/migration_0008_guards/revoked_session_and_result_constraint/sql_null",
+      "file": "migration_guard_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/nul_result_and_wrong_attempt",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/rate_bound",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/app_epoch_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/array",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/attempt_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/boolean",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/device_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/dispatch_session_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/duplicate_field",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/duplicate_receipt",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/effect_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/epoch_decimal",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/epoch_exponent",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/exact_byte_limit_ascii",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/exact_byte_limit_utf8",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/json_null",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/malformed",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_app",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_appEpoch",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_attempt",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_command",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_commandDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_device",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_resultDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_status",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/mismatch_tenant",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_app",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_appEpoch",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_attempt",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_command",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_command#01",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_commandDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_device",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_result",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_resultDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_status",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/missing_tenant",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_app",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_appEpoch",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_attempt",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_command",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_commandDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_device",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_resultDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_status",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/null_tenant",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/number",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/oversize_ascii",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/oversize_utf8",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/receipt_delete",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/receipt_noop",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/receipt_rewrite",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/result_clear",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/result_command_delete",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/result_replace",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/sql_null",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/status_change",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/string",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/valid_binding",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_app",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_appEpoch",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_attempt",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_command",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_commandDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_device",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_resultDigest",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_status",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/fresh_migration_and_receipt_guards/wrong_type_tenant",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/catalog_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/cleared_result_ack",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/cleared_result_callback",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/cleared_result_inbox",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/cleared_result_tombstone",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/empty_current_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/missing_relation",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/nonnull_result",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/public_create_permission",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/public_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/status_partially_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_00/status_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/audit_command.result",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/audit_command.result_conflict",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/event_lost_execution_evidence",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/event_result_cancel_no_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/event_result_failure_no_effect",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/event_result_partial",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/event_result_success",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/status_cancelled",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/status_execution_unknown",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/status_expired",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/status_failed",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_01/status_rejected",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_device_proves_no_effect_cancel",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_device_proves_unstarted_expiry",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_device_reject_before_start",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_applied",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_not_applied",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_partial",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_unstarted_cancelled",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_unstarted_expired",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/event_reconcile_unstarted_rejected",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/source_failed",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/source_partially_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_02/source_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/result_reservation_materialized",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/source_cancelled",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/source_execution_unknown",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/source_expired",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/source_rejected",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_cancelled",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_execution_unknown",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_expired",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_failed",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_partially_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_rejected",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_03/target_succeeded",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/callback_reservation_cancelled_retained",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/callback_reservation_materialized",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/callback_reservation_purged",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/isolated_corrupt_callback_outbox",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/result_reservation_cancelled_retained",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/result_reservation_purged",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_admission_reservations",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_command_events",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_commands",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_inbox",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_outbox",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_04/temp_shadow_tombstones",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_05",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_05/temp_shadow_audit",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_05/temp_shadow_callback_outbox",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/history_batch_05/temp_shadow_developer_callbacks",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/replay_migration_negative_matrix/non_owner_schema",
+      "file": "replay_migration_negative_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/sequence_gap",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/stale_timestamp",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGGatewayGW10/wrong_session",
+      "file": "gateway_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/PG-GW-07_cross_tenant",
+      "file": "integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/PG-GW-14_wrong_device_outbox",
+      "file": "integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/PG-GW-15_wrong_dispatch_session",
+      "file": "integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/PG-GW-15_wrong_gateway_session",
+      "file": "integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/PG-GW-15_wrong_session_inbox",
+      "file": "integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/cross_app_version_insert",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/cross_tenant_version_insert",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/detached_version_insert",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/exact_version_revoke_allows_new_identity",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/historical_delete_denied",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/historical_identity_immutable",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/historical_key_immutable",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/historical_revoke_conflicts_with_authority_lock",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/historical_url_immutable",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/key_requires_version_even_with_new_policy",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/no_app_reassignment",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/no_current_delete",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/no_key_rollback",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/no_policy_rollback",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/revoke_is_terminal_and_idempotent",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/revoked_destination_cannot_restart",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/revoked_version_cannot_reactivate",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/rotation_preserves_frozen_delivery",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/same_key_ref",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/same_policy_url",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/subscription_exact_tuple",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/temporary_table_cannot_shadow_version_guard",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/url_requires_policy_even_with_new_key",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/version_revoke_cannot_change_time",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/destination_versions/version_revoke_cannot_clear",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/command_snapshot_history",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/destination_only_config",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/held_reservation_history",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/legacy_event_history",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/materialized_delivery_history",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationSchemaAndDeviceBindings/migration_0009_history_gate/subscription_history",
+      "file": "callback_destination_version_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_caps_and_locked_rows",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_drift_missing_scope_legacy",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_nonowner_select_only",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_repeatable_snapshot_admission",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_repeatable_snapshot_materialization",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/store/pg",
+      "test": "TestPGIntegrationValidMaterializationAndGC/RETENTION_AUDIT_supported_shared_event_no_mutation",
+      "file": "retention_audit_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_1_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_2_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_3_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_-1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_0",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_clock_attempt_4_delta_1",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_confirmed",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_unfinished",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_missing_audit",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_conflicting_audit",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_missing_prepare",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_wrong_schedule",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_retained_slot",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_successor_fence",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_successor_attempt",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_new_generation",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_observe_wrong_status",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_direction_conservative_dead_to_ready",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_direction_advanced_ready_to_dead",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_natural_lock_horizon",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_commit_retryable_failure",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_commit_delivery_unknown",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_rollback_retryable_failure",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB05/retry_ack_rollback_delivery_unknown",
+      "file": "callback_retry_settlement_integration_test.go"
+    },
+    {
+      "package": "github.com/ZhangIvan/worktool-open/backend-go/internal/gateway",
+      "test": "TestPGCallbackCB02/retry_natural_ready_observe_after_expiry",
+      "file": "callback_retry_settlement_integration_test.go"
+    }
+  ]
+}
