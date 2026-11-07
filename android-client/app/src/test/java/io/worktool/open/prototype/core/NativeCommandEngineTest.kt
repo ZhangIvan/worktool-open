@@ -80,6 +80,64 @@ class NativeCommandEngineTest {
         assertTrue(h.journal.effects.isEmpty())
         assertTrue(h.engine.isPaused())
     }
+    @Test fun readySendsRecoveredAcceptedResultOnlyOnce() {
+        val h=harness()
+        h.journal.accept(command("command_recovered"))
+        h.engine.closed("OFFLINE")
+        h.engine.ready(binding.copy(sessionId="session_next"))
+        val row=h.journal.command("command_recovered")!!
+        assertEquals("rejected",row.stage)
+        assertFalse(row.acked)
+        assertTrue(h.journal.effects.isEmpty())
+        val sent=h.link.sent.filter { it.first=="execution_result" }
+        assertEquals(1,sent.size)
+        assertEquals("command_recovered",sent.single().second.getString("commandId"))
+        assertEquals("RECONNECT_RECONFIRMATION_REQUIRED",sent.single().second.getString("code"))
+        assertEquals(WireValidation.canonicalDigest(JSONObject(row.result!!)),WireValidation.canonicalDigest(sent.single().second))
+        val resultEvent="sent_event_${h.link.sent.indexOfFirst { it.first=="execution_result" }+1}"
+        val ack=frame(JSONObject().put("commandId","command_recovered").put("ackEventId",resultEvent),1,"event_recovered_ack","result_ack")
+            .put("sessionId","session_next")
+        h.engine.frame(ack)
+        assertTrue(h.journal.command("command_recovered")!!.acked)
+        assertTrue(h.journal.pendingResults().isEmpty())
+        assertTrue(h.events.errors.isEmpty())
+    }
+
+    @Test fun readyReplaysOldAndNewPendingResultsButNotAcknowledgedRows() {
+        val h=harness()
+        h.engine.frame(frame(command("command_old_pending")))
+        h.engine.frame(frame(command("command_old_acked"),2,"event_second"))
+        h.journal.acknowledge("command_old_acked")
+        h.journal.accept(command("command_new_pending"))
+        h.link.sent.clear()
+        h.engine.closed("OFFLINE")
+        h.engine.ready(binding.copy(sessionId="session_next"))
+        val sent=h.link.sent.filter { it.first=="execution_result" }
+        assertEquals(2,sent.size)
+        assertEquals(setOf("command_old_pending","command_new_pending"),sent.map { it.second.getString("commandId") }.toSet())
+        assertEquals(2,h.journal.pendingResults().size)
+        assertTrue(h.journal.command("command_old_acked")!!.acked)
+        assertEquals(2,h.journal.effects.size)
+        assertFalse(h.link.sent.any { it.first=="accepted" || it.first=="started" })
+        assertTrue(h.events.errors.isEmpty())
+    }
+
+    @Test fun readyStagesAll101AcceptedRowsAndSendsEachOnlyOnce() {
+        val h=harness()
+        repeat(101) { h.journal.accept(command("command_$it")) }
+        h.engine.closed("OFFLINE")
+        h.engine.ready(binding.copy(sessionId="session_next"))
+        val sent=h.link.sent.filter { it.first=="execution_result" }
+        assertEquals(101,sent.size)
+        assertEquals(101,sent.map { it.second.getString("commandId") }.toSet().size)
+        assertTrue(h.journal.pendingCommands().isEmpty())
+        assertEquals(101,h.journal.pendingResults().size)
+        assertTrue(h.journal.rows.values.all { it.stage=="rejected" && !it.acked })
+        assertTrue(h.journal.effects.isEmpty())
+        assertTrue(h.events.errors.isEmpty())
+        // This in-memory count is not server-rate, network or SQLite acceptance.
+    }
+
     private fun sharedExchange():JSONObject = java.io.File(requireNotNull(System.getProperty("worktool.interop.fixture")))
         .bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
 

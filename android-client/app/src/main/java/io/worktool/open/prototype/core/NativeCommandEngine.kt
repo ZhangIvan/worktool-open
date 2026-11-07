@@ -51,7 +51,8 @@ class NativeCommandEngine(
         journal.recoverInterrupted()
         // A prior accepted task never resumes an old local confirmation after reconnect/restart.
         journal.pendingCommands().filter { it.stage=="accepted" }.forEach {
-            finish(JSONObject(it.body),"rejected","not_started","RECONNECT_RECONFIRMATION_REQUIRED")
+            // Stage recovery durably before the single pending-result replay below.
+            finish(JSONObject(it.body),"rejected","not_started","RECONNECT_RECONFIRMATION_REQUIRED",sendNow=false)
         }
         journal.pendingResults().forEach { sendResult(it) }
         events.changed()
@@ -272,14 +273,14 @@ class NativeCommandEngine(
         }
         finish(body,"succeeded","applied","APP_LOCAL_SYNTHETIC_APPLIED",effect)
     }
-    private fun finish(body: JSONObject,status: String,effectState: String,code: String,effect: LocalEffect?=null) {
+    private fun finish(body: JSONObject,status: String,effectState: String,code: String,effect: LocalEffect?=null,sendNow: Boolean=true) {
         val id=body.getString("commandId")
         val result=JSONObject().put("commandId",id).put("attemptId",body.getString("attemptId"))
             .put("status",status).put("effectState",effectState).put("code",code)
             .put("evidenceRefs",JSONArray().put("journal_" + WireValidation.sha256(id).take(40)))
         journal.finish(id,result,effect)
         confirmations.remove(id); fixtureConfirmations.remove(id); fixtureInFlight.remove(id)
-        sendResult(result)
+        if(sendNow) sendResult(result)
         events.changed()
     }
     private fun sendResult(result: JSONObject) {

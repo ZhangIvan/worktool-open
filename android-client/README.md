@@ -31,6 +31,30 @@ Only INTERNET appears under uses-permission. Secure variants nevertheless add a 
 
 ## Build evidence and deployment limits
 
+### Reconnect result staging candidate (JVM checks NOT_RUN locally)
+
+During `NativeCommandEngine.ready`, previously accepted commands are first
+durably rejected with the existing reconfirmation-required result. This recovery
+step defers sending until the final pending-result traversal, so each newly
+created result is attempted once rather than once during `finish` and again
+during replay. Older unacknowledged results are still replayed; acknowledged
+rows stay excluded. Normal command completion still attempts immediate delivery.
+Result rows remain unacknowledged until the existing exact result-event ACK
+check succeeds, and no local effect is replayed or new execution consent granted.
+
+Three new JVM cases cover a single recovered accepted command, mixed old/new
+pending results with an acknowledged control, and 101 recovered rows beyond the
+UI's recent-row limit. They use an in-memory journal and link, not Android SQLite
+or actual sockets. They are authored but not executed locally because the local
+environment lacks Kotlin/Gradle and their cached test dependencies. Prior CI is
+not execution evidence for this candidate.
+
+This narrow correction removes duplicate replay within one `ready` call. It
+does not add outbound pacing, an ACK window or a bounded backlog pump. Large
+reconnect backlogs can still exceed the Go gateway's ingress rate/queue bounds;
+that remains a separate compatibility and integration gate. No process-death,
+real-device, production callback or deployment acceptance is implied.
+
 Pinned existing official inputs: AGP8.13.2, Kotlin2.2.21, Gradle8.13, JDK17, compile/target36, min26, Build Tools35.0.0. On an already licensed/provisioned official environment:
 
 ```sh
