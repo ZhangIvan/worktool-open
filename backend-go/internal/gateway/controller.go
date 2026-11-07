@@ -28,6 +28,7 @@ type Controller struct {
 	closing       bool
 	live          map[*connection]struct{}
 	wg            sync.WaitGroup
+	shutdownDone  chan struct{} // Created once under mu, after closing excludes wg.Add.
 	cleanupErrors atomic.Int64
 	// Private test seam, fixed before any connection; production always time.Now.
 	// This clock affects ingress budgets only, never authorization or deadlines.
@@ -196,9 +197,22 @@ func (c *Controller) Upgrade(w http.ResponseWriter, r *http.Request, a pg.Sessio
 	}
 	x.run()
 }
+
+// Shutdown stops admission and joins all registered connection cleanup. ctx must
+// be non-nil. Cancellation bounds only this caller's wait, not the shared join;
+// an incomplete join requires retaining the store/pool for a later retry.
+// A nil result confirms the join, not durable cleanup success: check CleanupErrors.
 func (c *Controller) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	c.closing = true
+	if c.shutdownDone == nil {
+		done := make(chan struct{})
+		c.shutdownDone = done
+		// Upgrade registers under the same mutex and cannot Add after closing.
+		// Wait for actual Done, including finish, even if live is already empty.
+		go func() { c.wg.Wait(); close(done) }()
+	}
+	done := c.shutdownDone
 	all := make([]*connection, 0, len(c.live))
 	for x := range c.live {
 		all = append(all, x)
@@ -207,13 +221,22 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 	for _, x := range all {
 		x.stop(1001, "shutdown")
 	}
-	done := make(chan struct{})
-	go func() { c.wg.Wait(); close(done) }()
+	// A previously observed completed join wins over a canceled retry context.
+	select {
+	case <-done:
+		return nil
+	default:
+	}
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errors.New("GATEWAY_SHUTDOWN_INCOMPLETE_DO_NOT_CLOSE_POOL")
+		select {
+		case <-done:
+			return nil
+		default:
+			return errors.New("GATEWAY_SHUTDOWN_INCOMPLETE_DO_NOT_CLOSE_POOL")
+		}
 	}
 }
 

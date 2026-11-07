@@ -136,6 +136,33 @@ still revokes authority immediately. No other connection or failed-hijack socket
 is retained. GW10 keeps a peer that does not read replies, the original 5s cleanup
 assertion and zero-inbox assertion; no test deadline was extended.
 
+### Shared shutdown join candidate
+
+`Controller.Shutdown` marks admission closed under the same mutex used by
+`Upgrade` registration, then creates at most one controller-owned join waiter and
+completion signal. Every call still stops every currently registered connection.
+The signal closes only after the registration wait group joins, including each
+connection's existing worker and exact-session cleanup; an empty live map alone
+does not establish that join. Stop, transport ownership and cleanup order are
+unchanged.
+
+Callers must provide a non-nil context. A canceled or expired caller stops only
+its own wait and receives `GATEWAY_SHUTDOWN_INCOMPLETE_DO_NOT_CLOSE_POOL` while
+the join remains pending. Keep live dependencies, especially the store/pool,
+available and retry: the shared waiter continues and retries do not accumulate
+helpers. Once completion is observed, even a canceled retry returns nil. Nil
+confirms lifecycle join only; nonzero `CleanupErrors()` still records failed
+durable cleanup and must not be presented as successful database retirement.
+
+Offline tests use the real controller and in-memory registered connections, held
+workers and invalid-auth HTTP recorder requests. They cover the pending helper
+bound (positively observing one waiter), repeated/concurrent callers, independent
+cancellation, completed-join retries, actual registration completion rather than
+live-map emptiness, stopped admission, and retained cleanup-error accounting.
+They open no sockets or database connections. These tests are not real-network
+timed-shutdown/retry or database-retirement acceptance. Historical GW12 join
+evidence belongs to its recorded source and does not validate this correction.
+
 ### Reader/processor split candidate
 
 `ingress.go` owns a single-producer bounded FIFO. Dequeue retains count/capacity
