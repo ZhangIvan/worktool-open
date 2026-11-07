@@ -1,0 +1,58 @@
+{
+  "SCHEMA_INVALID": {
+    "http": 400,
+    "retry": false
+  },
+  "UNAUTHENTICATED": {
+    "http": 401,
+    "retry": false
+  },
+  "TENANT_MISMATCH": {
+    "http": 403,
+    "retry": false
+  },
+  "ROLE_DENIED": {
+    "http": 403,
+    "retry": false
+  },
+  "APPROVAL_REQUIRED": {
+    "http": 403,
+    "retry": false
+  },
+  "POLICY_REVOKED": {
+    "http": 403,
+    "retry": false
+  },
+  "NOT_FOUND": {
+    "http": 404,
+    "retry": false
+  },
+  "IDEMPOTENCY_CONFLICT": {
+    "http": 409,
+    "retry": false
+  },
+  "ILLEGAL_TRANSITION": {
+    "http": 409,
+    "retry": false
+  },
+  "UNSUPPORTED_VERSION": {
+    "http": 426,
+    "retry": false
+  },
+  "CAPABILITY_UNAVAILABLE": {
+    "http": 422,
+    "retry": false
+  },
+  "EXPIRED": {
+    "http": 410,
+    "retry": false
+  },
+  "RATE_LIMITED": {
+    "http": 429,
+    "retry": true
+  },
+  "STORAGE_UNAVAILABLE": {
+    "http": 503,
+    "retry": true
+  }
+}

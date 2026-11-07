@@ -1,0 +1,42 @@
+name: Synthetic prototype CI
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [worktool/synthetic-prototype]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-checks:
+    name: Node 24 synthetic checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout read-only source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, verified 2026-11-02
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up fixed Node version
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6, verified 2026-11-02
+        with:
+          node-version: '24.22.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and synthetic protocol tests
+        run: npm test
+      - name: Build console
+        run: npm run build
+      - name: Test local HTTP console proxy
+        run: npm run test:http-console

@@ -1,0 +1,95 @@
+name: Android native and isolated lab checks
+on:
+  pull_request:
+    branches: [main]
+    paths: ['contracts/interop/**', 'android-client/**', '.github/workflows/android.yml']
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths: ['contracts/interop/**', 'android-client/**', '.github/workflows/android.yml']
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require existing licensed Android SDK (do not install or accept new licenses)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ANDROID_HOME:-}"
+          test -s "$ANDROID_HOME/licenses/android-sdk-license"
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+        with:
+          gradle-version: '8.13'
+          cache-disabled: true
+          dependency-graph: disabled
+      - name: Compile native app, JVM contracts, lint (no device/emulator execution)
+        run: gradle --no-daemon -p android-client :app:testDebugUnitTest :app:testReleaseUnitTest :app:testLabUnitTest :app:lintDebug :app:lintRelease :app:lintLab :app:assembleDebug :app:assembleRelease :app:assembleLab :app:assembleDebugAndroidTest -Pandroid.builder.sdkDownload=false
+      - name: Static three-variant identity and isolation evidence (no APK execution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-client/ci-artifact
+          for variant in debug release lab; do
+            suffix=""; test "$variant" != release || suffix="-unsigned"
+            APK="android-client/app/build/outputs/apk/$variant/app-$variant$suffix.apk"
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > "android-client/ci-artifact/badging-$variant.txt"
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions "$APK" > "android-client/ci-artifact/permissions-$variant.txt"
+            if test "$variant" != release; then
+              "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" > "android-client/ci-artifact/signature-$variant.txt"
+            fi
+            cp "$APK" "android-client/ci-artifact/worktool-open-native-$variant$suffix.apk"
+          done
+          python3 - <<'PYPERM'
+          from pathlib import Path
+          import re
+          for variant in ('debug','release','lab'):
+              text=Path(f'android-client/ci-artifact/permissions-{variant}.txt').read_text()
+              assert set(re.findall(r"uses-permission: name='([^']+)'",text))=={'android.permission.INTERNET'}
+          PYPERM
+          python3 android-client/tools/verify_variant_isolation.py --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" --apk debug=android-client/ci-artifact/worktool-open-native-debug.apk --apk release=android-client/ci-artifact/worktool-open-native-release-unsigned.apk --apk lab=android-client/ci-artifact/worktool-open-native-lab.apk > android-client/ci-artifact/variant-isolation.json
+          cd android-client/ci-artifact
+          sha256sum worktool-open-native-debug.apk worktool-open-native-release-unsigned.apk worktool-open-native-lab.apk > SHA256SUMS
+          printf '%s\n' 'CI JVM/build/static artifacts only; no device or WeCom tests. Release APK is unsigned and not install-ready. Secure debug/release register a BIND_ACCESSIBILITY_SERVICE-protected own-fixture service; this does not enable device accessibility permission. Lab is cleartext, separate package, no default address or registered service/fixture activity, and retains client session/queue budgets. Deployment remains blocked on separately authorized bounded ingress; no proxy is implemented.' > STATUS.txt
+      - name: Preserve bounded redacted three-variant JVM XML and lint summaries
+        run: python3 android-client/tools/collect_ci_reports.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: worktool-native-variants-${{ github.sha }}
+          path: |
+            android-client/ci-artifact/worktool-open-native-debug.apk
+            android-client/ci-artifact/worktool-open-native-release-unsigned.apk
+            android-client/ci-artifact/worktool-open-native-lab.apk
+            android-client/ci-artifact/SHA256SUMS
+            android-client/ci-artifact/signature-debug.txt
+            android-client/ci-artifact/signature-lab.txt
+            android-client/ci-artifact/badging-debug.txt
+            android-client/ci-artifact/badging-release.txt
+            android-client/ci-artifact/badging-lab.txt
+            android-client/ci-artifact/permissions-debug.txt
+            android-client/ci-artifact/permissions-release.txt
+            android-client/ci-artifact/permissions-lab.txt
+            android-client/ci-artifact/variant-isolation.json
+            android-client/ci-artifact/STATUS.txt
+            android-client/ci-artifact/jvm-test-results/TEST-*.xml
+            android-client/ci-artifact/jvm-summary.json
+            android-client/ci-artifact/lint-summary.json
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false

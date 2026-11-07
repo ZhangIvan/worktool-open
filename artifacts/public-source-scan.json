@@ -1,0 +1,7 @@
+{
+  "scope": "final staged filenames + PEM headers + selected original identifiers + fixed-password assignment candidates; not exhaustive PII/secret assurance",
+  "files": 68,
+  "matches": [],
+  "pass": true,
+  "earlier_exact_generated_runtime_password_scan": "0 matches before test-runtime deletion"
+}

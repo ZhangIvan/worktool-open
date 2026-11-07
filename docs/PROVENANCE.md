@@ -1,0 +1,6 @@
+# Clean implementation provenance
+This is newly written implementation based on clean functional specifications. No original APK, decompiled sources, native binaries, private sensitive inventory, original credential, internal address, or user data is included. The original self-compiled application is not represented as a third-party commercial product. Historical numeric identifiers in the capability catalogue are traceability references, not compatibility or reachability promises.
+
+New code is MIT; npm dependencies retain their own licenses. Exact resolved packages and integrity are in package-lock.json; component licenses are in docs/dependency-inventory.json. Package installation used the official npm registry with lifecycle scripts disabled and a project-local cache. Runtime/tool versions and actual validation results are recorded separately; absence of an advisory is not proof of safety.
+
+Design input hashes are in design-baseline.json. Contracts contain only clean new protocol schemas and synthetic examples. No reverse-skills scripts/binaries were executed. No external business API or real account was contacted. The application must remain loopback/synthetic until a separately reviewed deployment configuration is authorized.
