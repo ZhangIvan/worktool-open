@@ -155,7 +155,7 @@ RESOURCE_DIAGNOSTIC_FIELDS = {
         'ConfigImage', 'Image', 'NetworkMode', 'PidMode', 'IpcMode', 'UsernsMode',
         'UTSMode', 'CgroupnsMode', 'Privileged', 'ReadonlyRootfs', 'PublishAllPorts',
         'Memory', 'MemorySwap', 'NanoCpus', 'ShmSize', 'Running', 'Runtime',
-        'AutoRemove', 'CgroupParent', 'VolumeDriver', 'OomKillDisable',
+        'AutoRemove', 'CgroupParent', 'VolumeDriver',
         'RestartPolicy', 'LogConfig', 'SecurityOpt', 'CapDrop', 'Tmpfs'}),
     'RESOURCE_EMPTY_LIST_RULE': frozenset({'Binds', 'VolumesFrom', 'Devices',
         'DeviceRequests', 'DeviceCgroupRules', 'CapAdd', 'GroupAdd', 'Links',
@@ -165,7 +165,65 @@ RESOURCE_DIAGNOSTIC_FIELDS = {
     'RESOURCE_MOUNTS_BOUND': frozenset({'Mounts'}),
     'RESOURCE_MOUNT_SHAPE': frozenset({'Mounts'}),
     'RESOURCE_MOUNT_VALUE': frozenset({'Mounts'}),
+    **{'RESOURCE_OOM_'+kind: frozenset({'OomKillDisable'}) for kind in
+       ('NULL','BOOL_TRUE','BOOL_FALSE','OTHER')},
 }
+
+
+def oom_category(value):
+    if value is None:
+        return 'RESOURCE_OOM_NULL'
+    if type(value) is bool:
+        return 'RESOURCE_OOM_BOOL_TRUE' if value else 'RESOURCE_OOM_BOOL_FALSE'
+    return 'RESOURCE_OOM_OTHER'
+
+
+VERSION_TEMPLATE = '{"client_version":{{json .Client.Version}},"client_api":{{json .Client.APIVersion}},"server_version":{{json .Server.Version}},"server_api":{{json .Server.APIVersion}}}'
+CGROUP_TEMPLATE = '{"cgroup_version":{{json .CgroupVersion}}}'
+VERSION_FIELDS = frozenset({'client_version','client_api','server_version','server_api'})
+
+
+def valid_runtime_summary(kind, value):
+    if type(value) is not dict or not all(type(k) is str for k in value):
+        return False
+    if value == {'status':'UNKNOWN'}:
+        return kind in ('version','cgroup')
+    if value.get('status') != 'OBSERVED':
+        return False
+    if kind == 'version':
+        return set(value) == VERSION_FIELDS | {'status'} and all(
+            type(value[k]) is str and len(value[k]) <= 32 and
+            re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,6}){1,3}',value[k]) is not None
+            for k in VERSION_FIELDS)
+    if kind == 'cgroup':
+        return set(value) == {'status','cgroup_version'} and type(value['cgroup_version']) is str and value['cgroup_version'] in ('1','2')
+    return False
+
+
+def parse_runtime_projection(kind, raw):
+    # Only expected JSON/shape errors become UNKNOWN. Never swallow cancellation.
+    try:
+        value = strict_json(raw,4096)
+    except Failure as exc:
+        if exc.code != 'EVIDENCE_INVALID':
+            raise
+        return {'status':'UNKNOWN'}
+    fields = VERSION_FIELDS if kind == 'version' else frozenset({'cgroup_version'})
+    if type(value) is not dict or set(value) != fields:
+        return {'status':'UNKNOWN'}
+    summary = dict(value,status='OBSERVED')
+    return summary if valid_runtime_summary(kind,summary) else {'status':'UNKNOWN'}
+
+
+def collect_runtime_summary(docker,budget,diagnostic):
+    # Two bounded read-only calls before CREATE, through the same socket/tool
+    # identity checks. No raw output/error is retained or emitted. All call
+    # failures (including output limit and cancellation) propagate to cleanup.
+    for kind,args in (('version',['version','--format',VERSION_TEMPLATE]),
+                      ('cgroup',['info','--format',CGROUP_TEMPLATE])):
+        code,out,_ = docker.call(args,timeout=budget(2),limit=4096)
+        summary = parse_runtime_projection(kind,out) if type(code) is int and code == 0 else {'status':'UNKNOWN'}
+        observe(diagnostic,'runtime_summary',kind,summary)
 
 
 def resource_require(ok, field, category):
@@ -227,7 +285,12 @@ class Diagnostics:
         self.events = []
         self.outcomes = {side: {'phase': side.upper(), 'status': 'NOT_STARTED', 'code': None,
                                 'inspect': None} for side in ('work', 'cleanup')}
+        self.runtime = {'version':None,'cgroup':None}
         self.emitted = False
+
+    def runtime_summary(self, kind, value):
+        if type(kind) is str and valid_runtime_summary(kind,value):
+            self.runtime[kind] = dict(value)
 
     def phase(self, side, phase):
         if type(side) is not str or type(phase) is not str or side not in self.outcomes or phase not in DIAGNOSTIC_PHASES:
@@ -263,8 +326,9 @@ class Diagnostics:
         if self.emitted:
             return
         self.emitted = True
-        record = {'diagnostic_version': 1, 'provenance': self.provenance,
-                  'work': self.outcomes['work'], 'cleanup': self.outcomes['cleanup'], 'events': self.events}
+        record = {'diagnostic_version': 2, 'provenance': self.provenance,
+                  'work': self.outcomes['work'], 'cleanup': self.outcomes['cleanup'], 'events': self.events,
+                  'runtime': self.runtime}
         raw = json.dumps(record, sort_keys=True, separators=(',', ':'))
         if len(raw) <= 16384:
             print(raw)
@@ -314,7 +378,8 @@ def verify_inspect(v, nonce, image_id):
         'SecurityOpt': ['no-new-privileges'], 'CapDrop': ['NET_RAW'], 'Tmpfs': TMPFS,
     }
     for k,x in exact.items():
-        resource_require(type(v[k]) is type(x) and v[k] == x, k, 'RESOURCE_EXACT_RULE')
+        resource_require(type(v[k]) is type(x) and v[k] == x, k,
+                         oom_category(v[k]) if k == 'OomKillDisable' else 'RESOURCE_EXACT_RULE')
     for key in ('Binds', 'VolumesFrom', 'Devices', 'DeviceRequests', 'DeviceCgroupRules', 'CapAdd',
                 'GroupAdd', 'Links', 'ExtraHosts', 'Dns', 'DnsOptions', 'DnsSearch'):
         resource_require(v[key] is None or type(v[key]) is list and len(v[key]) == 0, key, 'RESOURCE_EMPTY_LIST_RULE')
@@ -880,6 +945,7 @@ def fixture_work(state,docker,go,tests,budget,diagnostic=None):
             and image['Id'].startswith('sha256:') and HEX64.fullmatch(image['Id'][7:]),'IMAGE_MISMATCH')
     require(type(image['RepoDigests']) is list and all(type(x) is str for x in image['RepoDigests'])
             and any(x in image['RepoDigests'] for x in (IMAGE,'docker.io/library/'+IMAGE)),'IMAGE_MISMATCH')
+    collect_runtime_summary(docker,budget,diagnostic)
     observe(diagnostic,'phase','work','CREATE')
     nonce=state.nonce
     target=validate_target({'version':1,'run_nonce':nonce,'database':'wt_authority_test_'+nonce,
@@ -1370,9 +1436,72 @@ def selftest():
                 checks+=1
                 return
             raise AssertionError('resource drift accepted')
+        for value,kind in ((None,'NULL'),(True,'BOOL_TRUE'),(False,'BOOL_FALSE'),
+                           (0,'OTHER'),(1,'OTHER'),('', 'OTHER'),({},'OTHER'),([], 'OTHER'),(canary,'OTHER')):
+            assert oom_category(value)=='RESOURCE_OOM_'+kind
+            fixture=synthetic_inspect(nonce);fixture['OomKillDisable']=value
+            if value is False:
+                assert verify_inspect(fixture,nonce,'sha256:'+'5'*64)=='4'*64
+                checks+=1
+            else:
+                resource_case(fixture,'OomKillDisable','RESOURCE_OOM_'+kind)
+        good_versions={'client_version':'29.0.1','client_api':'1.52','server_version':'29.0.1','server_api':'1.52'}
+        assert parse_runtime_projection('version',json.dumps(good_versions).encode())==dict(good_versions,status='OBSERVED')
+        assert parse_runtime_projection('cgroup',b'{"cgroup_version":"2"}')=={'status':'OBSERVED','cgroup_version':'2'}
+        checks+=2
+        for kind,raw in (
+            ('version',b'not-json'),('version',canary.encode()),('version',b'{}'),
+            ('version',b'x'*4097),('version',b'\xff'),
+            ('version',json.dumps(dict(good_versions,secret=canary)).encode()),
+            ('version',json.dumps(dict(good_versions,client_version=canary)).encode()),
+            ('version',json.dumps(dict(good_versions,server_api=None)).encode()),
+            ('version',json.dumps(dict(good_versions,server_version='29.0.1-vendor')).encode()),
+            ('version',json.dumps(dict(good_versions,client_api='1.52\n')).encode()),
+            ('version',json.dumps(dict(good_versions,client_api='1.'+'2'*40)).encode()),
+            ('version',json.dumps(good_versions).replace('"client_version":', '"client_version":"0.0", "client_version":').encode()),
+            ('cgroup',b'{"cgroup_version":2}'),('cgroup',b'{"cgroup_version":"3"}'),
+            ('cgroup',b'{"cgroup_version":"2","extra":true}')):
+            assert parse_runtime_projection(kind,raw)=={'status':'UNKNOWN'}
+            checks+=1
+        class RuntimeDiagnosticDocker:
+            def __init__(self,code=0,problem=None,fail_at=1):self.calls=[];self.code=code;self.problem=problem;self.fail_at=fail_at
+            def call(self,args,**kwargs):
+                self.calls.append(args)
+                assert kwargs=={'timeout':2,'limit':4096}
+                if self.problem is not None and len(self.calls)==self.fail_at:raise self.problem
+                if args==['version','--format',VERSION_TEMPLATE]:
+                    return self.code,json.dumps(good_versions).encode(),canary.encode()
+                assert args==['info','--format',CGROUP_TEMPLATE]
+                return self.code,b'{"cgroup_version":"2"}',canary.encode()
+        for code in (0,1,False):
+            fake=RuntimeDiagnosticDocker(code);diag=Diagnostics('SYNTHETIC')
+            collect_runtime_summary(fake,lambda n:n,diag)
+            assert fake.calls==[['version','--format',VERSION_TEMPLATE],['info','--format',CGROUP_TEMPLATE]]
+            assert diag.runtime['version']==(dict(good_versions,status='OBSERVED') if type(code) is int and code==0 else {'status':'UNKNOWN'})
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output):diag.emit()
+            emitted=json.loads(output.getvalue())
+            assert emitted['diagnostic_version']==2 and emitted['runtime']==diag.runtime
+            assert set(emitted)=={'diagnostic_version','provenance','work','cleanup','events','runtime'}
+            assert canary not in output.getvalue()
+            checks+=1
+        for fail_at in (1,2):
+            for code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN','PROCESS_OUTPUT_LIMIT','DOCKER_CONFIGURATION','TOOLCHAIN_HASH','PROCESS_FAILED'):
+                fake=RuntimeDiagnosticDocker(problem=Failure(code),fail_at=fail_at);cleaned=[]
+                rejects(lambda:finalize_owned(lambda:collect_runtime_summary(fake,lambda n:n,None),lambda:cleaned.append(True)),code=code)
+                assert cleaned==[True] and len(fake.calls)==fail_at
+            fake=RuntimeDiagnosticDocker(problem=KeyboardInterrupt(),fail_at=fail_at)
+            try:collect_runtime_summary(fake,lambda n:n,None)
+            except KeyboardInterrupt:checks+=1
+            else:raise AssertionError('runtime diagnostic swallowed cancellation')
+        for value in ({'status':canary},dict(good_versions,status='OBSERVED',extra=canary),
+                      dict(good_versions,status='OBSERVED',server_version=canary)):
+            diag=Diagnostics('SYNTHETIC');diag.runtime_summary('version',value)
+            assert diag.runtime['version'] is None and canary not in json.dumps(diag.runtime)
+            checks+=1
         for category,fields in RESOURCE_DIAGNOSTIC_FIELDS.items():
             assert fields <= set(INSPECT_FIELDS)
-            if category in ('RESOURCE_MOUNT_SHAPE','RESOURCE_MOUNT_VALUE'):
+            if category in ('RESOURCE_MOUNT_SHAPE','RESOURCE_MOUNT_VALUE') or category.startswith('RESOURCE_OOM_'):
                 continue
             for field in fields:
                 fixture=synthetic_inspect(nonce);fixture[field]=canary
@@ -1542,10 +1671,21 @@ def selftest():
             def read(self,name,limit):return self.files[name]
             def remove_confirmed(self):self.removed=True
         class RecordedDocker:
-            def __init__(self,mode):
+            def __init__(self,mode,diagnostic_problem=None,fail_at=1):
                 self.mode=mode;self.calls=[];self.created=False;self.removed=False
+                self.diagnostic_problem=diagnostic_problem;self.fail_at=fail_at;self.diagnostic_calls=0
             def call(self,args,**kwargs):
                 self.calls.append(args)
+                if args in (['version','--format',VERSION_TEMPLATE],['info','--format',CGROUP_TEMPLATE]):
+                    self.diagnostic_calls+=1
+                    if self.diagnostic_problem is not None and self.diagnostic_calls==self.fail_at:
+                        raise self.diagnostic_problem
+                if args == ['version','--format',VERSION_TEMPLATE]:
+                    assert kwargs == {'timeout':2,'limit':4096}
+                    return 0,b'{"client_version":"29.0.1","client_api":"1.52","server_version":"29.0.1","server_api":"1.52"}',b''
+                if args == ['info','--format',CGROUP_TEMPLATE]:
+                    assert kwargs == {'timeout':2,'limit':4096}
+                    return 0,b'{"cgroup_version":"2"}',b''
                 if args[:2]==['image','inspect']:
                     return 0,json.dumps({'Id':'sha256:'+'5'*64,'RepoDigests':[IMAGE]}).encode(),b''
                 if args[0]=='run':
@@ -1600,6 +1740,10 @@ def selftest():
             else:
                 report=operation();assert report['result']['leaves']==150
                 assert 'secret' not in json.dumps(report);checks+=1
+            assert docker.calls.count(['version','--format',VERSION_TEMPLATE])==1
+            assert docker.calls.count(['info','--format',CGROUP_TEMPLATE])==1
+            create_index=next(i for i,c in enumerate(docker.calls) if c[0]=='run')
+            assert docker.calls.index(['info','--format',CGROUP_TEMPLATE])<create_index
             assert any(c[:2]==['container','ls'] for c in docker.calls)
             if mode in ('cleanup_failure','ownership_mismatch','shutdown_unknown'):
                 assert not state.removed
@@ -1609,6 +1753,19 @@ def selftest():
             if mode=='resource_failure':
                 assert not any(c[0] in ('exec','cp') for c in docker.calls)
                 assert state.removed and docker.removed
+        # Actual fixture/finalizer/cleanup path: either diagnostic command may
+        # fail. No CREATE/readiness/test command is reached, and owned state is
+        # still cleaned exactly through the original cleanup implementation.
+        for fail_at in (1,2):
+            for code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN','PROCESS_OUTPUT_LIMIT','DOCKER_CONFIGURATION','TOOLCHAIN_HASH','PROCESS_FAILED','UNEXPECTED_FAILURE'):
+                problem=KeyboardInterrupt() if code=='UNEXPECTED_FAILURE' else Failure(code)
+                state=State();docker=RecordedDocker('success',problem,fail_at)
+                rejects(lambda:finalize_owned(lambda:fixture_work(state,docker,'/go',CASES,lambda n:n),
+                                              lambda:cleanup_owned(state,docker,lambda n:n)),code=code)
+                assert docker.diagnostic_calls==fail_at
+                assert not docker.created and not docker.removed and state.removed
+                assert not any(c[0] in ('run','exec','cp','rm') for c in docker.calls)
+                assert sum(c[:2]==['container','ls'] for c in docker.calls)==2
         target=validate_target({
             'version':1,'run_nonce':nonce,'database':'wt_authority_test_'+nonce,'user':'wt_authority_owner_'+nonce,
             'password':'2'*64,'host':'127.0.0.1','port':5432,'schema_sha256':SCHEMA_SHA256,
