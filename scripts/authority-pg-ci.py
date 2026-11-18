@@ -236,6 +236,85 @@ def resource_require(ok, field, category):
         raise failure
 
 
+# Diagnostic only: no value from this observation is an acceptance input.
+VIEW_STATE_TEMPLATE = '{"Id":{{json .Id}},"Pid":{{json .State.Pid}},"StartedAt":{{json .State.StartedAt}},"RestartCount":{{json .RestartCount}},"Running":{{json .State.Running}}}'
+VIEW_COMMAND = '''set -eu
+test "$(readlink -e /sys/fs/cgroup)" = /sys/fs/cgroup
+for sample in 1 2; do
+  head -c 257 /proc/self/cgroup; printf '\\n@@\\n'
+  stat -f -c %T /sys/fs/cgroup; printf '\\n@@\\n'
+  stat -c %d:%i /sys/fs/cgroup; printf '\\n@@\\n'
+  for file in memory.max memory.swap.max cpu.max; do
+    test ! -L "/sys/fs/cgroup/$file"
+    head -c 257 "/sys/fs/cgroup/$file"; printf '\\n@@\\n'
+  done
+done
+'''
+
+
+def diagnostic_view_eligible(info, nonce, image_id, cid):
+    require(info.get('OomKillDisable', False) is None, 'EVIDENCE_INVALID')
+    # Strict JSON round trip creates an independent copy. Substitution is ONLY
+    # for checking diagnostic preconditions, never returned to acceptance.
+    copied = strict_json(json.dumps(info).encode(),16384)
+    copied['OomKillDisable'] = False
+    require(verify_inspect(copied,nonce,image_id) == cid,'IDENTITY_MISMATCH')
+
+
+def parse_view_state(raw, cid):
+    v = strict_json(raw,4096)
+    require(type(v) is dict and set(v)=={'Id','Pid','StartedAt','RestartCount','Running'},'EVIDENCE_INVALID')
+    require(v['Id']==cid and v['Running'] is True and type(v['Pid']) is int and 0<v['Pid']<2**31
+            and type(v['RestartCount']) is int and 0<=v['RestartCount']<2**31
+            and type(v['StartedAt']) is str and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z',v['StartedAt']) is not None,'EVIDENCE_INVALID')
+    return v
+
+
+def parse_container_view(raw):
+    require(type(raw) is bytes and len(raw)<=4096,'EVIDENCE_INVALID')
+    parts=raw.split(b'\n@@\n')
+    require(len(parts)==13 and parts[-1]==b'' and all(len(p)<=256 for p in parts[:-1]),'EVIDENCE_INVALID')
+    a,b=parts[:6],parts[6:12]
+    require(a==b and a[0]==b'0::/\n' and a[1]==b'cgroup2fs\n','EVIDENCE_INVALID')
+    require(re.fullmatch(rb'[0-9]{1,20}:[0-9]{1,20}\n',a[2]) is not None,'EVIDENCE_INVALID')
+    require(all(re.fullmatch(rb'(?:max|[0-9]{1,20})\n',v) is not None for v in a[3:5]),'EVIDENCE_INVALID')
+    require(re.fullmatch(rb'(?:max|[0-9]{1,20}) [0-9]{1,20}\n',a[5]) is not None,'EVIDENCE_INVALID')
+    quota,period=a[5].decode('ascii').strip().split(' ')
+    require(int(period)>0,'EVIDENCE_INVALID')
+    return {'memory_max':a[3].decode('ascii').strip(),'swap_max':a[4].decode('ascii').strip(),
+            'cpu_quota':quota,'cpu_period':period}
+
+
+def collect_container_view(info, nonce, image_id, cid, docker, budget, diagnostic):
+    # A fixed read-only exec in the owned pinned image, not host /proc probing.
+    # One shared 10s sub-budget, plus the original overall deadline/cleanup reserve.
+    observe(diagnostic,'container_view',{'status':'UNAVAILABLE','attestation':'NOT_ATTESTED'})
+    deadline=time.monotonic()+10
+    def remaining():
+        left=min(deadline-time.monotonic(),budget(3))
+        require(left>0,'PROCESS_TIMEOUT')
+        return left
+    try:
+        diagnostic_view_eligible(info,nonce,image_id,cid)
+        before=parse_view_state(docker.checked(['inspect','--format',VIEW_STATE_TEMPLATE,cid],timeout=remaining(),limit=4096),cid)
+        raw=docker.checked(['exec',cid,'env','-i','PATH=/usr/bin:/bin','LC_ALL=C','/bin/sh','-ec',VIEW_COMMAND],timeout=remaining(),limit=4096)
+        values=parse_container_view(raw)
+        after=parse_view_state(docker.checked(['inspect','--format',VIEW_STATE_TEMPLATE,cid],timeout=remaining(),limit=4096),cid)
+        require(before==after,'IDENTITY_MISMATCH')
+        after_info=strict_json(docker.checked(['inspect','--format',INSPECT_TEMPLATE,cid],timeout=remaining(),limit=16384),16384)
+        diagnostic_view_eligible(after_info,nonce,image_id,cid)
+        require(info==after_info,'IDENTITY_MISMATCH')
+        observe(diagnostic,'container_view',dict(values,status='OBSERVED',attestation='NOT_ATTESTED',
+                scope='container_namespace_view',consistency='point_in_time'))
+    except Failure as exc:
+        # Do not continue any operation after interrupted/uncertain transport.
+        if exc.code in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN'):
+            raise
+        # All malformed/unavailable/drift observations are discarded. The
+        # caller always re-raises the original OOM rejection, never proceeds.
+        return
+
+
 def inspect_failure(code, raw):
     """Conservative hints, not root-cause proof; never retain arbitrary bytes."""
     result = {'exit_code': code if type(code) is int and -127 <= code <= 255 else None,
@@ -286,7 +365,15 @@ class Diagnostics:
         self.outcomes = {side: {'phase': side.upper(), 'status': 'NOT_STARTED', 'code': None,
                                 'inspect': None} for side in ('work', 'cleanup')}
         self.runtime = {'version':None,'cgroup':None}
+        self.view = None
         self.emitted = False
+
+    def container_view(self, value):
+        unknown={'status':'UNAVAILABLE','attestation':'NOT_ATTESTED'}
+        if value==unknown:
+            self.view=dict(unknown)
+        elif type(value) is dict and set(value)=={'status','attestation','scope','consistency','memory_max','swap_max','cpu_quota','cpu_period'} and value['status']=='OBSERVED' and value['attestation']=='NOT_ATTESTED' and value['scope']=='container_namespace_view' and value['consistency']=='point_in_time' and all(type(value[k]) is str and re.fullmatch(r'max|[0-9]{1,20}',value[k]) is not None for k in ('memory_max','swap_max','cpu_quota')) and type(value['cpu_period']) is str and re.fullmatch(r'[0-9]{1,20}',value['cpu_period']) is not None and int(value['cpu_period'])>0:
+            self.view=dict(value)
 
     def runtime_summary(self, kind, value):
         if type(kind) is str and valid_runtime_summary(kind,value):
@@ -329,6 +416,8 @@ class Diagnostics:
         record = {'diagnostic_version': 2, 'provenance': self.provenance,
                   'work': self.outcomes['work'], 'cleanup': self.outcomes['cleanup'], 'events': self.events,
                   'runtime': self.runtime}
+        if self.view is not None:
+            record['container_view']=self.view
         raw = json.dumps(record, sort_keys=True, separators=(',', ':'))
         if len(raw) <= 16384:
             print(raw)
@@ -969,7 +1058,12 @@ def fixture_work(state,docker,go,tests,budget,diagnostic=None):
     state.record('container.id',container_id.encode())
     def inspect():
         info=strict_json(docker.checked(['inspect','--format',INSPECT_TEMPLATE,state.name],timeout=budget(10)),16384)
-        require(verify_inspect(info,nonce,image['Id'])==container_id,'IDENTITY_MISMATCH')
+        try:
+            require(verify_inspect(info,nonce,image['Id'])==container_id,'IDENTITY_MISMATCH')
+        except Failure as original:
+            if original.code=='RESOURCE_MISMATCH' and getattr(original,'inspect_diagnostic',None)=={'exit_code':None,'category':'RESOURCE_OOM_NULL','field':'OomKillDisable'}:
+                collect_container_view(info,nonce,image['Id'],container_id,docker,budget,diagnostic)
+            raise
     observe(diagnostic,'phase','work','RESOURCE_INSPECT')
     inspect()
     observe(diagnostic,'phase','work','READINESS')
@@ -1324,6 +1418,80 @@ def parse_arguments(argv):
     require(len(argv)==4 and argv[0]=='run' and argv[3]=='--execute-reviewed-stage-a','ARGUMENTS')
     require(Path(argv[1]).is_absolute() and Path(argv[2]).is_absolute(),'ARGUMENTS')
     return ('run',argv[1],argv[2])
+
+
+def view_sample():
+    # Synthetic namespace bytes, never host/runtime attestation.
+    sample=[b'0::/\n',b'cgroup2fs\n',b'1:234\n',b'1073741824\n',b'0\n',b'200000 100000\n']
+    return b'\n@@\n'.join(sample*2)+b'\n@@\n'
+
+
+def container_view_selftest():
+    checks=0;nonce='1'*32;cid='4'*64;image='sha256:'+'5'*64
+    info=synthetic_inspect(nonce);info['OomKillDisable']=None
+    original=json.dumps(info,sort_keys=True)
+    assert parse_container_view(view_sample())['swap_max']=='0';checks+=1
+    bads=[b'',view_sample()[:-1],view_sample()+b'extra',b'x'*4097,
+          view_sample().replace(b'0::/',b'0::/other'),view_sample().replace(b'cgroup2fs',b'tmpfs'),
+          view_sample().replace(b'1073741824',b'bad'),view_sample().replace(b'200000 100000',b'200000 0'),
+          view_sample().replace(b'1:234',b'1:235',1),view_sample().replace(b'0::/',b'x'*257)]
+    for raw in bads:
+        try:parse_container_view(raw)
+        except Failure:checks+=1
+        else:raise AssertionError('malformed view accepted')
+    class ViewDocker:
+        def __init__(self,mode='ok',fail_at=1):self.mode=mode;self.calls=[];self.states=0;self.fail_at=fail_at
+        def checked(self,args,**kwargs):
+            self.calls.append(args);assert 0<kwargs['timeout']<=3
+            if len(self.calls)==self.fail_at and self.mode in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN','PROCESS_OUTPUT_LIMIT','PROCESS_FAILED'):
+                raise Failure(self.mode)
+            if args[0]=='exec':
+                assert args==['exec',cid,'env','-i','PATH=/usr/bin:/bin','LC_ALL=C','/bin/sh','-ec',VIEW_COMMAND]
+                return b'bad-secret' if self.mode=='malformed' else view_sample()
+            if args[2]==VIEW_STATE_TEMPLATE:
+                self.states+=1
+                v={'Id':cid,'Pid':123,'StartedAt':'2026-11-18T00:00:00Z','RestartCount':0,'Running':True}
+                if self.states==2:
+                    if self.mode=='pid':v['Pid']=124
+                    if self.mode=='restart':v['RestartCount']=1
+                    if self.mode=='start':v['StartedAt']='2026-11-18T00:00:01Z'
+                    if self.mode=='id':v['Id']='6'*64
+                return json.dumps(v).encode()
+            v=dict(info)
+            if self.mode=='nonce':v['Labels']={LABEL:'2'*32}
+            if self.mode=='config':v['Memory']=0
+            return json.dumps(v).encode()
+    for mode in ('ok','malformed','pid','restart','start','id','nonce','config','PROCESS_TIMEOUT','PROCESS_UNCERTAIN','PROCESS_OUTPUT_LIMIT','PROCESS_FAILED'):
+        d=Diagnostics('SYNTHETIC');docker=ViewDocker(mode)
+        try:collect_container_view(info,nonce,image,cid,docker,lambda n:n,d)
+        except Failure as e:assert mode in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN') and e.code==mode
+        else:assert mode not in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN')
+        assert d.view['attestation']=='NOT_ATTESTED'
+        assert d.view['status']==('OBSERVED' if mode=='ok' else 'UNAVAILABLE')
+        assert 'secret' not in json.dumps(d.view);checks+=1
+    for stage in (1,2,3,4):
+        for mode in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN','PROCESS_OUTPUT_LIMIT','PROCESS_FAILED'):
+            d=Diagnostics('SYNTHETIC');docker=ViewDocker(mode,stage)
+            try:collect_container_view(info,nonce,image,cid,docker,lambda n:n,d)
+            except Failure as e:assert mode in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN') and e.code==mode
+            else:assert mode not in ('PROCESS_TIMEOUT','PROCESS_UNCERTAIN')
+            assert len(docker.calls)==stage and d.view['status']=='UNAVAILABLE';checks+=1
+    # Every field mutation that breaks original validation must preclude exec.
+    for field in info:
+        bad=dict(info);bad[field]='invalid'
+        docker=ViewDocker();d=Diagnostics('SYNTHETIC')
+        try:collect_container_view(bad,nonce,image,cid,docker,lambda n:n,d)
+        except (Failure,KeyError):pass
+        assert not docker.calls;checks+=1
+    for value in (False,True,0,'false'):
+        bad=dict(info,OomKillDisable=value);docker=ViewDocker()
+        collect_container_view(bad,nonce,image,cid,docker,lambda n:n,Diagnostics('SYNTHETIC'))
+        assert not docker.calls;checks+=1
+    assert json.dumps(info,sort_keys=True)==original
+    try:verify_inspect(info,nonce,image)
+    except Failure as e:assert e.inspect_diagnostic['category']=='RESOURCE_OOM_NULL';checks+=1
+    else:raise AssertionError('gate changed')
+    return checks
 
 
 def selftest():
@@ -1695,9 +1863,12 @@ def selftest():
                     if self.mode=='uncertain_create':raise Failure('PROCESS_TIMEOUT')
                     return 0,('4'*64+'\n').encode(),b''
                 if args[0]=='inspect':
+                    if args[2]==VIEW_STATE_TEMPLATE:
+                        return 0,json.dumps({'Id':'4'*64,'Pid':123,'StartedAt':'2026-11-18T00:00:00Z','RestartCount':0,'Running':True}).encode(),b''
                     v=synthetic_inspect(nonce)
                     if self.mode=='ownership_mismatch':v['Labels']={LABEL:'9'*32}
                     if self.mode=='resource_failure':v['Memory']=0
+                    if self.mode.startswith('oom_'):v['OomKillDisable']=None
                     return 0,json.dumps(v).encode(),b''
                 if args[:2]==['container','ls']:
                     if self.mode=='shutdown_unknown':raise Failure('PROCESS_FAILED')
@@ -1708,6 +1879,10 @@ def selftest():
                     self.removed=True
                     return 0,b'',b''
                 if args[0]=='cp':return 0,b'',b''
+                if args[:3]==['exec','4'*64,'env']:
+                    assert args[-1]==VIEW_COMMAND and kwargs['limit']==4096
+                    if self.mode!='oom_null':raise Failure(self.mode[4:])
+                    return 0,view_sample(),b''
                 if args[0]=='exec' and args[2]=='pg_isready':return 0,b'',b''
                 if args[0]=='exec' and args[2]=='readlink':return 0,args[-1].encode()+b'\n',b''
                 if args[:2]==['exec','-i']:
@@ -1724,6 +1899,9 @@ def selftest():
         for mode,expected in (('success',None),('cleanup_failure','CLEANUP_UNCONFIRMED'),
             ('uncertain_create','PROCESS_TIMEOUT'),('ownership_mismatch','CLEANUP_UNCONFIRMED'),
             ('resource_failure','RESOURCE_MISMATCH'),
+            ('oom_null','RESOURCE_MISMATCH'),
+            ('oom_PROCESS_TIMEOUT','PROCESS_TIMEOUT'),('oom_PROCESS_UNCERTAIN','PROCESS_UNCERTAIN'),
+            ('oom_PROCESS_OUTPUT_LIMIT','RESOURCE_MISMATCH'),('oom_PROCESS_FAILED','RESOURCE_MISMATCH'),
             ('shutdown_unknown','CLEANUP_UNCONFIRMED'),('output_limit','PROCESS_OUTPUT_LIMIT'),
             ('deadline','PROCESS_TIMEOUT'),('signal_unknown','PROCESS_UNCERTAIN'),
             ('test_exit','TEST_PROCESS_FAILED'),('converter_exit','CONVERTER_FAILED')):
@@ -1753,6 +1931,11 @@ def selftest():
             if mode=='resource_failure':
                 assert not any(c[0] in ('exec','cp') for c in docker.calls)
                 assert state.removed and docker.removed
+            if mode.startswith('oom_'):
+                assert len([c for c in docker.calls if c[0]=='exec'])==1
+                assert not any(c[0]=='cp' or 'pg_isready' in c or c[:2]==['exec','-i'] for c in docker.calls)
+                assert state.removed and docker.removed
+        checks+=container_view_selftest()
         # Actual fixture/finalizer/cleanup path: either diagnostic command may
         # fail. No CREATE/readiness/test command is reached, and owned state is
         # still cleaned exactly through the original cleanup implementation.
