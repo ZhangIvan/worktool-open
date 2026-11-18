@@ -131,7 +131,11 @@ INSPECT_FIELDS = {
         'VolumeDriver', 'StorageOpt', 'GroupAdd', 'Links', 'ExtraHosts', 'Dns',
         'DnsOptions', 'DnsSearch', 'OomKillDisable')},
 }
-INSPECT_TEMPLATE = '{' + ','.join('"' + k + '":{{json ' + v + '}}' for k,v in INSPECT_FIELDS.items()) + '}'
+# Only these two documented omitempty maps use index; all mandatory fields
+# retain missingkey=error in the CLI raw fallback. No full inspect/Env output.
+INSPECT_EXPRESSIONS = dict(INSPECT_FIELDS, Sysctls='(index .HostConfig "Sysctls")',
+                           StorageOpt='(index .HostConfig "StorageOpt")')
+INSPECT_TEMPLATE = '{' + ','.join('"' + k + '":{{json ' + v + '}}' for k,v in INSPECT_EXPRESSIONS.items()) + '}'
 TMPFS = {'/var/lib/postgresql': 'rw,nosuid,nodev,size=2147483648'}
 
 
@@ -1248,6 +1252,11 @@ def selftest():
     encode=lambda xs:b'\n'.join(json.dumps(x).encode() for x in xs)
     try:
         nonce='1'*32
+        assert len(INSPECT_FIELDS)==46 and set(INSPECT_EXPRESSIONS)==set(INSPECT_FIELDS)
+        assert {k for k in INSPECT_FIELDS if INSPECT_EXPRESSIONS[k]!=INSPECT_FIELDS[k]}=={'Sysctls','StorageOpt'}
+        assert all(INSPECT_EXPRESSIONS[k]=='(index .HostConfig "'+k+'")' for k in ('Sysctls','StorageOpt'))
+        assert 'Env' not in INSPECT_TEMPLATE
+        checks+=1
         # Diagnostic-only classifier regression: no subprocesses, Docker or SQL.
         # Canary bytes may occur in input but must never leave fixed enums.
         canary='PRIVATE_CREDENTIAL_CANARY_DO_NOT_EMIT'
