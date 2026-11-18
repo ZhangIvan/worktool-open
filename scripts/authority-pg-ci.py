@@ -149,18 +149,35 @@ def inspect_failure(code, raw):
     """Conservative hints, not root-cause proof; never retain arbitrary bytes."""
     result = {'exit_code': code if type(code) is int and -127 <= code <= 255 else None,
               'category': 'UNKNOWN', 'field': None}
-    if type(raw) is not bytes or len(raw) > 4096:
+    if type(raw) is not bytes:
+        return result
+    if len(raw) > 4096:
+        result['category'] = 'STDERR_LIMIT_EXCEEDED'
+        return result
+    if not raw:
+        result['category'] = 'STDERR_EMPTY'
         return result
     try:
         text = raw.decode('ascii')
     except UnicodeError:
+        result['category'] = 'STDERR_NON_ASCII'
         return result
     # Only exact frozen projection labels can leave this classifier. A match
     # says what the client reported, not whether that was the underlying cause.
     for label, path in INSPECT_FIELDS.items():
         token = path.rsplit('.', 1)[-1]
-        if ('executing at <' + path + '>') in text and ('map has no entry for key "' + token + '"') in text:
+        # Go text/template normally includes an empty quoted template name.
+        # Keep the older observed synthetic spelling, too. Neither is proof of
+        # the actual engine cause; field names still come only from this map.
+        execution = any((prefix + path + '>') in text for prefix in
+                        ('executing at <', 'executing "" at <'))
+        if execution and ('map has no entry for key "' + token + '"') in text:
             result.update(category='MISSING_FIELD_REPORTED', field=label)
+            return result
+    for label, path in INSPECT_FIELDS.items():
+        if any((prefix + path + '>') in text for prefix in
+               ('executing at <', 'executing "" at <')):
+            result.update(category='TEMPLATE_EVALUATION_REPORTED', field=label)
             return result
     if text.startswith(('Error: No such object:', 'Error response from daemon: No such container:')):
         result['category'] = 'OBJECT_ABSENCE_REPORTED'
@@ -200,7 +217,9 @@ class Diagnostics:
             if type(detail) is dict and all(type(key) is str for key in detail) and set(detail) == {'exit_code', 'category', 'field'}:
                 code, category, field = detail['exit_code'], detail['category'], detail['field']
                 if (code is None or type(code) is int and -127 <= code <= 255) and type(category) is str and category in (
-                        'UNKNOWN', 'MISSING_FIELD_REPORTED', 'OBJECT_ABSENCE_REPORTED') and (field is None or type(field) is str and field in INSPECT_FIELDS):
+                        'UNKNOWN', 'MISSING_FIELD_REPORTED', 'OBJECT_ABSENCE_REPORTED',
+                        'STDERR_EMPTY', 'STDERR_LIMIT_EXCEEDED', 'STDERR_NON_ASCII',
+                        'TEMPLATE_EVALUATION_REPORTED') and (field is None or type(field) is str and field in INSPECT_FIELDS):
                     current['inspect'] = dict(detail)
         if len(self.events) < 64:
             self.events.append({'side': side, 'phase': current['phase'], 'event': current['status']})
@@ -1229,6 +1248,69 @@ def selftest():
     encode=lambda xs:b'\n'.join(json.dumps(x).encode() for x in xs)
     try:
         nonce='1'*32
+        # Diagnostic-only classifier regression: no subprocesses, Docker or SQL.
+        # Canary bytes may occur in input but must never leave fixed enums.
+        canary='PRIVATE_CREDENTIAL_CANARY_DO_NOT_EMIT'
+        for label,path in INSPECT_FIELDS.items():
+            token=path.rsplit('.',1)[-1]
+            for prefix in ('executing at <','executing "" at <'):
+                message=('template parsing error: template: :1:20: '+prefix+path+
+                         '>: map has no entry for key "'+token+'" '+canary).encode()
+                detail=inspect_failure(1,message)
+                assert detail=={'exit_code':1,'category':'MISSING_FIELD_REPORTED','field':label}
+                failure=Failure('PROCESS_FAILED');failure.inspect_diagnostic=detail
+                diagnostic=Diagnostics('SYNTHETIC');diagnostic.finish('work',failure)
+                assert diagnostic.outcomes['work']['inspect']==detail
+                assert canary not in json.dumps(diagnostic.outcomes)
+                checks+=1
+            detail=inspect_failure(1,('executing "" at <'+path+'>: '+canary).encode())
+            assert detail=={'exit_code':1,'category':'TEMPLATE_EVALUATION_REPORTED','field':label}
+            checks+=1
+        for raw,category in ((b'', 'STDERR_EMPTY'),(b'x'*4097,'STDERR_LIMIT_EXCEEDED'),
+                (b'\xff'+canary.encode(),'STDERR_NON_ASCII'),(b'x'*4096,'UNKNOWN'),
+                (canary.encode(),'UNKNOWN'),(None,'UNKNOWN'),
+                (b'executing "" at <.Config.Env>: map has no entry for key "Env"','UNKNOWN'),
+                (b'executing "" at <.HostConfig.Unknown>: map has no entry for key "Unknown"','UNKNOWN'),
+                (b'Error: No such object: '+canary.encode(),'OBJECT_ABSENCE_REPORTED')):
+            detail=inspect_failure(1,raw)
+            assert detail=={'exit_code':1,'category':category,'field':None}
+            failure=Failure('PROCESS_FAILED');failure.inspect_diagnostic=detail
+            diagnostic=Diagnostics('SYNTHETIC');diagnostic.finish('cleanup',failure)
+            assert diagnostic.outcomes['cleanup']['inspect']==detail
+            assert canary not in json.dumps(diagnostic.outcomes)
+            checks+=1
+        for code in (None,True,-128,256,canary):
+            assert inspect_failure(code,b'')['exit_code'] is None
+            checks+=1
+        # Exercise the actual checked() diagnostic attachment with a pure fake
+        # transport, preserving its failure and the finalizer's cleanup priority.
+        class InspectDiagnosticDocker:
+            checked=Docker.checked
+            def call(self,args,**kwargs):
+                assert args==['inspect','--format',INSPECT_TEMPLATE,'synthetic']
+                return 1,b'',('executing "" at <.HostConfig.CgroupnsMode>: '+canary).encode()
+        fake=InspectDiagnosticDocker();diagnostic=Diagnostics('SYNTHETIC');cleanup_calls=[]
+        def diagnostic_work():
+            observe(diagnostic,'phase','work','RESOURCE_INSPECT')
+            return fake.checked(['inspect','--format',INSPECT_TEMPLATE,'synthetic'])
+        def diagnostic_cleanup():
+            cleanup_calls.append(True)
+            observe(diagnostic,'phase','cleanup','CLEANUP_INSPECT')
+            return fake.checked(['inspect','--format',INSPECT_TEMPLATE,'synthetic'])
+        import contextlib
+        import io
+        diagnostic_output=io.StringIO()
+        with contextlib.redirect_stdout(diagnostic_output):
+            rejects(lambda:finalize_owned(diagnostic_work,diagnostic_cleanup,diagnostic),code='CLEANUP_UNCONFIRMED')
+        assert canary not in diagnostic_output.getvalue()
+        assert json.loads(diagnostic_output.getvalue())['provenance']=='SYNTHETIC'
+        assert cleanup_calls==[True]
+        for side in ('work','cleanup'):
+            assert diagnostic.outcomes[side]['status']=='FAILED'
+            assert diagnostic.outcomes[side]['code']=='PROCESS_FAILED'
+            assert diagnostic.outcomes[side]['inspect']=={'exit_code':1,'category':'TEMPLATE_EVALUATION_REPORTED','field':'CgroupnsMode'}
+        assert canary not in json.dumps(diagnostic.outcomes)
+        checks+=1
         raw_manifest=(json.dumps({'version':1,'package':PACKAGE,'tests':list(CASES)},indent=2)+'\n').encode()
         assert manifest(raw_manifest,MANIFEST_SHA256)==CASES
         checks+=1
