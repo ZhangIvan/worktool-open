@@ -149,6 +149,35 @@ DIAGNOSTIC_PHASES = frozenset({
 })
 
 
+# Resource rule labels are fixed diagnostics, never values from an inspect body.
+RESOURCE_DIAGNOSTIC_FIELDS = {
+    'RESOURCE_EXACT_RULE': frozenset({
+        'ConfigImage', 'Image', 'NetworkMode', 'PidMode', 'IpcMode', 'UsernsMode',
+        'UTSMode', 'CgroupnsMode', 'Privileged', 'ReadonlyRootfs', 'PublishAllPorts',
+        'Memory', 'MemorySwap', 'NanoCpus', 'ShmSize', 'Running', 'Runtime',
+        'AutoRemove', 'CgroupParent', 'VolumeDriver', 'OomKillDisable',
+        'RestartPolicy', 'LogConfig', 'SecurityOpt', 'CapDrop', 'Tmpfs'}),
+    'RESOURCE_EMPTY_LIST_RULE': frozenset({'Binds', 'VolumesFrom', 'Devices',
+        'DeviceRequests', 'DeviceCgroupRules', 'CapAdd', 'GroupAdd', 'Links',
+        'ExtraHosts', 'Dns', 'DnsOptions', 'DnsSearch'}),
+    'RESOURCE_EMPTY_MAP_RULE': frozenset({'Sysctls', 'StorageOpt', 'PortBindings'}),
+    'RESOURCE_PORTS_RULE': frozenset({'Ports'}),
+    'RESOURCE_MOUNTS_BOUND': frozenset({'Mounts'}),
+    'RESOURCE_MOUNT_SHAPE': frozenset({'Mounts'}),
+    'RESOURCE_MOUNT_VALUE': frozenset({'Mounts'}),
+}
+
+
+def resource_require(ok, field, category):
+    # Same failure decision and code as require(ok, 'RESOURCE_MISMATCH').
+    # Invalid diagnostic labels omit the hint, never change the rejection.
+    if not ok:
+        failure = Failure('RESOURCE_MISMATCH')
+        if type(category) is str and category in RESOURCE_DIAGNOSTIC_FIELDS and type(field) is str and field in RESOURCE_DIAGNOSTIC_FIELDS[category]:
+            failure.inspect_diagnostic = {'exit_code': None, 'category': category, 'field': field}
+        raise failure
+
+
 def inspect_failure(code, raw):
     """Conservative hints, not root-cause proof; never retain arbitrary bytes."""
     result = {'exit_code': code if type(code) is int and -127 <= code <= 255 else None,
@@ -225,6 +254,8 @@ class Diagnostics:
                         'STDERR_EMPTY', 'STDERR_LIMIT_EXCEEDED', 'STDERR_NON_ASCII',
                         'TEMPLATE_EVALUATION_REPORTED') and (field is None or type(field) is str and field in INSPECT_FIELDS):
                     current['inspect'] = dict(detail)
+                elif exc.code == 'RESOURCE_MISMATCH' and code is None and type(category) is str and category in RESOURCE_DIAGNOSTIC_FIELDS and type(field) is str and field in RESOURCE_DIAGNOSTIC_FIELDS[category]:
+                    current['inspect'] = dict(detail)
         if len(self.events) < 64:
             self.events.append({'side': side, 'phase': current['phase'], 'event': current['status']})
 
@@ -282,21 +313,22 @@ def verify_inspect(v, nonce, image_id):
         'LogConfig': {'Type': 'none', 'Config': {}},
         'SecurityOpt': ['no-new-privileges'], 'CapDrop': ['NET_RAW'], 'Tmpfs': TMPFS,
     }
-    require(all(type(v[k]) is type(x) and v[k] == x for k,x in exact.items()), 'RESOURCE_MISMATCH')
+    for k,x in exact.items():
+        resource_require(type(v[k]) is type(x) and v[k] == x, k, 'RESOURCE_EXACT_RULE')
     for key in ('Binds', 'VolumesFrom', 'Devices', 'DeviceRequests', 'DeviceCgroupRules', 'CapAdd',
                 'GroupAdd', 'Links', 'ExtraHosts', 'Dns', 'DnsOptions', 'DnsSearch'):
-        require(v[key] is None or type(v[key]) is list and len(v[key]) == 0, 'RESOURCE_MISMATCH')
+        resource_require(v[key] is None or type(v[key]) is list and len(v[key]) == 0, key, 'RESOURCE_EMPTY_LIST_RULE')
     for key in ('Sysctls','StorageOpt'):
-        require(v[key] is None or type(v[key]) is dict and not v[key], 'RESOURCE_MISMATCH')
-    require(v['PortBindings'] is None or type(v['PortBindings']) is dict and not v['PortBindings'], 'RESOURCE_MISMATCH')
-    require(type(v['Ports']) is dict and v['Ports'] in ({}, {'5432/tcp': None}), 'RESOURCE_MISMATCH')
+        resource_require(v[key] is None or type(v[key]) is dict and not v[key], key, 'RESOURCE_EMPTY_MAP_RULE')
+    resource_require(v['PortBindings'] is None or type(v['PortBindings']) is dict and not v['PortBindings'], 'PortBindings', 'RESOURCE_EMPTY_MAP_RULE')
+    resource_require(type(v['Ports']) is dict and v['Ports'] in ({}, {'5432/tcp': None}), 'Ports', 'RESOURCE_PORTS_RULE')
     # Some engines omit HostConfig.Tmpfs from Mounts. A reported mount must be
     # exactly the same tmpfs, never an anonymous image volume or propagation.
-    require(type(v['Mounts']) is list and len(v['Mounts']) <= 1, 'RESOURCE_MISMATCH')
+    resource_require(type(v['Mounts']) is list and len(v['Mounts']) <= 1, 'Mounts', 'RESOURCE_MOUNTS_BOUND')
     for m in v['Mounts']:
-        require(type(m) is dict and set(m) == {'Type','Source','Destination','Mode','RW','Propagation'}, 'RESOURCE_MISMATCH')
-        require(m == {'Type':'tmpfs','Source':'','Destination':'/var/lib/postgresql',
-                      'Mode':'','RW':True,'Propagation':''}, 'RESOURCE_MISMATCH')
+        resource_require(type(m) is dict and set(m) == {'Type','Source','Destination','Mode','RW','Propagation'}, 'Mounts', 'RESOURCE_MOUNT_SHAPE')
+        resource_require(m == {'Type':'tmpfs','Source':'','Destination':'/var/lib/postgresql',
+                      'Mode':'','RW':True,'Propagation':''}, 'Mounts', 'RESOURCE_MOUNT_VALUE')
     return container_id
 
 
@@ -1320,6 +1352,62 @@ def selftest():
             assert diagnostic.outcomes[side]['inspect']=={'exit_code':1,'category':'TEMPLATE_EVALUATION_REPORTED','field':'CgroupnsMode'}
         assert canary not in json.dumps(diagnostic.outcomes)
         checks+=1
+        # Every rule is exercised with a fixed label; values never enter output.
+        def resource_case(value, field, category):
+            nonlocal checks
+            try:
+                verify_inspect(value,nonce,'sha256:'+'5'*64)
+            except Failure as exc:
+                assert exc.code=='RESOURCE_MISMATCH'
+                expected={'exit_code':None,'category':category,'field':field}
+                assert exc.inspect_diagnostic==expected
+                diag=Diagnostics('SYNTHETIC');diag.finish('work',exc)
+                assert diag.outcomes['work']['inspect']==expected
+                output=io.StringIO()
+                with contextlib.redirect_stdout(output):diag.emit()
+                assert canary not in output.getvalue()
+                assert json.loads(output.getvalue())['work']['inspect']==expected
+                checks+=1
+                return
+            raise AssertionError('resource drift accepted')
+        for category,fields in RESOURCE_DIAGNOSTIC_FIELDS.items():
+            assert fields <= set(INSPECT_FIELDS)
+            if category in ('RESOURCE_MOUNT_SHAPE','RESOURCE_MOUNT_VALUE'):
+                continue
+            for field in fields:
+                fixture=synthetic_inspect(nonce);fixture[field]=canary
+                resource_case(fixture,field,category)
+        fixture=synthetic_inspect(nonce);fixture['Mounts']=[{canary:canary}]
+        resource_case(fixture,'Mounts','RESOURCE_MOUNT_SHAPE')
+        fixture=synthetic_inspect(nonce);fixture['Mounts']=[{
+            'Type':'tmpfs','Source':canary,'Destination':'/var/lib/postgresql',
+            'Mode':'','RW':True,'Propagation':''}]
+        resource_case(fixture,'Mounts','RESOURCE_MOUNT_VALUE')
+        fixture=synthetic_inspect(nonce);fixture['Memory']=0;fixture['NetworkMode']=canary
+        resource_case(fixture,'NetworkMode','RESOURCE_EXACT_RULE')
+        # Invalid diagnostic annotations are discarded, not serialized.
+        for detail,code in (
+            ({'exit_code':1,'category':'RESOURCE_EXACT_RULE','field':'Memory'},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':'RESOURCE_EXACT_RULE','field':'Memory'},'IDENTITY_MISMATCH'),
+            ({'exit_code':None,'category':'RESOURCE_EMPTY_MAP_RULE','field':'Memory'},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':'RESOURCE_EXACT_RULE','field':canary},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':canary,'field':'Memory'},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':[],'field':'Memory'},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':'RESOURCE_EXACT_RULE','field':[]},'RESOURCE_MISMATCH'),
+            ({'exit_code':None,'category':'RESOURCE_EXACT_RULE','field':'Memory','value':canary},'RESOURCE_MISMATCH')):
+            exc=Failure(code);exc.inspect_diagnostic=detail
+            diag=Diagnostics('SYNTHETIC');diag.finish('work',exc)
+            assert diag.outcomes['work']['inspect'] is None
+            assert canary not in json.dumps(diag.outcomes)
+            checks+=1
+        for field,category in ((canary,'RESOURCE_EXACT_RULE'),('Memory',canary),('Memory','RESOURCE_EMPTY_MAP_RULE')):
+            try:resource_require(False,field,category)
+            except Failure as exc:
+                assert exc.code=='RESOURCE_MISMATCH' and not hasattr(exc,'inspect_diagnostic')
+                checks+=1
+            else:raise AssertionError('invalid hint changed failure')
+        assert resource_require(True,canary,canary) is None
+        checks+=1
         raw_manifest=(json.dumps({'version':1,'package':PACKAGE,'tests':list(CASES)},indent=2)+'\n').encode()
         assert manifest(raw_manifest,MANIFEST_SHA256)==CASES
         checks+=1
@@ -1469,6 +1557,7 @@ def selftest():
                 if args[0]=='inspect':
                     v=synthetic_inspect(nonce)
                     if self.mode=='ownership_mismatch':v['Labels']={LABEL:'9'*32}
+                    if self.mode=='resource_failure':v['Memory']=0
                     return 0,json.dumps(v).encode(),b''
                 if args[:2]==['container','ls']:
                     if self.mode=='shutdown_unknown':raise Failure('PROCESS_FAILED')
@@ -1494,6 +1583,7 @@ def selftest():
         globals()['toolchain_identity']=lambda go:go
         for mode,expected in (('success',None),('cleanup_failure','CLEANUP_UNCONFIRMED'),
             ('uncertain_create','PROCESS_TIMEOUT'),('ownership_mismatch','CLEANUP_UNCONFIRMED'),
+            ('resource_failure','RESOURCE_MISMATCH'),
             ('shutdown_unknown','CLEANUP_UNCONFIRMED'),('output_limit','PROCESS_OUTPUT_LIMIT'),
             ('deadline','PROCESS_TIMEOUT'),('signal_unknown','PROCESS_UNCERTAIN'),
             ('test_exit','TEST_PROCESS_FAILED'),('converter_exit','CONVERTER_FAILED')):
@@ -1516,6 +1606,9 @@ def selftest():
             else:
                 assert state.removed
             if mode=='ownership_mismatch':assert not any(c[0]=='rm' for c in docker.calls)
+            if mode=='resource_failure':
+                assert not any(c[0] in ('exec','cp') for c in docker.calls)
+                assert state.removed and docker.removed
         target=validate_target({
             'version':1,'run_nonce':nonce,'database':'wt_authority_test_'+nonce,'user':'wt_authority_owner_'+nonce,
             'password':'2'*64,'host':'127.0.0.1','port':5432,'schema_sha256':SCHEMA_SHA256,
