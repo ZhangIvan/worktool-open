@@ -1,0 +1,32 @@
+{
+  "description": "Independent offline Python stdlib vector for fixed ASCII-key/string/safe-integer subset; not generic JCS; no network/runtime/secret inputs.",
+  "resultInput": {
+    "version": "1.0",
+    "kind": "execution_result",
+    "eventId": "event_example",
+    "tenantId": "tenant_example",
+    "deviceId": "device_example",
+    "sessionId": "session_example",
+    "seq": 1,
+    "sentAt": "2030-01-01T00:00:00Z",
+    "mode": "synthetic",
+    "body": {
+      "commandId": "command_example",
+      "attemptId": "attempt_example",
+      "status": "succeeded",
+      "effectState": "applied",
+      "code": "NUL\u0000\b\t\n\f\r\u001f \"\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301",
+      "evidenceRefs": [
+        "journal_example"
+      ]
+    }
+  },
+  "resultCanonical": "{\"attemptId\":\"attempt_example\",\"code\":\"NUL\\u0000\\b\\t\\n\\f\\r\\u001f \\\"\\\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301\",\"commandId\":\"command_example\",\"effectState\":\"applied\",\"evidenceRefs\":[\"journal_example\"],\"status\":\"succeeded\"}",
+  "resultDigest": "cf54dff5a33e4c93cc7540794075627754243928a048118ae749c28cb2dff3d4",
+  "frameCanonical": "{\"body\":{\"attemptId\":\"attempt_example\",\"code\":\"NUL\\u0000\\b\\t\\n\\f\\r\\u001f \\\"\\\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301\",\"commandId\":\"command_example\",\"effectState\":\"applied\",\"evidenceRefs\":[\"journal_example\"],\"status\":\"succeeded\"},\"deviceId\":\"device_example\",\"eventId\":\"event_example\",\"kind\":\"execution_result\",\"mode\":\"synthetic\",\"sentAt\":\"2030-01-01T00:00:00Z\",\"seq\":1,\"sessionId\":\"session_example\",\"tenantId\":\"tenant_example\",\"version\":\"1.0\"}",
+  "frameDigest": "39c9c5d62f54c63fde2b945992f03c1e7d5fa4d877afd7faa85c76fd08909b7d",
+  "commandText": "NUL\u0000\b\t\n\f\r\u001f \"\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301",
+  "commandProjectionCanonical": "{\"capability\":\"message.send_text\",\"deviceId\":\"device_example\",\"expiresAt\":\"2030-01-01T00:02:00Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"NUL\\u0000\\b\\t\\n\\f\\r\\u001f \\\"\\\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301\"},\"policyVersion\":1,\"requiresLocalConfirmation\":false}",
+  "commandDigest": "fac1ff17f4cd9d69c36916b72e37ae15ce5a121038733041ad373b6fecdb1d3c",
+  "commandCanonical": "{\"body\":{\"attemptId\":\"attempt_example\",\"capability\":\"message.send_text\",\"commandId\":\"command_example\",\"expiresAt\":\"2030-01-01T00:02:00Z\",\"payload\":{\"targetId\":\"synthetic_target_001\",\"text\":\"NUL\\u0000\\b\\t\\n\\f\\r\\u001f \\\"\\\\ <>& / \u2028\u2029 \ud83d\ude00 e\u0301\"},\"payloadDigest\":\"fac1ff17f4cd9d69c36916b72e37ae15ce5a121038733041ad373b6fecdb1d3c\",\"policyVersion\":1,\"requiresLocalConfirmation\":false},\"deviceId\":\"device_example\",\"eventId\":\"event_example\",\"kind\":\"command\",\"mode\":\"synthetic\",\"sentAt\":\"2030-01-01T00:00:00Z\",\"seq\":1,\"sessionId\":\"session_example\",\"tenantId\":\"tenant_example\",\"version\":\"1.0\"}"
+}

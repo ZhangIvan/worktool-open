@@ -1,0 +1,22 @@
+// Synthetic browser-QA harness. Credentials exist only in ignored local runtime files.
+import { createApp } from '../server/app.ts';
+import { SyntheticDevice } from '../simulator/device.ts';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+const root=resolve('.runtime');mkdirSync(root,{recursive:true,mode:0o700});
+const run=mkdtempSync(join(root,'ui_'));
+const users=['admin','operator','approver','auditor'].map(role=>({principalId:role+'_demo',loginName:role,password:randomBytes(24).toString('base64url'),role:role as any}));
+const app=await createApp({dbPath:join(run,'server.sqlite'),bootstrap:{tenantId:'tenant_demo',users},allowedOrigins:['http://127.0.0.1:3100','http://127.0.0.1:5173']});
+await app.listen({host:'127.0.0.1',port:3100});
+const login=await app.inject({method:'POST',url:'/api/v1/auth/login',headers:{origin:'http://127.0.0.1:3100'},payload:{tenantId:'tenant_demo',loginName:'admin',password:users[0].password}});
+if(login.statusCode!==200)throw Error('QA bootstrap login failed');
+const headers={origin:'http://127.0.0.1:3100',cookie:String(login.headers['set-cookie']).split(';')[0],'x-csrf-token':login.json().csrfToken};
+const enroll=await app.inject({method:'POST',url:'/api/v1/enrollment-sessions',headers,payload:{deviceLabel:'Synthetic QA device',capabilities:['message.send_text','file.export'],expiresInSeconds:300}});
+const c=await app.inject({method:'POST',url:'/api/v1/devices/enroll',payload:{enrollmentId:enroll.json().enrollmentId,enrollmentToken:enroll.json().enrollmentToken,deviceLabel:'Synthetic QA device',localConfirmed:true}});
+if(c.statusCode!==201)throw Error('QA pairing failed');
+const device=new SyntheticDevice({...c.json(),baseUrl:'http://127.0.0.1:3100',dbPath:join(run,'device.sqlite')});await device.connect();
+writeFileSync(join(root,'ui-credentials.json'),JSON.stringify({tenantId:'tenant_demo',users,deviceId:c.json().deviceId,run}),{mode:0o600});
+console.log('Synthetic QA ready on loopback; credentials stored privately, not logged.');
+const close=async()=>{await device.close();await app.close();process.exit(0);};
+process.on('SIGTERM',close);process.on('SIGINT',close);

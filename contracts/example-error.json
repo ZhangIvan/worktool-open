@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "IDEMPOTENCY_CONFLICT",
+    "message": "The idempotency key belongs to a different request.",
+    "requestId": "request_demo",
+    "retryable": false,
+    "details": [
+      "Idempotency-Key"
+    ]
+  }
+}

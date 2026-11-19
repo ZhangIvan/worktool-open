@@ -1,0 +1,27 @@
+{
+  "source": "server/developer/callbacks.ts signature() at f83fdee98d71607ec50a900d46776c8c0dd459ca",
+  "syntheticKeyOnly": true,
+  "vectors": [
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "eventId": "callback_fixture",
+      "timestamp": "1793667900000",
+      "body": "{\"eventId\":\"callback_fixture\",\"status\":\"succeeded\"}",
+      "signature": "cbd2792e719a1f3950e5fb1a2c8065548ed09b2e6a22cb8f22accbf7b1f0ef6a"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "eventId": "callback_fixture",
+      "timestamp": "1793667900000",
+      "body": "{\"eventId\":\"callback_fixture\",\"message\":\"中文é😀\"}",
+      "signature": "41af941f35d84c3b4c981ac1b8de371426a4494a93b594221773b3582de29393"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "eventId": "callback_fixture",
+      "timestamp": "1793667900000",
+      "body": "{ \"eventId\" : \"callback_fixture\" }\n",
+      "signature": "62747435d6e26fd0a40c398dcd9fc01ddbea621e7de1c4d45e3f8dfd15ac9c84"
+    }
+  ]
+}

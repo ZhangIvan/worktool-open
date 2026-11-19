@@ -1,0 +1,22 @@
+✔ real HTTP/WS synthetic text + idempotency + RBAC/tenant + logout (1314.086703ms)
+✔ queued cancellation has no device effect (910.359376ms)
+✔ dropped result persists and reconnect reconciles without replay (887.864229ms)
+✔ modeled unknown after effect never replays on reconnect (971.428932ms)
+✔ export dual approval, wrong scope, and explicit local confirmation (1049.296755ms)
+✔ stop_request at pre-effect safe point cancels without effect (1052.280765ms)
+✔ server and device restart preserve completed command and inbox (1197.708799ms)
+✔ device credential revocation blocks new sessions and stops in-flight before effect (882.282297ms)
+✔ local confirmation missing rejects synthetic export before effect (924.512715ms)
+✔ approved export cannot be borrowed by a different operator or moved to another device (967.32906ms)
+✔ queued command loses authorization when submitting operator is deactivated (826.192815ms)
+✔ deactivated approver invalidates both queued export and new submissions (925.281127ms)
+✔ operator object scope restricts GET list and cancellation of another operators command (994.368891ms)
+✔ owner is read-only in first batch and cannot enroll revoke or read audit (888.32678ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14178.559651

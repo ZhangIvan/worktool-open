@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+    },
+    "capability": {
+      "enum": [
+        "message.send_text",
+        "file.export"
+      ]
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "targetId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "required": [
+            "targetId",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exportId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "approvalId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "scopeDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "exportId",
+            "approvalId",
+            "scopeDigest"
+          ]
+        }
+      ]
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+    },
+    "requiresLocalConfirmation": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "deviceId",
+    "capability",
+    "payload",
+    "expiresAt",
+    "requiresLocalConfirmation"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "capability": {
+            "const": "message.send_text"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "targetId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "targetId",
+              "text"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "capability": {
+            "const": "file.export"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exportId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+              },
+              "approvalId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+              },
+              "scopeDigest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+              }
+            },
+            "required": [
+              "exportId",
+              "approvalId",
+              "scopeDigest"
+            ]
+          },
+          "requiresLocalConfirmation": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

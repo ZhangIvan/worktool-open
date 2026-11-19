@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "hello_ack"
+    },
+    "version": {
+      "const": "1.0"
+    },
+    "tenantId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+    },
+    "deviceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+    },
+    "policyVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "serverTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+    },
+    "heartbeatIntervalSec": {
+      "const": 15
+    },
+    "maxFrameBytes": {
+      "const": 65536
+    },
+    "mode": {
+      "const": "synthetic"
+    }
+  },
+  "required": [
+    "kind",
+    "version",
+    "tenantId",
+    "deviceId",
+    "sessionId",
+    "policyVersion",
+    "serverTime",
+    "heartbeatIntervalSec",
+    "maxFrameBytes",
+    "mode"
+  ]
+}

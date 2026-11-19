@@ -1,0 +1,1054 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.test/schema/wire-v1.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "command"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "attemptId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "capability": {
+              "enum": [
+                "message.send_text",
+                "file.export"
+              ]
+            },
+            "payloadDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+            },
+            "expiresAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+            },
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "requiresLocalConfirmation": {
+              "type": "boolean"
+            },
+            "payload": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "targetId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    }
+                  },
+                  "required": [
+                    "targetId",
+                    "text"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "exportId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                    },
+                    "approvalId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                    },
+                    "scopeDigest": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+                    }
+                  },
+                  "required": [
+                    "exportId",
+                    "approvalId",
+                    "scopeDigest"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "attemptId",
+            "capability",
+            "payloadDigest",
+            "expiresAt",
+            "policyVersion",
+            "requiresLocalConfirmation",
+            "payload"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "capability": {
+                    "const": "message.send_text"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "targetId": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096
+                      }
+                    },
+                    "required": [
+                      "targetId",
+                      "text"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "capability": {
+                    "const": "file.export"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "exportId": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                      },
+                      "approvalId": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                      },
+                      "scopeDigest": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+                      }
+                    },
+                    "required": [
+                      "exportId",
+                      "approvalId",
+                      "scopeDigest"
+                    ]
+                  },
+                  "requiresLocalConfirmation": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "transport_ack"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ackEventId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "ackEventId"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "accepted"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "attemptId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "commandId",
+            "attemptId"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "started"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "attemptId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "commandId",
+            "attemptId"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "execution_result"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "attemptId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "status": {
+              "enum": [
+                "succeeded",
+                "partially_succeeded",
+                "failed",
+                "cancelled",
+                "expired",
+                "execution_unknown",
+                "rejected"
+              ]
+            },
+            "effectState": {
+              "enum": [
+                "not_started",
+                "applied",
+                "partially_applied",
+                "not_applied",
+                "unknown"
+              ]
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "evidenceRefs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+              }
+            }
+          },
+          "required": [
+            "commandId",
+            "attemptId",
+            "status",
+            "effectState",
+            "code",
+            "evidenceRefs"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "succeeded"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "applied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "partially_succeeded"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "partially_applied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "execution_unknown"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "failed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "not_applied",
+                      "not_started"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "cancelled"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "not_started",
+                      "not_applied"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "expired"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "not_started"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "rejected"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "effectState": {
+                    "enum": [
+                      "not_started"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "result_ack"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ackEventId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "ackEventId",
+            "commandId"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "stop_request"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "attemptId": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+            },
+            "reason": {
+              "enum": [
+                "operator_cancel",
+                "policy_revoked"
+              ]
+            },
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "commandId",
+            "attemptId",
+            "reason",
+            "policyVersion"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "heartbeat"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "lastReceivedSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "policyVersion",
+            "lastReceivedSeq"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "device_event"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "enum": [
+                "synthetic.message_received",
+                "permission.changed"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "referenceId": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+                }
+              },
+              "required": [
+                "referenceId"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "data"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.0"
+        },
+        "kind": {
+          "const": "config_notification"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "tenantId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{2,63}(?![\\s\\S])"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z(?![\\s\\S])"
+        },
+        "mode": {
+          "const": "synthetic"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "policyVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "revoked": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "policyVersion",
+            "revoked"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "eventId",
+        "tenantId",
+        "deviceId",
+        "sessionId",
+        "seq",
+        "sentAt",
+        "mode",
+        "body"
+      ]
+    }
+  ]
+}

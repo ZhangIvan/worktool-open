@@ -1,0 +1,30 @@
+# Proposed new scope: publication and execution require separate approval.
+# These two paths do not trigger the full PG/browser workflows. Existing Node
+# push/PR and Go/Android PR checks may still run for the existing PR diff.
+name: Isolated browser startup diagnostic
+on:
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths:
+      - '.github/workflows/browser-startup-diagnostic.yml'
+      - 'scripts/browser-startup-diagnostic.py'
+permissions:
+  contents: read
+jobs:
+  startup:
+    if: github.repository == 'ZhangIvan/worktool-open' && github.ref == 'refs/heads/worktool/synthetic-prototype' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      WORKTOOL_BROWSER_STARTUP_ALLOW: single-synthetic-browser-startup-only
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Validate pure guards
+        run: python3 -I -S -B scripts/browser-startup-diagnostic.py --selftest
+      - name: Create and delete one isolated browser session
+        run: python3 -I -S -B scripts/browser-startup-diagnostic.py run
+      - name: Confirm owned cleanup even after failure
+        if: always()
+        run: python3 -I -S -B scripts/browser-startup-diagnostic.py cleanup

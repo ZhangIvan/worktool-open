@@ -1,0 +1,7 @@
+{
+  "source_isolation": "PASS",
+  "core_tests_preserved": 19,
+  "jvm_tests": "NOT_RUN",
+  "android_build": "NOT_RUN",
+  "apk_isolation": "NOT_RUN"
+}

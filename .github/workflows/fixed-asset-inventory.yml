@@ -1,0 +1,68 @@
+# OFFLINE CANDIDATE: no publication or execution has been authorized here.
+name: Read-only fixed Go asset inventory (not PG acceptance)
+'on':
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths:
+      - 'scripts/fixed-asset-inventory.py'
+      - '.github/workflows/fixed-asset-inventory.yml'
+permissions:
+  contents: read
+concurrency:
+  group: fixed-asset-inventory-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  inventory-only:
+    if: github.repository == 'ZhangIvan/worktool-open' && github.event_name == 'push' && github.ref == 'refs/heads/worktool/synthetic-prototype' && github.run_attempt == 1 && github.event.before == '4c0593a63071246c953e5bec80f33c892721dc76'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          ref: ${{ github.sha }}
+      - name: Verify exact additive change and all 385 frozen source files
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python3 -I -S -B - <<'PY'
+          import hashlib, os, pathlib, stat, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], timeout=15).decode('utf-8').strip()
+          assert git('rev-parse', 'HEAD') == os.environ['GITHUB_SHA']
+          assert git('rev-parse', 'HEAD^') == '4c0593a63071246c953e5bec80f33c892721dc76'
+          assert not git('status', '--porcelain', '--untracked-files=all')
+          additions = {'scripts/fixed-asset-inventory.py', '.github/workflows/fixed-asset-inventory.yml'}
+          assert set(git('diff', '--name-status', 'HEAD^', 'HEAD').splitlines()) == {'A\t' + p for p in additions}
+          tracked = set(git('ls-files', '-z').rstrip('\0').split('\0'))
+          assert len(tracked) == 387 and additions <= tracked
+          lines = []
+          total = 0
+          for name in sorted(tracked - additions):
+              p = pathlib.Path(name)
+              assert stat.S_ISREG(p.lstat().st_mode) and p.stat().st_size <= 4 * 1024 * 1024
+              assert all(not x.is_symlink() for x in p.parents)
+              total += p.stat().st_size
+              assert total <= 32 * 1024 * 1024
+              lines.append(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + name + '\n')
+          assert hashlib.sha256(''.join(lines).encode()).hexdigest() == '6c0fd7eee71a63c3a5147d1c8ea059e72f94d1501c5bd5a9e741ee52d7b7ded1'
+          script = pathlib.Path('scripts/fixed-asset-inventory.py')
+          assert stat.S_ISREG(script.lstat().st_mode) and script.stat().st_size <= 32768
+          assert hashlib.sha256(script.read_bytes()).hexdigest() == '98008af932f83990f3b7181d78e21c8fe73f5bf73b583f6d3ff618bff42449c2'
+          PY
+      - name: Fetch exact official asset and inspect without extraction or execution
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fixed URL and compressed pin; no setup-go, archive extraction, or Go execution.
+          timeout --signal=TERM --kill-after=5s 195s python3 -I -S -B scripts/fixed-asset-inventory.py --download

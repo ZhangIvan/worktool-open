@@ -1,0 +1,75 @@
+name: Go console isolated browser candidate
+on:
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths:
+      - '.github/workflows/go-console-integration.yml'
+      - 'scripts/go-console-integration-ci.py'
+      - 'qa/go-console-browser-check.ts'
+      - 'backend-go/cmd/worktool-server/**'
+      - 'backend-go/internal/startup/**'
+      - 'backend-go/internal/consoleapi/**'
+      - 'backend-go/internal/store/pg/browser*.go'
+      - 'console/**'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+concurrency:
+  group: go-console-isolated-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  browser-slice:
+    if: github.repository == 'ZhangIvan/worktool-open' && github.ref == 'refs/heads/worktool/synthetic-prototype'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WORKTOOL_CONSOLE_CI_ALLOW: isolated-synthetic-browser-only
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Set isolated Go paths
+        run: |
+          printf 'GOPATH=%s/wt-console-go-path\nGOCACHE=%s/wt-console-go-cache\nGOMODCACHE=%s/wt-console-go-modules\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+          cache: false
+          token: ''
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.22.1'
+          check-latest: false
+          package-manager-cache: false
+      - name: Verify locked dependencies and source-only gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd backend-go && go mod download && go mod verify)
+          npm ci --ignore-scripts --no-audit --no-fund
+          git diff --exit-code -- backend-go/go.mod backend-go/go.sum package-lock.json
+          python3 scripts/go-console-integration-ci.py --selftest
+          node --check qa/go-console-browser-check.ts
+          node qa/go-console-browser-check.ts --selftest
+          npm run typecheck
+          npm run build:go
+      - name: Single disposable PostgreSQL and real browser slice
+        shell: bash
+        run: python3 scripts/go-console-integration-ci.py run
+      - name: Always verify removal of this run's resources
+        if: always()
+        shell: bash
+        run: |
+          if test -f scripts/go-console-integration-ci.py; then
+            python3 scripts/go-console-integration-ci.py cleanup
+          else
+            printf '%s\n' 'Checkout absent; console resource harness did not run.'
+          fi

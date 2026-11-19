@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "hello"
+    },
+    "supportedVersions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9]+\\.[0-9]+(?![\\s\\S])"
+      }
+    },
+    "mode": {
+      "const": "synthetic"
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "message.send_text",
+          "file.export"
+        ]
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "supportedVersions",
+    "mode",
+    "capabilities"
+  ]
+}

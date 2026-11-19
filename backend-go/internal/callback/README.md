@@ -1,0 +1,100 @@
+# Callback vertical candidate (not deployed)
+
+The default gateway remains 1.0 synthetic/F0. Only trusted explicit
+`NewSyntheticCallbackGatewayStore` composition enables frozen subscriptions.
+There is no HTTP switch, registered worker, production key provider or default
+external endpoint. The optional [worker lifecycle](worker_lifecycle.md) requires
+explicit trusted injected composition and is disabled by default. No
+Android/WeCom capability is added.
+
+The candidate connects real components in this order:
+HTTP admission → existing WS synthetic executor → immutable result and callback
+materialization in the ACK transaction → PostgreSQL Claim/Prepare/Complete →
+exact-byte HMAC → one pinned HTTPS attempt. Same event/body survives retries.
+The optional transport uses reviewed exact URL/public CIDRs, literal-IP dialing,
+normal TLS hostname verification, no proxies/redirects/connection reuse, a shared
+2-second deadline and status-only responses. It is not invoked by default.
+
+PostgreSQL scheduling uses shared scope tokens/slots, monotonic delivery and slot
+fences, current authorization checks and one-shot prepared markers. Failed or
+uncertain commits provide no new send permission. Expired leases use bounded
+RecoverExpired or the optional worker RecoverOneExpired adapter; no background
+daemon is installed at startup.
+Complete settles an issued attempt without treating later app revocation as
+proof the receiver did not already process it. Quota is internal capacity,
+never monetary billing. Delivery completion does not release retention quota.
+After an unknown completion commit, the optional [completion observer](completion_observation.md)
+may confirm that exact previously durable settlement once, without any business
+DML or renewed send permission. Other uncertainty still fails closed.
+
+## Destination identity phase A
+
+The local candidate now freezes exact URL/key_ref in append-only destination
+versions. Admission, materialization, Claim and Prepare use the same frozen
+version graph. Rotation deliberately cancels old-version work; it does not drain
+it onto the new target. Revocation is irreversible. See the
+[phase A contract](../store/pg/callback_destination_versions_ADR.md).
+
+**Migration prerequisite:** any existing callback history or frozen subscription
+snapshot makes migration 0009 refuse the upgrade. It does not reconstruct old
+URLs from mutable current configuration or delete old data. Destination-only
+config may be frozen for future work. This is not an automatic upgrade path for
+an existing backlog.
+
+The immutable scope is URL/key_ref, not CIDRs, signature protocol or key bytes.
+Their complete configuration identity and production writer remain separate gates.
+No default sender or network activity is enabled by this change.
+
+## Validation boundary
+
+Prepare refuses contradictory unfinished evidence after its final locked DB
+clock and generation check, before the prepared marker, audit or fresh permit.
+The current attempt must have no status/error, the leased delivery must have no
+delivered marker, and claim/start/final-clock plus lease/hard/expiry chronology
+must agree. Equal claim/start/final-clock and lease/hard/expiry boundaries remain
+valid subject to the existing live-deadline checks. A retained delivery error
+from an earlier attempt is allowed. Refusal is stale/reconcile, not cancellation
+or permission to rewrite evidence. This is a local guard, not durable worker
+halt/restart policy, clock-health certification or cross-generation recovery.
+
+Scripted pgx tests invoke actual Claim/Prepare/Runner and Sender with in-memory
+DNS, keys and transport, including a valid Claim followed by a backwards Prepare
+DB clock. They assert zero Prepare DML/audit/permit, zero transport and no
+completion on rejection, bounded cleanup, and valid positive controls. The
+Sender control uses a counting completion stub and does not prove settlement.
+These tests do not execute PostgreSQL or perform network I/O. Separately authored
+real-PG cases require their own isolated run; compile/skip is not execution.
+
+Targeted pure/race tests cover projection, transport request policy, copied
+configuration, deadline mapping and existing sender/completion logic. They do
+not execute PostgreSQL SQL or prove network behavior.
+
+The baseline at `d51358806623fd4179a87a802f1d09c6a8cc810f` passed all 43
+real PostgreSQL groups, including migration 0009 and CB03 worker/selection
+children, in [run 41780269941](https://github.com/ZhangIvan/worktool-open/actions/runs/41780269941).
+That is not execution evidence for the new CB02/CB05 completion-observation
+children, which remain **NOT_RUN** locally. The earlier baseline run remains available at
+[run 41767151007](https://github.com/ZhangIvan/worktool-open/actions/runs/41767151007).
+The five baseline callback groups are:
+- CB01: admission/WS/result/ACK/outbox/receiver HMAC/public result query, duplicate
+  device result, one delivered callback and exact slot release.
+- CB02: competing claims, prepared marker once, completion replay, app revocation
+  between Claim and Prepare with no send permit.
+- CB03: explicit expired-lease DB fault injection, prepared versus unprepared
+  recovery, successor fence and stale completion. Not a real timeout test.
+- CB04: late result-audit fault rolls back the entire materialization; reconnect
+  with the original result creates one graph without charging capacity twice.
+- CB05: receiver processes a request then closes without a response; authoritative
+  retry delay, stable event/body with fresh signature timestamp and one receiver
+  effect across two attempts. Receiver deduplication is test-local in memory.
+
+All real groups call the existing isolated-CI gate before any PG or socket.
+Only a `_test.go` adapter maps the one synthetic fixture identity to its own
+loopback receiver. This is not a production private-address exception. Keys are
+random per test and cleared; no real URL or account is accessed.
+
+Production remains blocked on independent review and actual integration of new changes,
+complete configuration-content identity and writer composition, production secret and UTC
+health providers, egress enforcement, cross-generation recovery/retention operations and measured
+capacity. A bounded fixed policy set is not an unrestricted scheduler. The old
+38-group result remains evidence for the old baseline, not this candidate.

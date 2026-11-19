@@ -1,0 +1,38 @@
+{
+  "name": "worktool-open-synthetic-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.22.1 <25"
+  },
+  "scripts": {
+    "server": "node server/main.ts",
+    "console": "vite --config console/vite.config.ts --host 127.0.0.1",
+    "console:go": "vite --config console/vite.config.ts --host 127.0.0.1 --mode go",
+    "build:go": "vite build --config console/vite.config.ts --mode go",
+    "test": "node --test tests/*.test.ts server/*.test.ts console/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build --config console/vite.config.ts",
+    "test:http-console": "node qa/http-console-check.ts",
+    "verify": "npm run typecheck && npm test && npm run build && npm run test:http-console"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/websocket": "11.3.6",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/ws": "8.18.2",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "canonicalize": "5.1.0",
+    "fastify": "5.12.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "ws": "8.22.1"
+  }
+}

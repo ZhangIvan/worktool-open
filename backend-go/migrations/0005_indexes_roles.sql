@@ -1,0 +1,37 @@
+-- Caller sets a validated dedicated schema search_path; no roles or credentials created.
+CREATE INDEX users_role_active ON users(tenant,role) WHERE active;
+CREATE INDEX browser_actor ON browser_sessions(tenant,actor);
+CREATE INDEX browser_expiry ON browser_sessions(expires);
+CREATE INDEX enrollment_expiry ON enrollments(tenant,expires);
+CREATE INDEX devices_state ON devices(tenant,state);
+CREATE INDEX device_session_expiry ON device_sessions(tenant,device,expires);
+CREATE INDEX commands_device ON commands(tenant,device,status);
+CREATE INDEX commands_actor ON commands(tenant,actor,created DESC);
+CREATE INDEX commands_queued_expiry ON commands(expires) WHERE status='queued';
+CREATE INDEX command_event_history ON command_events(tenant,command,created);
+CREATE INDEX idempotency_expiry ON idempotency(expires);
+CREATE INDEX tombstone_retention ON tombstones(retain_until);
+CREATE INDEX inbox_session_history ON inbox(tenant,device,session,seq);
+CREATE INDEX outbox_pending ON outbox(tenant,id) WHERE state='pending';
+CREATE INDEX audit_tenant_time ON audit(tenant,created DESC);
+CREATE INDEX export_requester ON exports(tenant,actor);
+CREATE INDEX export_pending ON exports(tenant,expires) WHERE state='pending';
+CREATE INDEX deletion_device_time ON deletions(tenant,device,created DESC);
+CREATE INDEX app_state ON developer_apps(tenant,active);
+CREATE INDEX app_expiry ON developer_apps(token_expires);
+CREATE INDEX binding_device ON developer_bindings(tenant,device,app);
+CREATE INDEX message_batch ON developer_messages(tenant,app,batch);
+CREATE INDEX callback_legacy_pending ON developer_callbacks(next_at,event) WHERE state='pending';
+CREATE INDEX callback_legacy_app ON developer_callbacks(tenant,app,event);
+CREATE INDEX gateway_lease_expiry ON device_gateway_leases(lease_until);
+CREATE INDEX command_dispatch_session ON commands(tenant,device,dispatch_session,dispatch_fence);
+CREATE INDEX callback_ready_claim ON callback_outbox(available_at,tenant,delivery_id) WHERE state='ready';
+CREATE INDEX callback_lease_recovery ON callback_outbox(lease_until) WHERE state='leased';
+CREATE INDEX callback_app_state ON callback_outbox(tenant,app,state,available_at);
+CREATE INDEX callback_ready_destination ON callback_outbox(tenant,destination_id,available_at,delivery_id) WHERE state='ready';
+CREATE INDEX callback_leased_destination ON callback_outbox(tenant,destination_id,lease_until,delivery_id) WHERE state='leased';
+CREATE INDEX slot_recovery ON scope_slots(lease_until) WHERE lease_until IS NOT NULL;
+CREATE INDEX slot_delivery_fence ON scope_slots(tenant,delivery_id,delivery_fence);
+CREATE INDEX scope_fair_selection ON scope_limits(scope_kind,virtual_finish,tenant,scope_id) WHERE enabled;
+
+DO $$ BEGIN EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC', current_schema()); END $$;

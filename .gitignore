@@ -1,0 +1,15 @@
+node_modules/
+.npm-cache/
+.data/
+*.sqlite*
+*.db*
+.env
+.env.*
+!.env.example
+console/dist/
+*.log
+artifacts/private-runtime/
+
+.runtime/
+
+artifacts/*.zip

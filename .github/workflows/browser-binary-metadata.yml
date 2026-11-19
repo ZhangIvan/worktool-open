@@ -1,0 +1,119 @@
+# LOCAL PROPOSAL: this new workflow requires separate publication approval.
+# Job success means metadata collection completed, not browser/security acceptance.
+# This path does not trigger go-console-integration.yml. Existing Node push/PR
+# and Go/Android PR checks can still run because of the existing PR diff.
+name: Browser binary metadata only
+on:
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths: ['.github/workflows/browser-binary-metadata.yml']
+permissions: {}
+jobs:
+  metadata:
+    if: github.repository == 'ZhangIvan/worktool-open' && github.ref == 'refs/heads/worktool/synthetic-prototype' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Inspect preinstalled binary metadata without executing binaries
+        shell: bash
+        run: |
+          python3 -I -S -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+          import sys
+
+          FAILURE_IMAGE = '20261025.353.1'
+
+          def image_metadata(value):
+              known = isinstance(value, str) and re.fullmatch(r'[0-9]{8}\.[0-9]{1,6}\.[0-9]{1,6}', value, flags=re.ASCII) is not None
+              return {'imageState': 'known' if known else 'unknown',
+                      'imageVersion': value if known else 'unknown',
+                      'matchesFailureImage': known and value == FAILURE_IMAGE}
+
+          def classify(mode, canonical, ancestor_symlink):
+              result = {'canonical': bool(canonical),
+                        'ancestorSymlink': bool(ancestor_symlink),
+                        'regular': stat.S_ISREG(mode),
+                        'executable': bool(mode & 0o111),
+                        'groupWrite': bool(mode & 0o020),
+                        'worldWrite': bool(mode & 0o002),
+                        'permissionBits': mode & 0o777}
+              # These are the same predicates as QA's chrome-binary gate,
+              # applied to the canonical path, not its original launcher link.
+              result['gatePass'] = (result['canonical'] and not result['ancestorSymlink']
+                                    and result['regular'] and result['executable']
+                                    and not result['groupWrite'] and not result['worldWrite'])
+              return result
+
+          def selftest():
+              safe = classify(stat.S_IFREG | 0o755, True, False)
+              assert safe['gatePass'] and safe['permissionBits'] == 0o755
+              writable = classify(stat.S_IFREG | 0o777, True, False)
+              assert not writable['gatePass'] and writable['groupWrite'] and writable['worldWrite']
+              assert not classify(stat.S_IFREG | 0o755, False, False)['gatePass']
+              assert not classify(stat.S_IFREG | 0o755, True, True)['gatePass']
+              assert not classify(stat.S_IFDIR | 0o755, True, False)['gatePass']
+              assert not classify(stat.S_IFLNK | 0o777, False, True)['regular']
+              assert not classify(stat.S_IFREG | 0o644, True, False)['executable']
+              assert classify(stat.S_IFREG | 0o4755, True, False)['permissionBits'] == 0o755
+              assert image_metadata(FAILURE_IMAGE)['matchesFailureImage']
+              assert not image_metadata('20261026.1.1')['matchesFailureImage']
+              for value in [None, '', 'secret-path-or-env', '20261025.353.1\n', '20261025.1234567.1', '２０２６１０２５.353.1']:
+                  assert image_metadata(value) == {'imageState': 'unknown', 'imageVersion': 'unknown', 'matchesFailureImage': False}
+
+          def inspect(label, names):
+              # All labels and executable names below are fixed literals.
+              # No file content, command output, path or exception is printed.
+              try:
+                  selected = next((value for name in names if (value := shutil.which(name))), None)
+                  if selected is None:
+                      return {'binary': label, 'state': 'missing'}
+                  original = Path(selected)
+                  resolved = original.resolve(strict=True)
+                  canonical = resolved.is_absolute() and resolved == resolved.resolve(strict=True)
+                  chain = (resolved, *resolved.parents)
+                  ancestor_symlink = any(stat.S_ISLNK(item.lstat().st_mode) for item in chain)
+                  result = classify(resolved.lstat().st_mode, canonical, ancestor_symlink)
+                  return {'binary': label, 'state': 'gate-pass' if result['gatePass'] else 'gate-mismatch',
+                          'selectionWasCanonical': original == resolved, **result}
+              except FileNotFoundError:
+                  return {'binary': label, 'state': 'missing'}
+              except Exception:
+                  return {'binary': label, 'state': 'metadata-unavailable'}
+
+          def main():
+              selftest()
+              if sys.argv[1:] == ['--selftest']:
+                  print(json.dumps({'check': 'pure-selftest', 'result': 'PASS'}, separators=(',', ':')))
+                  return
+              if sys.argv[1:]:
+                  print(json.dumps({'check': 'arguments', 'result': 'DENIED'}, separators=(',', ':')))
+                  raise SystemExit(1)
+              allowed = (os.environ.get('GITHUB_ACTIONS') == 'true'
+                         and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                         and os.environ.get('RUNNER_OS') == 'Linux'
+                         and os.environ.get('GITHUB_REPOSITORY') == 'ZhangIvan/worktool-open'
+                         and os.environ.get('GITHUB_REF') == 'refs/heads/worktool/synthetic-prototype'
+                         and os.environ.get('GITHUB_EVENT_NAME') == 'push')
+              if not allowed:
+                  print(json.dumps({'check': 'hosted-guard', 'result': 'DENIED'}, separators=(',', ':')))
+                  raise SystemExit(1)
+              print(json.dumps({'runnerImage': image_metadata(os.environ.get('ImageVersion'))}, separators=(',', ':')))
+              # A mismatch or missing binary is diagnostic evidence, not a browser
+              # execution result. A different image cannot prove the older failure.
+              for label, names in [('chrome-selected', ('google-chrome', 'google-chrome-stable')),
+                                   ('chromium-optional', ('chromium', 'chromium-browser')),
+                                   ('chromedriver-optional', ('chromedriver',))]:
+                  print(json.dumps(inspect(label, names), separators=(',', ':')))
+
+          if __name__ == '__main__':
+              try:
+                  main()
+              except Exception:
+                  print(json.dumps({'check': 'metadata-probe', 'result': 'UNAVAILABLE'}, separators=(',', ':')))
+                  raise SystemExit(1)
+          PY

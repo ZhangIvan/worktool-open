@@ -1,0 +1,86 @@
+name: Go isolated PostgreSQL integration candidate
+on:
+  push:
+    branches: [worktool/synthetic-prototype]
+    paths:
+      - '.github/workflows/go-pg-integration.yml'
+      - 'scripts/pg-integration-ci.*'
+      - 'backend-go/migrations/**'
+      - 'backend-go/internal/store/pg/integration_test.go'
+      - 'backend-go/internal/store/pg/integration_static_test.go'
+      - 'backend-go/internal/store/pg/admission*.go'
+      - 'backend-go/internal/store/pg/lease*.go'
+      - 'backend-go/internal/store/pg/gateway*.go'
+      - 'backend-go/internal/store/pg/enrollment*.go'
+      - 'backend-go/internal/store/pg/session*.go'
+      - 'backend-go/internal/store/pg/receipt*.go'
+      - 'backend-go/internal/store/pg/retention*.go'
+      - 'backend-go/internal/store/pg/runner*.go'
+      - 'backend-go/internal/store/pg/callback*.go'
+      - 'backend-go/internal/callback/**'
+      - 'backend-go/internal/store/pg/send_authority*.go'
+      - 'backend-go/internal/auth/**'
+      - 'backend-go/internal/httpapi/**'
+      - 'backend-go/internal/gateway/**'
+      - 'backend-go/internal/protocol/gatewaywire/**'
+      - 'backend-go/go.mod'
+      - 'backend-go/go.sum'
+      - 'backend-go/internal/store/pg/testdata/admission-golden.json'
+permissions:
+  contents: read
+concurrency:
+  group: go-pg-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  isolated-pg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set isolated cache paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'GOPATH=%s/wt-pg-go-path\nGOCACHE=%s/wt-pg-go-cache\nGOMODCACHE=%s/wt-pg-go-modules\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+          cache: false
+          token: ''
+      - name: Verify toolchain and dependency checksums
+        working-directory: backend-go
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = go1.27.3
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Pure resource harness checks
+        shell: bash
+        run: |
+          bash -n scripts/pg-integration-ci.sh
+          bash -n scripts/pg-integration-ci.evidence.sh
+          bash scripts/pg-integration-ci.evidence.sh --selftest
+      - name: Single disposable synthetic PostgreSQL suite
+        shell: bash
+        run: bash scripts/pg-integration-ci.evidence.sh run
+      - name: Always remove this run's resources and secret files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if test -f scripts/pg-integration-ci.py; then
+            bash scripts/pg-integration-ci.sh cleanup
+          else
+            printf '%s\n' 'Checkout absent: resource harness was not available to run.'
+          fi

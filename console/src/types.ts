@@ -1,0 +1,9 @@
+export type Role = 'owner' | 'admin' | 'operator' | 'approver' | 'auditor';
+export type User = { tenantId: string; principalId: string; role: Role };
+export type Auth = { user: User; csrfToken: string; expiresAt: string };
+export type Device = { deviceId: string; name?: string; state: string; policyVersion?: number | string; revocationEpoch?: number; epoch?: number; online?: boolean };
+export type Command = { requestedBy?: string; commandId: string; deviceId: string; capability: string; status: string; effectState?: string; createdAt?: string; expiresAt?: string; result?: unknown; events?: unknown[]; [key: string]: unknown };
+export type ExportRequest = { exportId: string; requestedBy: string; scopeDigest: string; scope: {deviceId?: string; referenceIds?: string[]}; state: string; approvalId?: string; expiresAt?: string; [key: string]: unknown };
+export type Audit = { auditId: string; action: string; targetId?: string; outcome?: string; createdAt: string };
+export type List<T> = { items: T[] };
+export type Capability = { capabilityId: string; label: string; wireCapability: string; messageKind: string; available: boolean };

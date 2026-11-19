@@ -1,0 +1,54 @@
+{
+  "scope": "React/Vite console, synthetic only",
+  "typescript_console": "passed",
+  "vite_production_build": "passed",
+  "api_helper_tests": {
+    "passed": 13,
+    "failed": 0,
+    "scope": "mocked-fetch/unit only"
+  },
+  "browser_validation": "BLOCKED_BY_ENVIRONMENT_REPORTED_BY_INTEGRATOR; not run by console author",
+  "backend_integration": "not asserted by console author; integrator owns real-service checks",
+  "capability_source": "../contracts/capabilities.json",
+  "current_console_constraints": [
+    "two synthetic capabilities only",
+    "single role per principal",
+    "independent export approval bound to requester and scope.deviceId",
+    "no real APK or Android execution",
+    "future controls visibly unavailable"
+  ],
+  "files": {
+    ".gitignore": "ed19d3c9c8a5e34d0179e0b1a9c2907d2e657738733e4a432a8cf81c76ce56f1",
+    "README.md": "b9bcb6fa75670d3e0f56b74cde68ff76aa5038e79678c3dca27cd5b11a5d152b",
+    "api.test.ts": "3e2edc56c711b12bb9156fc42757da7fdaf9a88556a86ec20122a2577820a60e",
+    "index.html": "eb2f0ff3d57e87d47b32bdc9da1a03b4c6eb1890680aaebbd7552a9df993b444",
+    "src/App.tsx": "07ecae697b0dbeccae3ac60f2a509c2193000b2068c0013a1342e45bd87097d0",
+    "src/api.ts": "1312dd17de643ac137e745852f3549af9951bbbdbb37a2f8e3c30347d1428c33",
+    "src/hooks.ts": "7aab4172d1f886a6b432c2a75e8fdf6431fdc5c01f83a093814ea2e954d885d8",
+    "src/logic.ts": "44d9aa4205060510598d51f4dd904be8d60cb349eb39392eb5403e93bf99b5fe",
+    "src/main.tsx": "072cb0ebc0d35ffa0cf4594ccfb36b696612398adfd1b50cf602b90a6cab39b5",
+    "src/permissions.ts": "1d8e96c112381581560601e0391dd921d58e1f27bccd21767064ce18f915a030",
+    "src/style.css": "75d1024b66ff277a92cf120e679965036fa976b6c1a596b85b344af0fce535f9",
+    "src/types.ts": "49e833a8dd59b5630dac44e7e57159546c2397786e7c67eac72d363bc09ad9ef",
+    "src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+    "tsconfig.json": "a859adf2b3f1267eb21add2abaed7a8d5005729c5c9495cfa214ee31e5f7d90c",
+    "vite.config.ts": "123e5832998f8b71e3efc8dbb3c968090b87a6c636d97e2aca7ea10a0b1806dc"
+  },
+  "permission_drift_revision": {
+    "ui_gate_module": "src/permissions.ts",
+    "owner_routes": [
+      "/overview",
+      "/capabilities"
+    ],
+    "owner_admin_inheritance": false,
+    "operator_commands": "requestedBy must equal principalId; missing/mismatched identity fails closed",
+    "independent_server_contract": "network confirmed requestedBy field and server-side role/object checks",
+    "negative_unit_checks": [
+      "owner has no writes or admin reads",
+      "role matrix has no approval/execution inheritance",
+      "operator only own task read/cancel",
+      "owner route guard causes zero protected fetches"
+    ],
+    "visual_validation": "BLOCKED; no browser retried"
+  }
+}

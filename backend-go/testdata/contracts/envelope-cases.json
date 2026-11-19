@@ -1,0 +1,52 @@
+[
+  {
+    "name": "example_command",
+    "valid": true,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "id_trailing_newline",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\\n\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "unsafe_seq",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 9007199254740992, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "seq_fraction",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1.5, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "seq_zero",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 0, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "wrong_case",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}, \"EventId\": \"evt_001\"}"
+  },
+  {
+    "name": "extra_field",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}, \"unexpected\": true}"
+  },
+  {
+    "name": "bad_date",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-02-30T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}"
+  },
+  {
+    "name": "nested_duplicate",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\":\"first\",\"text\":\"second\"}}}"
+  },
+  {
+    "name": "trailing_value",
+    "valid": false,
+    "json": "{\"version\": \"1.0\", \"kind\": \"command\", \"eventId\": \"evt_001\", \"tenantId\": \"tenant_demo\", \"deviceId\": \"device_demo\", \"sessionId\": \"session_demo\", \"seq\": 1, \"sentAt\": \"2026-11-02T00:00:00Z\", \"mode\": \"synthetic\", \"body\": {\"commandId\": \"cmd_001\", \"attemptId\": \"attempt_001\", \"capability\": \"message.send_text\", \"payloadDigest\": \"5f9a70432f38cdf584ebb51c468188a5e6092a744fb898f7b40d301e8238ea60\", \"expiresAt\": \"2026-11-02T00:01:00Z\", \"policyVersion\": 1, \"requiresLocalConfirmation\": false, \"payload\": {\"targetId\": \"contact_demo\", \"text\": \"Synthetic hello\"}}}{}"
+  }
+]

@@ -1,0 +1,538 @@
+[
+  {
+    "capabilityId": "wt.add.friend.by.group",
+    "requirement_id": "CMD-220",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按明确目标群及成员选择提交加联系人请求",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.add.friend.by.phone",
+    "requirement_id": "CMD-213",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按用户提供并已确认的手机号提交加联系人请求",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.add.group.board.webpage",
+    "requirement_id": "CMD-240",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "为指定群设置已验证的网页工作台条目",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.add.need.deal",
+    "requirement_id": "CMD-221",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "创建用户批准的待办事项",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.click.recommend.item",
+    "requirement_id": "CMD-235",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "点击已定位并经确认的推荐条目",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.clock.in",
+    "requirement_id": "CMD-222",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "仅在用户逐次确认后执行合规签到流程",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.create.customer.group.live.qrcode",
+    "requirement_id": "CMD-239",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "为选定客户群生成活码并限制公开范围",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.deleted.anti.harassment.rule",
+    "requirement_id": "CMD-217",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "删除指定防骚扰规则并保留变更审计",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.delete.contact",
+    "requirement_id": "CMD-234",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "删除明确选定的联系人",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.delete.single.directional.contact",
+    "requirement_id": "CMD-236",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "预览单向联系人候选并逐项确认后删除",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.dismiss.group",
+    "requirement_id": "CMD-219",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "仅在所有者明确确认后解散目标群",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.do.receive.new.message",
+    "requirement_id": "CMD-283",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "采集当前授权会话的新增可见消息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.exit.group",
+    "requirement_id": "CMD-244",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "确认目标群后退出",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.all.friend.info",
+    "requirement_id": "CMD-507",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "分页读取授权范围内客户名单",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.all.group.info",
+    "requirement_id": "CMD-508",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "分页读取授权范围内群列表及已选字段",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.corp.list",
+    "requirement_id": "CMD-506",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取当前账号可见企业列表",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.device.resource",
+    "requirement_id": "CMD-513",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取最小设备资源指标而不采集稳定设备标识",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.friend.info",
+    "requirement_id": "CMD-502",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取指定联系人的白名单字段",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.group.info",
+    "requirement_id": "CMD-501",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取指定群的白名单信息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.group.member.info",
+    "requirement_id": "CMD-512",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取经授权群成员列表",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.group.name.info",
+    "requirement_id": "CMD-515",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取目标群名称及备注",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.group.qrcode",
+    "requirement_id": "CMD-504",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取指定群二维码并限制访问及有效期",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.local.file",
+    "requirement_id": "CMD-509",
+    "wire_capability": "file.export",
+    "message_kind": "command",
+    "requirement": "仅导出用户选定且经许可的受控文件对象，禁止接受任意本地路径",
+    "delivery_phase": "first_batch_synthetic_planned NOT_RUN；仅自有服务+模拟设备，非Android真实实现"
+  },
+  {
+    "capabilityId": "wt.get.log.snippet",
+    "requirement_id": "CMD-514",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按时间窗查询脱敏日志片段",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.meeting.info",
+    "requirement_id": "CMD-511",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取指定会议的必要元信息，不推断录音/会议信息权限",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.my.info",
+    "requirement_id": "CMD-503",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取明确许可的本人资料字段",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.get.recent.list",
+    "requirement_id": "CMD-505",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取授权范围内最近会话摘要",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.heart.beat",
+    "requirement_id": "CMD-011",
+    "wire_capability": "none",
+    "message_kind": "control",
+    "requirement": "交换最小化连接存活及协议状态",
+    "delivery_phase": "首批仅控制面合成消息模拟 planned NOT_RUN；完整历史功能planned_unavailable"
+  },
+  {
+    "capabilityId": "wt.init.anti.harassment.rule",
+    "requirement_id": "CMD-215",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "创建或初始化用户批准的防骚扰规则",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.init.group",
+    "requirement_id": "CMD-206",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按明确名单创建群并设置已批准初始属性",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.loop.receive.new.message",
+    "requirement_id": "CMD-202",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "在用户已启用的会话范围及工作时段内轮询可见新增消息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.modify.group.member.info",
+    "requirement_id": "CMD-225",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "修改指定群成员可编辑信息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.pass.all.friend.request",
+    "requirement_id": "CMD-212",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "预览待处理好友请求并按批准名单处理，禁止默认全通过",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.file",
+    "requirement_id": "CMD-218",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送用户选定且扫描验证的文件对象",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.link",
+    "requirement_id": "CMD-224",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送经目标及URL预览确认的链接",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.microprogram",
+    "requirement_id": "CMD-210",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送已验证小程序卡片",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.micro.disk.file",
+    "requirement_id": "CMD-209",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "向目标会话发送经授权的微盘文件引用",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.micro.disk.image",
+    "requirement_id": "CMD-208",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "向目标会话发送经授权的微盘图片引用",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.push.office",
+    "requirement_id": "CMD-211",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送指定文档/办公卡片，具体协议待确认",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.recall.message",
+    "requirement_id": "CMD-226",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "在权限及时间限制内撤回明确消息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.relay.merge.message",
+    "requirement_id": "CMD-228",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "合并转发用户明确选择的消息",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.relay.message",
+    "requirement_id": "CMD-205",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "转发用户明确选择的消息至明确目标",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.relay.multi.message",
+    "requirement_id": "CMD-227",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "批量转发已批准消息并分别回报结果",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.reply.message",
+    "requirement_id": "CMD-204",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "对明确会话及引用消息发送用户批准回复",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.config.updated",
+    "requirement_id": "CMD-307",
+    "wire_capability": "none",
+    "message_kind": "notification",
+    "requirement": "通知客户端取得经过认证且版本化的新配置",
+    "delivery_phase": "首批仅控制面合成消息模拟 planned NOT_RUN；完整历史功能planned_unavailable"
+  },
+  {
+    "capabilityId": "wt.robot.controller.test",
+    "requirement_id": "CMD-303",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "执行无外部副作用的设备控制自检",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.error.log",
+    "requirement_id": "CMD-302",
+    "wire_capability": "none",
+    "message_kind": "event",
+    "requirement": "上报最小化脱敏错误事件",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.log",
+    "requirement_id": "CMD-301",
+    "wire_capability": "none",
+    "message_kind": "event",
+    "requirement": "上报最小化脱敏运行事件",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.queue.clear",
+    "requirement_id": "CMD-304",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "取消全部未执行任务，不宣称中断已发生动作",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.queue.get",
+    "requirement_id": "CMD-306",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "读取当前租户/设备任务队列的脱敏摘要",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.robot.queue.remove",
+    "requirement_id": "CMD-305",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按commandId取消指定未执行任务",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.scan.qr.code",
+    "requirement_id": "CMD-233",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "识别用户明确提供的二维码并在执行跳转前预览确认",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.send.batch.text.message",
+    "requirement_id": "CMD-238",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "按批准目标集发送文本并实施配额及逐目标幂等",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.send.merge.message",
+    "requirement_id": "CMD-230",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送用户批准的合并消息，具体UI语义待验证",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.send.message",
+    "requirement_id": "CMD-203",
+    "wire_capability": "message.send_text",
+    "message_kind": "command",
+    "requirement": "向精确识别的目标发送批准文本和@列表",
+    "delivery_phase": "first_batch_synthetic_planned NOT_RUN；仅自有服务+模拟设备，非Android真实实现"
+  },
+  {
+    "capabilityId": "wt.send.multi.message",
+    "requirement_id": "CMD-229",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "发送多条批准消息并追踪每条结果",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.show.group.info",
+    "requirement_id": "CMD-214",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "展示指定群信息，是否附带回传须明确协议",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.stop.and.go.home",
+    "requirement_id": "CMD-201",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "停止后续执行并导航至已定义安全首页",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.switch.corp",
+    "requirement_id": "CMD-223",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "切换明确选择的企业并重新绑定操作上下文",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.type.console.toast",
+    "requirement_id": "CMD-102",
+    "wire_capability": "none",
+    "message_kind": "notification",
+    "requirement": "显示已消毒、长度受限的控制台通知",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.type.receive.message.list",
+    "requirement_id": "CMD-101",
+    "wire_capability": "none",
+    "message_kind": "event",
+    "requirement": "上报授权范围内的可见聊天增量，保留来源和去重标识",
+    "delivery_phase": "首批仅控制面合成消息模拟 planned NOT_RUN；完整历史功能planned_unavailable"
+  },
+  {
+    "capabilityId": "wt.update.anti.harassment.rule",
+    "requirement_id": "CMD-216",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "变更指定防骚扰规则并展示差异",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.update.group",
+    "requirement_id": "CMD-207",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "修改指定群已批准属性/成员变更",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.upload.log.file",
+    "requirement_id": "CMD-510",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "用户明确同意后上传预览过的脱敏日志包",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.video.call",
+    "requirement_id": "CMD-232",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "仅由当前用户确认发起视频通话，不自动接听或录制",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.voice.call",
+    "requirement_id": "CMD-231",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "仅由当前用户确认发起语音通话，不自动接听或录制",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  },
+  {
+    "capabilityId": "wt.wework.clean.cache",
+    "requirement_id": "CMD-237",
+    "wire_capability": "none",
+    "message_kind": "command",
+    "requirement": "预览并确认后清理允许的企微缓存，不删除用户资料",
+    "delivery_phase": "planned_unavailable；首批不得执行；后续逐项冻结schema与Android授权测试"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "initial": "created",
+  "terminal": [
+    "succeeded",
+    "partially_succeeded",
+    "failed",
+    "cancelled",
+    "expired",
+    "rejected"
+  ],
+  "holds": [
+    "execution_unknown"
+  ],
+  "allOtherTransitions": "reject_409_ILLEGAL_TRANSITION",
+  "duplicateSameEvent": "return_stored_result_no_transition",
+  "revocationRunning": "request_stop_not_terminal_until_effect_evidence",
+  "deadlineAfterDispatch": "execution_unknown_unless_device_proves_unstarted",
+  "retryUnknown": "forbidden",
+  "scope": "command_only"
+}
