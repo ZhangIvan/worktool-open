@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 3 # inspect the approved PR head ancestry for the one-shot loopback gate
       - name: Require existing licensed Android SDK (do not install or accept new licenses)
         shell: bash
         run: |
@@ -90,6 +91,103 @@ jobs:
             android-client/ci-artifact/jvm-test-results/TEST-*.xml
             android-client/ci-artifact/jvm-summary.json
             android-client/ci-artifact/lint-summary.json
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: false
+      - name: Select the authorized one-shot loopback
+        id: loopback_gate
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 1 && github.run_attempt == 1
+        shell: bash
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          parent="$(git show -s --format=%P "$PR_HEAD")"
+          if [[ "$parent" != af4e7d32fd398cc7f386d3dd4e30d2129e1c8b87 ]]; then
+            echo 'Loopback not selected: this is not the authorized successor commit.'
+            exit 0
+          fi
+          actual="$(git diff --name-only "$parent" "$PR_HEAD" | LC_ALL=C sort)"
+          expected="$(printf '%s\n' .github/workflows/android.yml \
+            android-client/app/src/testLab/java/io/worktool/open/prototype/core/GoOkHttpLoopbackTest.kt \
+            backend-go/cmd/worktool-loopback/main.go | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          echo 'selected=true' >>"$GITHUB_OUTPUT"
+      - name: Set up pinned Go for the isolated device-link loopback
+        if: steps.loopback_gate.outputs.selected == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+          cache: false
+          token: ''
+      - name: Verify Go–OkHttp loopback (one lab JVM test, no device)
+        if: steps.loopback_gate.outputs.selected == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_sources() {
+            printf '%s  %s\n' \
+            ba2035793a25d50fd70409b516de01a238c0be9099a4fb159aa39b9e038ced93 backend-go/cmd/worktool-loopback/main.go \
+            7f8b395a595b10f6219a0f52d2ecf851f8ee44753b7591cfabcf5ca433d98973 android-client/app/src/testLab/java/io/worktool/open/prototype/core/GoOkHttpLoopbackTest.kt \
+              | sha256sum --strict --check
+          }
+          verify_sources
+          task="$(mktemp -d "$RUNNER_TEMP/worktool-loopback.XXXXXX")"
+          trap 'rm -f -- "$task/worktool-loopback" "$task/start"; rmdir -- "$task"' EXIT
+          export GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod=readonly GOMAXPROCS=2
+          export GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+          test "$(go env GOVERSION)" = go1.27.3
+          (
+            cd backend-go
+            timeout --kill-after=5s 90s go build -tags worktool_loopback -trimpath -o "$task/worktool-loopback" ./cmd/worktool-loopback
+          )
+          export WORKTOOL_LOOPBACK_HELPER="$task/worktool-loopback"
+          test -x "$WORKTOOL_LOOPBACK_HELPER"
+          testclass=io.worktool.open.prototype.core.GoOkHttpLoopbackTest
+          method=reconnectDeliversPendingResultWithoutRepeatingSyntheticEffect
+          touch "$task/start"
+          timeout --kill-after=5s 150s gradle --offline --no-daemon --no-build-cache \
+            -p android-client :app:testLabUnitTest --rerun --tests "$testclass.$method" \
+            -Pandroid.builder.sdkDownload=false
+          verify_sources
+          xml="android-client/app/build/test-results/testLabUnitTest/TEST-$testclass.xml"
+          test -f "$xml" && test "$xml" -nt "$task/start"
+          python3 - "$xml" "$testclass" "$method" <<'PYLOOPBACK'
+          import hashlib
+          import sys
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          p, cls, method = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          marker = "LOOPBACK_VERIFIED: ENROLL, HELLO, ONE_SYNTHETIC_EFFECT, NEW_SESSION_RESULT, EXACT_ACK"
+          if not 0 < p.stat().st_size <= 65536:
+              raise SystemExit("Invalid loopback XML size")
+          original = p.read_bytes()
+          suite = ET.fromstring(original)
+          cases = suite.findall("testcase")
+          expected = {"tests": "1", "failures": "0", "errors": "0", "skipped": "0"}
+          if (suite.tag != "testsuite" or any(suite.get(k) != v for k, v in expected.items())
+              or len(cases) != 1 or cases[0].get("classname") != cls or cases[0].get("name") != method
+              or any(cases[0].find(tag) is not None for tag in ("failure", "error", "skipped"))
+              or (suite.findtext("system-out") or "").splitlines().count(marker) != 1):
+              raise SystemExit("Loopback requires one executed passing case and exact success marker")
+          evidence = ET.Element("testsuite", {"name": suite.get("name", cls), **expected})
+          properties = ET.SubElement(evidence, "properties")
+          ET.SubElement(properties, "property", {"name": "projection", "value": "redacted-from-verified-gradle-junit"})
+          ET.SubElement(properties, "property", {"name": "original-sha256", "value": hashlib.sha256(original).hexdigest()})
+          ET.SubElement(evidence, "testcase", {"classname": cls, "name": method})
+          ET.SubElement(evidence, "system-out").text = marker
+          ET.ElementTree(evidence).write("android-client/ci-artifact/loopback-junit.xml", encoding="utf-8", xml_declaration=True)
+          print(marker)
+          PYLOOPBACK
+      - name: Preserve redacted loopback JUnit evidence projection
+        if: steps.loopback_gate.outputs.selected == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: worktool-loopback-junit-${{ github.sha }}
+          path: android-client/ci-artifact/loopback-junit.xml
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: false
